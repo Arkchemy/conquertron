@@ -152,6 +152,41 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << ");\n";
                 break;
             }
+            case PPC_INS_LBZ: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  " << reg(rD) << " = ppc_load_u8(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
+                    << ");\n";
+                break;
+            }
+            case PPC_INS_LHZ: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  " << reg(rD) << " = ppc_load_u16(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
+                    << ");\n";
+                break;
+            }
+            case PPC_INS_LHA: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)ppc_load_u16(ctx, " << base_expr(m.base)
+                    << " + (int32_t)" << m.disp << ");\n";
+                break;
+            }
+            case PPC_INS_STB: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  ppc_store_u8(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", (uint8_t)"
+                    << reg(rD) << ");\n";
+                break;
+            }
+            case PPC_INS_STH: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  ppc_store_u16(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", (uint16_t)"
+                    << reg(rD) << ");\n";
+                break;
+            }
             case PPC_INS_MR: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
@@ -197,6 +232,68 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                break;
+            }
+            case PPC_INS_AND:
+            case PPC_INS_OR:
+            case PPC_INS_XOR: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                char op = '&';
+                switch (insn.id) {
+                    case PPC_INS_AND: op = '&'; break;
+                    case PPC_INS_OR: op = '|'; break;
+                    case PPC_INS_XOR: op = '^'; break;
+                    default: break;
+                }
+                out << "  " << reg(rD) << " = " << reg(rA) << " " << op << " " << reg(rB) << ";\n";
+                break;
+            }
+            case PPC_INS_NOR: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ~(" << reg(rA) << " | " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_NEG: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = (uint32_t)(-(int32_t)" << reg(rA) << ");\n";
+                break;
+            }
+            case PPC_INS_SLWI: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int32_t sh = simm(ppc.operands[2]);
+                out << "  " << reg(rD) << " = " << reg(rA) << " << " << sh << ";\n";
+                break;
+            }
+            case PPC_INS_SRWI: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int32_t sh = simm(ppc.operands[2]);
+                out << "  " << reg(rD) << " = " << reg(rA) << " >> " << sh << ";\n";
+                break;
+            }
+            case PPC_INS_SRAWI: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int32_t sh = simm(ppc.operands[2]);
+                out << "  " << reg(rD) << " = (uint32_t)((int32_t)" << reg(rA) << " >> " << sh << ");\n";
+                break;
+            }
+            case PPC_INS_EXTSB: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int8_t)" << reg(rA) << ";\n";
+                break;
+            }
+            case PPC_INS_EXTSH: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)" << reg(rA) << ";\n";
                 break;
             }
             case PPC_INS_SUBF: {

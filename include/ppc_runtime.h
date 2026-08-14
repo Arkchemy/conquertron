@@ -47,6 +47,24 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
     memcpy(&ctx->mem[addr & (sizeof(ctx->mem) - 1)], &val, sizeof(val));
 }
 
+static inline uint8_t ppc_load_u8(const PpcContext *ctx, uint32_t addr) {
+    return ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+}
+
+static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
+    ctx->mem[addr & (sizeof(ctx->mem) - 1)] = val;
+}
+
+static inline uint16_t ppc_load_u16(const PpcContext *ctx, uint32_t addr) {
+    uint16_t v;
+    memcpy(&v, &ctx->mem[addr & (sizeof(ctx->mem) - 1)], sizeof(v));
+    return v;
+}
+
+static inline void ppc_store_u16(PpcContext *ctx, uint32_t addr, uint16_t val) {
+    memcpy(&ctx->mem[addr & (sizeof(ctx->mem) - 1)], &val, sizeof(val));
+}
+
 static inline void ppc_cmpw(PpcContext *ctx, int32_t a, int32_t b) {
     ctx->cr0_lt = a < b;
     ctx->cr0_gt = a > b;
