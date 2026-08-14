@@ -2,6 +2,7 @@
 
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -18,6 +19,32 @@ uint16_t rd_be16(const uint8_t *p) {
 
 uint32_t rd_be32(const uint8_t *p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+
+// Real compiler-generated register-spill helpers (GCC/GHS's well-known
+// "_savegpr_N"/"_restgpr_N"/"_savefpr_N_l"/etc. convention -- confirmed
+// present, by exact name, in real Skylanders: Spyro's Adventure code) are
+// linker-synthesized: multiple STT_FUNC symbols at different addresses
+// that all fall through into a *shared* tail ending in one real `blr`,
+// with st_size left as 0 in the symbol table since no single symbol owns
+// a disjoint range. Scanning forward for the first blr (0x4e800020) gives
+// each entry point its own correct, self-contained instruction range --
+// verified against the real binary: _savegpr_29's scanned range genuinely
+// covers stw r29/r30/r31 + mflr r31 + blr, matching the real bytes at
+// that address exactly (checked by hand before writing this).
+//
+// Capped at a small byte budget so a genuinely bare (mis-sized, no code)
+// symbol fails safe back to size 0 (skipped, same as today) rather than
+// scanning arbitrarily far into unrelated code.
+uint32_t scan_forward_for_blr_size(const std::vector<uint8_t> &text, uint32_t text_addr, uint32_t addr) {
+    constexpr uint32_t kMaxScanBytes = 256;
+    uint32_t off = addr - text_addr;
+    if (off >= text.size()) return 0;
+    uint32_t limit = (uint32_t)std::min<size_t>(text.size(), (size_t)off + kMaxScanBytes);
+    for (uint32_t p = off; p + 4 <= limit; p += 4) {
+        if (rd_be32(&text[p]) == 0x4e800020u) return (p - off) + 4;
+    }
+    return 0;
 }
 
 constexpr int STT_FUNC = 2;
@@ -207,14 +234,35 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         sym_values[i] = st_value;
 
         int type = st_info & 0xf;
-        if (type != STT_FUNC) continue;
         if (st_shndx != (uint16_t)text_idx) continue;
-        if (st_size == 0) continue;
+        bool is_savres_helper = type == 0 && (all_sym_names[i].rfind("_savegpr_", 0) == 0 ||
+                                               all_sym_names[i].rfind("_restgpr_", 0) == 0 ||
+                                               all_sym_names[i].rfind("_savefpr_", 0) == 0 ||
+                                               all_sym_names[i].rfind("_restfpr_", 0) == 0);
+        // Real compiler-generated register-spill helpers are individually
+        // typed STT_NOTYPE (0), not STT_FUNC -- only the first entry point
+        // in each chain (e.g. _savegpr_14) is STT_FUNC with a real size
+        // covering the whole shared-tail chain; the others (_savegpr_29,
+        // _savegpr_31, ...) are plain global labels into the *middle* of
+        // that same code, confirmed by name and by hand-decoding the real
+        // bytes at one of them (see scan_forward_for_blr_size's comment).
+        // .text also holds ~44k *other* STT_NOTYPE symbols (compiler
+        // branch-target labels like ".L47149") that must NOT be treated as
+        // functions, hence the name-prefix allowlist rather than accepting
+        // every STT_NOTYPE symbol in .text.
+        if (type != STT_FUNC && !is_savres_helper) continue;
+        uint32_t size = st_size;
+        if (size == 0) {
+            // See scan_forward_for_blr_size's comment -- these are real,
+            // deliberately zero-sized linker helper symbols, not garbage.
+            size = scan_forward_for_blr_size(out.text, out.text_addr, st_value);
+            if (size == 0) continue;  // genuinely couldn't recover a size; skip as before
+        }
 
         ElfFunction fn;
         fn.name = all_sym_names[i];
         fn.addr = st_value;
-        fn.size = st_size;
+        fn.size = size;
         out.functions.push_back(fn);
     }
 
