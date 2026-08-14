@@ -95,6 +95,7 @@ int main(int argc, char **argv) {
     for (const auto &fn : img.functions) {
         out << "void ppc_" << fn.name << "(PpcContext *ctx);\n";
     }
+    out << "void ppc_dispatch(PpcContext *ctx, uint32_t addr);\n";
     out << "\n";
 
     // Global/static variables (.data/.bss) live at synthetic addresses in
@@ -112,6 +113,21 @@ int main(int argc, char **argv) {
             out << "  ppc_store_u8(ctx, " << (entry.second + (uint32_t)i) << "u, " << (unsigned)bytes[i] << ");\n";
         }
     }
+    out << "}\n\n";
+
+    // Indirect-call dispatch table (mtctr/bctrl -- function pointers,
+    // vtables, callback tables): the target address is only known at
+    // runtime, so it can't be resolved to a direct C call the way `bl` is.
+    // Function addresses live in the same address space as ElfFunction::addr
+    // (relocatable-object .text offsets, or real linked addresses), so a
+    // plain switch over that address is enough to route to the matching
+    // generated function.
+    out << "void ppc_dispatch(PpcContext *ctx, uint32_t addr) {\n";
+    out << "  switch (addr) {\n";
+    for (const auto &fn : img.functions) {
+        out << "    case " << fn.addr << "u: ppc_" << fn.name << "(ctx); return;\n";
+    }
+    out << "  }\n";
     out << "}\n\n";
 
     out << body.str();

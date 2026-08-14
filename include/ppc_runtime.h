@@ -41,6 +41,7 @@ typedef struct PpcContext {
     uint32_t r[32];
     double f[32];
     uint32_t lr;
+    uint32_t ctr; /* count register -- used here for mtctr/bctrl indirect calls, not bdnz/bdz loop counting yet */
     uint8_t cr0_lt;
     uint8_t cr0_gt;
     uint8_t cr0_eq;

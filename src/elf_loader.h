@@ -29,6 +29,19 @@ struct DataReloc {
     enum Type { HA, LO } type;
     std::string section;  // e.g. ".rodata.cst4"
     int32_t addend = 0;   // byte offset within that section
+
+    // Set when the relocation's symbol is a function (STT_FUNC) rather than
+    // a data section -- the `lis`+`addi` idiom for taking a function's
+    // address (e.g. a function pointer later fed through `mtctr`+`bctrl`)
+    // uses the exact same relocation pair as addressing mutable data, but
+    // the value it needs is the function's real entry address, not a
+    // synthetic PpcContext::mem address. func_addr is that address, in the
+    // same address space as ElfFunction::addr (so it can be dispatched via
+    // the same addr_to_name/ppc_dispatch mechanism used for already-linked
+    // `bl` targets).
+    bool is_function = false;
+    std::string func_name;
+    uint32_t func_addr = 0;
 };
 
 struct ElfImage {

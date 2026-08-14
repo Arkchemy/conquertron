@@ -127,6 +127,8 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
     // symbol's own name is empty -- the name that matters is the section
     // it points at, looked up via st_shndx.
     std::vector<std::string> sym_section_names(nsyms);
+    std::vector<uint8_t> sym_types(nsyms);
+    std::vector<uint32_t> sym_values(nsyms);
     for (uint32_t i = 0; i < nsyms; i++) {
         const uint8_t *sym = &data[sym_off + (size_t)i * sym_entsize];
         uint32_t st_name = rd_be32(sym + 0);
@@ -140,6 +142,8 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         if (st_shndx < e_shnum) {
             sym_section_names[i] = secname(rd_be32(shdr(st_shndx) + 0));
         }
+        sym_types[i] = st_info & 0xf;
+        sym_values[i] = st_value;
 
         int type = st_info & 0xf;
         if (type != STT_FUNC) continue;
@@ -188,6 +192,15 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
                 dr.type = (r_type == R_PPC_ADDR16_HA) ? DataReloc::HA : DataReloc::LO;
                 dr.section = sym_section_names[r_sym];
                 dr.addend = r_addend;
+                if (sym_types[r_sym] == STT_FUNC) {
+                    // &function idiom (e.g. building a function-pointer
+                    // table) -- same lis+addi relocation pair as addressing
+                    // mutable data, but the value needed is the function's
+                    // real entry address, not a synthetic mem[] address.
+                    dr.is_function = true;
+                    dr.func_name = all_sym_names[r_sym];
+                    dr.func_addr = sym_values[r_sym] + (uint32_t)r_addend;
+                }
                 out.data_relocs[r_offset & ~3u] = dr;
             }
         }

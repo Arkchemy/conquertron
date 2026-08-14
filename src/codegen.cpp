@@ -69,7 +69,14 @@ bool is_rodata_section(const std::string &name) { return name.rfind(".rodata", 0
 // ignored rather than added on top of it.
 bool is_mutable_lo_reloc(const ElfImage &img, uint32_t addr) {
     auto it = img.data_relocs.find(addr);
-    return it != img.data_relocs.end() && it->second.type == DataReloc::LO && !is_rodata_section(it->second.section);
+    if (it == img.data_relocs.end() || it->second.type != DataReloc::LO) return false;
+    // Function addresses behave the same way as mutable-global addresses
+    // here: the paired `lis` already wrote the complete value into the base
+    // register, so the LO-relocated instruction's own displacement/
+    // immediate field is a relocation placeholder to be ignored, not real
+    // data.
+    if (it->second.is_function) return true;
+    return !is_rodata_section(it->second.section);
 }
 
 // Reads `width` bytes at `reloc.addend` out of the named section's raw
@@ -230,7 +237,14 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rD = reg_idx(ppc.operands[0].reg);
                 auto it = img.data_relocs.find(insn.address);
                 if (it != img.data_relocs.end() && it->second.type == DataReloc::HA) {
-                    if (is_rodata_section(it->second.section)) {
+                    if (it->second.is_function) {
+                        // &function -- a real address in the same address
+                        // space as ElfFunction::addr, dispatched later via
+                        // ppc_dispatch (see main.cpp) when it reaches a
+                        // bctrl.
+                        out << "  " << reg(rD) << " = " << it->second.func_addr << "u; /* &" << it->second.func_name
+                            << " */\n";
+                    } else if (is_rodata_section(it->second.section)) {
                         // Read-only, so codegen resolves the whole
                         // lis+consumer pair to a compile-time literal
                         // value instead (see e.g. PPC_INS_LFS below) --
@@ -582,6 +596,21 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_BLR: {
                 out << "  return;\n";
+                break;
+            }
+            case PPC_INS_MTCTR: {
+                int rS = reg_idx(ppc.operands[0].reg);
+                out << "  ctx->ctr = " << reg(rS) << ";\n";
+                break;
+            }
+            case PPC_INS_BCTRL: {
+                // Indirect call through a function pointer (vtables,
+                // callback tables, etc.) -- unlike `bl`, the target isn't
+                // known until runtime, so it can't be resolved to a direct
+                // C function call at codegen time. ppc_dispatch (emitted in
+                // main.cpp, which has the full function address table)
+                // looks the address up and calls the matching ppc_<name>.
+                out << "  ppc_dispatch(ctx, ctx->ctr);\n";
                 break;
             }
             case PPC_INS_BL: {
