@@ -1,5 +1,7 @@
 #include "elf_loader.h"
 
+#include <zlib.h>
+
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -19,14 +21,54 @@ uint32_t rd_be32(const uint8_t *p) {
 }
 
 constexpr int STT_FUNC = 2;
-constexpr uint32_t SHT_RELA = 4;
 constexpr uint32_t SHT_NOBITS = 8;
+constexpr uint32_t SHT_RELA = 4;
+// Real retail .rpx/.rpl files store most sections zlib-compressed to
+// shrink file size -- confirmed against an actual Wii U game disc (not
+// guessed at, and not needed by anything tested here before now, since
+// the homebrew .rpx used for earlier real-world validation didn't happen
+// to use it). In-file layout when set: a 4-byte big-endian "real
+// (decompressed) size" prefix, followed by a plain zlib stream.
+constexpr uint32_t SHF_RPL_ZLIB = 0x08000000;
 constexpr uint32_t R_PPC_ADDR16_LO = 4;
 constexpr uint32_t R_PPC_ADDR16_HI = 5;
 constexpr uint32_t R_PPC_ADDR16_HA = 6;
 constexpr uint32_t R_PPC_REL24 = 10;
 
 const char kImportSectionPrefix[] = ".fimport_";
+
+// Returns a section's real content bytes, transparently decompressing it
+// first if SHF_RPL_ZLIB is set. SHT_NOBITS (.bss) sections have no real
+// file content and are always empty. On a decompression failure, returns
+// false and leaves `error` set -- callers propagate this as a load_elf
+// failure rather than silently reading garbage.
+bool read_section_bytes(const std::vector<uint8_t> &data, uint32_t sh_type, uint32_t sh_flags, uint32_t sh_offset,
+                         uint32_t sh_size, std::vector<uint8_t> &out, std::string &error) {
+    out.clear();
+    if (sh_type == SHT_NOBITS || sh_size == 0) return true;
+    if (sh_offset + sh_size > data.size()) {
+        error = "section extends past end of file";
+        return false;
+    }
+    if (!(sh_flags & SHF_RPL_ZLIB)) {
+        out.assign(data.begin() + sh_offset, data.begin() + sh_offset + sh_size);
+        return true;
+    }
+    if (sh_size < 4) {
+        error = "RPL-compressed section too small to hold a size prefix";
+        return false;
+    }
+    uint32_t decompressed_size = rd_be32(&data[sh_offset]);
+    out.resize(decompressed_size);
+    uLongf dest_len = decompressed_size;
+    int rc = uncompress(out.data(), &dest_len, &data[sh_offset + 4], sh_size - 4);
+    if (rc != Z_OK) {
+        error = "zlib decompression failed for an RPL-compressed section (code " + std::to_string(rc) + ")";
+        return false;
+    }
+    out.resize(dest_len);
+    return true;
+}
 
 }  // namespace
 
@@ -66,9 +108,28 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
 
     auto shdr = [&](int i) -> const uint8_t * { return &data[e_shoff + (size_t)i * e_shentsize]; };
 
-    uint32_t shstrtab_off = rd_be32(shdr(e_shstrndx) + 16);
+    // Decompress (or plain-copy) every section's real content up front --
+    // section names, symbols, relocations, and .text are all potentially
+    // RPL-compressed in a real .rpx, so nothing downstream can safely read
+    // straight from `data` at a raw file offset anymore. Indexed the same
+    // way as the section headers themselves.
+    std::vector<std::vector<uint8_t>> section_data(e_shnum);
+    for (int i = 0; i < e_shnum; i++) {
+        const uint8_t *sh = shdr(i);
+        uint32_t sh_type = rd_be32(sh + 4);
+        uint32_t sh_flags = rd_be32(sh + 8);
+        uint32_t sh_offset = rd_be32(sh + 16);
+        uint32_t sh_size = rd_be32(sh + 20);
+        if (!read_section_bytes(data, sh_type, sh_flags, sh_offset, sh_size, section_data[i], error)) {
+            error = "section " + std::to_string(i) + ": " + error;
+            return false;
+        }
+    }
+
+    const std::vector<uint8_t> &shstrtab = section_data[e_shstrndx];
     auto secname = [&](uint32_t name_off) -> std::string {
-        const char *s = reinterpret_cast<const char *>(&data[shstrtab_off + name_off]);
+        if (name_off >= shstrtab.size()) return {};
+        const char *s = reinterpret_cast<const char *>(&shstrtab[name_off]);
         return std::string(s);
     };
 
@@ -81,18 +142,16 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         const uint8_t *sh = shdr(i);
         uint32_t name_off = rd_be32(sh + 0);
         uint32_t sh_type = rd_be32(sh + 4);
-        uint32_t sh_offset = rd_be32(sh + 16);
-        uint32_t sh_size = rd_be32(sh + 20);
         std::string name = secname(name_off);
         if (name == ".text") text_idx = i;
         if (sh_type == 2 /* SHT_SYMTAB */) symtab_idx = i;
         if (name == ".strtab") strtab_idx = i;
         if (name == ".rela.text" && sh_type == SHT_RELA) rela_text_idx = i;
 
-        // Keep raw bytes of every real (non-bss) section so DataReloc
+        // Keep the real bytes of every real (non-bss) section so DataReloc
         // lookups can read constants directly out of e.g. .rodata.cst4.
         if (sh_type != 0 && sh_type != SHT_NOBITS && !name.empty()) {
-            out.section_bytes[name] = std::vector<uint8_t>(data.begin() + sh_offset, data.begin() + sh_offset + sh_size);
+            out.section_bytes[name] = section_data[i];
         }
     }
 
@@ -103,10 +162,8 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
 
     const uint8_t *text_sh = shdr(text_idx);
     uint32_t text_addr = rd_be32(text_sh + 12);
-    uint32_t text_off = rd_be32(text_sh + 16);
-    uint32_t text_size = rd_be32(text_sh + 20);
 
-    out.text.assign(data.begin() + text_off, data.begin() + text_off + text_size);
+    out.text = section_data[text_idx];
     out.text_addr = text_addr;
     out.entry = rd_be32(&data[24]);  // e_entry
 
@@ -118,15 +175,13 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
     }
 
     const uint8_t *sym_sh = shdr(symtab_idx);
-    uint32_t sym_off = rd_be32(sym_sh + 16);
-    uint32_t sym_size = rd_be32(sym_sh + 20);
     uint32_t sym_entsize = rd_be32(sym_sh + 36);
     if (sym_entsize == 0) sym_entsize = 16;
 
-    const uint8_t *str_sh = shdr(strtab_idx);
-    uint32_t str_off = rd_be32(str_sh + 16);
+    const std::vector<uint8_t> &symtab_bytes = section_data[symtab_idx];
+    const std::vector<uint8_t> &strtab_bytes = section_data[strtab_idx];
 
-    uint32_t nsyms = sym_size / sym_entsize;
+    uint32_t nsyms = (uint32_t)(symtab_bytes.size() / sym_entsize);
     std::vector<std::string> all_sym_names(nsyms);
     // For STT_SECTION symbols (what data relocations normally target), the
     // symbol's own name is empty -- the name that matters is the section
@@ -135,15 +190,16 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
     std::vector<uint8_t> sym_types(nsyms);
     std::vector<uint32_t> sym_values(nsyms);
     for (uint32_t i = 0; i < nsyms; i++) {
-        const uint8_t *sym = &data[sym_off + (size_t)i * sym_entsize];
+        const uint8_t *sym = &symtab_bytes[(size_t)i * sym_entsize];
         uint32_t st_name = rd_be32(sym + 0);
         uint32_t st_value = rd_be32(sym + 4);
         uint32_t st_size = rd_be32(sym + 8);
         uint8_t st_info = sym[12];
         uint16_t st_shndx = rd_be16(sym + 14);
 
-        const char *name = reinterpret_cast<const char *>(&data[str_off + st_name]);
-        all_sym_names[i] = name;
+        if (st_name < strtab_bytes.size()) {
+            all_sym_names[i] = reinterpret_cast<const char *>(&strtab_bytes[st_name]);
+        }
         if (st_shndx < e_shnum) {
             sym_section_names[i] = secname(rd_be32(shdr(st_shndx) + 0));
         }
@@ -156,7 +212,7 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         if (st_size == 0) continue;
 
         ElfFunction fn;
-        fn.name = name;
+        fn.name = all_sym_names[i];
         fn.addr = st_value;
         fn.size = st_size;
         out.functions.push_back(fn);
@@ -168,14 +224,13 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
 
     if (rela_text_idx >= 0) {
         const uint8_t *rela_sh = shdr(rela_text_idx);
-        uint32_t rela_off = rd_be32(rela_sh + 16);
-        uint32_t rela_size = rd_be32(rela_sh + 20);
         uint32_t rela_entsize = rd_be32(rela_sh + 36);
         if (rela_entsize == 0) rela_entsize = 12;
 
-        uint32_t nrelocs = rela_size / rela_entsize;
+        const std::vector<uint8_t> &rela_bytes = section_data[rela_text_idx];
+        uint32_t nrelocs = (uint32_t)(rela_bytes.size() / rela_entsize);
         for (uint32_t i = 0; i < nrelocs; i++) {
-            const uint8_t *r = &data[rela_off + (size_t)i * rela_entsize];
+            const uint8_t *r = &rela_bytes[(size_t)i * rela_entsize];
             uint32_t r_offset = rd_be32(r + 0);
             uint32_t r_info = rd_be32(r + 4);
             int32_t r_addend = (int32_t)rd_be32(r + 8);

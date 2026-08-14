@@ -16,6 +16,13 @@ if(NOT CAPSTONE_INCLUDE_DIR OR NOT CAPSTONE_LIBRARY)
     message(FATAL_ERROR "Capstone not found. Set -DCAPSTONE_PREFIX=<path> to its install prefix.")
 endif()
 
+# Real .rpx/.rpl files commonly store most sections zlib-compressed
+# (SHF_RPL_ZLIB) to shrink retail game file size -- confirmed against an
+# actual Wii U game disc, not guessed at. `recomp` itself is a host tool,
+# so linking the system zlib here has no bearing on anything that
+# eventually runs on Switch.
+find_package(ZLIB REQUIRED)
+
 add_executable(recomp
     src/main.cpp
     src/elf_loader.cpp
@@ -24,4 +31,4 @@ add_executable(recomp
     src/func_recovery.cpp
 )
 target_include_directories(recomp PRIVATE include "${CAPSTONE_INCLUDE_DIR}")
-target_link_libraries(recomp PRIVATE "${CAPSTONE_LIBRARY}")
+target_link_libraries(recomp PRIVATE "${CAPSTONE_LIBRARY}" ZLIB::ZLIB)
