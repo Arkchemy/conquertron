@@ -34,6 +34,7 @@ typedef struct PpcContext {
     uint8_t cr0_lt;
     uint8_t cr0_gt;
     uint8_t cr0_eq;
+    uint8_t xer_ca; /* XER carry bit, set by addc/adde (used for multi-word/64-bit arithmetic) */
     uint8_t mem[65536];
 } PpcContext;
 
@@ -74,6 +75,27 @@ static inline void ppc_cmpw(PpcContext *ctx, int32_t a, int32_t b) {
     ctx->cr0_lt = a < b;
     ctx->cr0_gt = a > b;
     ctx->cr0_eq = a == b;
+}
+
+static inline void ppc_cmplw(PpcContext *ctx, uint32_t a, uint32_t b) {
+    ctx->cr0_lt = a < b;
+    ctx->cr0_gt = a > b;
+    ctx->cr0_eq = a == b;
+}
+
+/* addc/adde: used together to add 64-bit (or wider) values held across
+ * pairs of 32-bit registers -- addc computes the low word and captures the
+ * carry-out in XER[CA], adde consumes that carry into the high word. */
+static inline uint32_t ppc_addc(PpcContext *ctx, uint32_t a, uint32_t b) {
+    uint64_t full = (uint64_t)a + (uint64_t)b;
+    ctx->xer_ca = (uint8_t)((full >> 32) & 1);
+    return (uint32_t)full;
+}
+
+static inline uint32_t ppc_adde(PpcContext *ctx, uint32_t a, uint32_t b) {
+    uint64_t full = (uint64_t)a + (uint64_t)b + (uint64_t)ctx->xer_ca;
+    ctx->xer_ca = (uint8_t)((full >> 32) & 1);
+    return (uint32_t)full;
 }
 
 static inline float ppc_load_f32(const PpcContext *ctx, uint32_t addr) {

@@ -381,6 +381,26 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 out << "  ppc_cmpw(ctx, (int32_t)" << reg(rA) << ", (int32_t)" << reg(rB) << ");\n";
                 break;
             }
+            case PPC_INS_CMPLW: {
+                int rA = reg_idx(ppc.operands[0].reg);
+                int rB = reg_idx(ppc.operands[1].reg);
+                out << "  ppc_cmplw(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_ADDC: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_addc(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_ADDE: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_adde(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
+                break;
+            }
             case PPC_INS_B: {
                 uint32_t target = (uint32_t)ppc.operands[0].imm;
                 out << "  goto L_" << std::hex << target << std::dec << ";\n";
