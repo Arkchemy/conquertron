@@ -97,6 +97,18 @@ bool is_synthetic_addr_lo_reloc(const ElfImage &img, uint32_t addr) {
 // import_trampolines.
 std::string resolve_call_stmt(const ElfImage &img, const std::map<uint32_t, std::string> &addr_to_name,
                                uint32_t insn_addr, uint32_t target) {
+    // A real linked .rpx/.rpl calls into other system libraries either via
+    // a small linker-synthesized trampoline stub (import_trampolines
+    // keyed by the *trampoline's* address, checked below by `target`) or,
+    // as GHS-linked retail code actually does, via a direct `bl` relocated
+    // straight at the import symbol (import_trampolines keyed by the
+    // *call site's* own address instead -- see the R_PPC_REL24 handling
+    // in elf_loader.cpp). Check the call-site keying first since it's a
+    // relocation-based lookup, same precedence as call_relocs below.
+    auto it_call_import = img.import_trampolines.find(insn_addr);
+    if (it_call_import != img.import_trampolines.end()) {
+        return "ppc_import_" + it_call_import->second.library + "_" + it_call_import->second.function + "(ctx);";
+    }
     auto it = img.call_relocs.find(insn_addr);
     if (it != img.call_relocs.end()) {
         return "ppc_" + it->second + "(ctx);";
@@ -107,11 +119,8 @@ std::string resolve_call_stmt(const ElfImage &img, const std::map<uint32_t, std:
     if (it2 != addr_to_name.end()) {
         return "ppc_" + it2->second + "(ctx);";
     }
-    // A real linked .rpx/.rpl calls into other system libraries through a
-    // small linker-synthesized trampoline (see ImportTrampoline) rather
-    // than a real local function -- resolve straight through it to a
-    // named external call instead of treating the trampoline's own four
-    // instructions as something to recompile.
+    // Trampoline-stub case: target is the trampoline's own resolved
+    // address (see ImportTrampoline).
     auto it3 = img.import_trampolines.find(target);
     if (it3 != img.import_trampolines.end()) {
         return "ppc_import_" + it3->second.library + "_" + it3->second.function + "(ctx);";

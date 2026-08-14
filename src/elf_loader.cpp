@@ -307,7 +307,30 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
             if (r_sym >= all_sym_names.size()) continue;
 
             if (r_type == R_PPC_REL24) {
-                out.call_relocs[r_offset] = all_sym_names[r_sym];
+                // Real GHS-linked retail code doesn't always route
+                // cross-library calls through a separate lis/ori/mtctr/
+                // bctr trampoline stub (see find_import_trampolines) --
+                // confirmed against the real Skylanders: Spyro's
+                // Adventure binary, where every import (memcpy,
+                // OSGetTime, GX2SetTVGamma, ...) is instead called via a
+                // plain `bl` straight at the .fimport_<library> symbol,
+                // with the real Cafe OS RPL loader patching this exact
+                // relocation at load time. Recognized here so codegen
+                // resolves it as a named external system call
+                // (ppc_import_<library>_<function>) instead of treating
+                // "memcpy"/"OSGetTime"/etc. as if they were local
+                // functions meant to be linked in from another
+                // recompiled object -- a real, not hypothetical, name
+                // collision risk (a game can easily define its own
+                // "memcpy"-named helper too).
+                if (sym_types[r_sym] == STT_FUNC && sym_section_names[r_sym].rfind(kImportSectionPrefix, 0) == 0) {
+                    ImportTrampoline it;
+                    it.library = sym_section_names[r_sym].substr(sizeof(kImportSectionPrefix) - 1);
+                    it.function = all_sym_names[r_sym];
+                    out.import_trampolines[r_offset] = it;
+                } else {
+                    out.call_relocs[r_offset] = all_sym_names[r_sym];
+                }
             } else if (r_type == R_PPC_ADDR16_HA || r_type == R_PPC_ADDR16_LO || r_type == R_PPC_ADDR16_HI) {
                 // Unlike REL24 (which points at the instruction's own start
                 // address), ADDR16_HA/HI/LO point at byte offset+2 within
