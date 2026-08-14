@@ -1,5 +1,5 @@
-#ifndef PORTALRECOMP_DISASSEMBLER_H
-#define PORTALRECOMP_DISASSEMBLER_H
+#ifndef BRAMBLE_DISASSEMBLER_H
+#define BRAMBLE_DISASSEMBLER_H
 
 #include <cstdint>
 #include <string>
@@ -55,4 +55,4 @@ bool disassemble_range(const uint8_t *code, size_t size, uint32_t addr, DisasmRe
 
 }  // namespace recomp
 
-#endif  // PORTALRECOMP_DISASSEMBLER_H
+#endif  // BRAMBLE_DISASSEMBLER_H

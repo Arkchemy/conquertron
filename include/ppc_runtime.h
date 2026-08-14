@@ -1,5 +1,5 @@
-#ifndef PORTALRECOMP_PPC_RUNTIME_H
-#define PORTALRECOMP_PPC_RUNTIME_H
+#ifndef BRAMBLE_PPC_RUNTIME_H
+#define BRAMBLE_PPC_RUNTIME_H
 
 #include <stdint.h>
 #include <string.h>
@@ -69,4 +69,4 @@ static inline void ppc_store_f32(PpcContext *ctx, uint32_t addr, double val) {
  * a single-rounded result back into the (still 64-bit) FPR. */
 static inline double ppc_frsp(double val) { return (double)(float)val; }
 
-#endif /* PORTALRECOMP_PPC_RUNTIME_H */
+#endif /* BRAMBLE_PPC_RUNTIME_H */

@@ -1,5 +1,5 @@
-#ifndef PORTALRECOMP_FUNC_RECOVERY_H
-#define PORTALRECOMP_FUNC_RECOVERY_H
+#ifndef BRAMBLE_FUNC_RECOVERY_H
+#define BRAMBLE_FUNC_RECOVERY_H
 
 #include <cstdint>
 #include <string>
@@ -33,4 +33,4 @@ std::vector<ElfFunction> recover_functions_heuristic(const std::vector<uint8_t> 
 
 }  // namespace recomp
 
-#endif  // PORTALRECOMP_FUNC_RECOVERY_H
+#endif  // BRAMBLE_FUNC_RECOVERY_H

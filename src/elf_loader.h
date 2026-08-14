@@ -1,5 +1,5 @@
-#ifndef PORTALRECOMP_ELF_LOADER_H
-#define PORTALRECOMP_ELF_LOADER_H
+#ifndef BRAMBLE_ELF_LOADER_H
+#define BRAMBLE_ELF_LOADER_H
 
 #include <cstdint>
 #include <map>
@@ -63,4 +63,4 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error);
 
 }  // namespace recomp
 
-#endif  // PORTALRECOMP_ELF_LOADER_H
+#endif  // BRAMBLE_ELF_LOADER_H
