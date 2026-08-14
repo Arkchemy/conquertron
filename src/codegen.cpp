@@ -48,6 +48,17 @@ std::string base_expr(int base_reg) {
     return reg(base_reg);
 }
 
+// Standard PPC ISA mask formula for rlwinm/rlwimi-family instructions: a
+// contiguous (in PPC bit order, bit 0 = MSB) run of 1 bits from mb to me
+// inclusive, wrapping around if mb > me. Computed at codegen time since
+// mb/me are always immediates -- the result is baked into the generated C
+// as a plain literal, not recomputed at runtime.
+uint32_t ppc_mask(int mb, int me) {
+    uint32_t mask_begin = 0xFFFFFFFFu >> mb;
+    uint32_t mask_end = 0xFFFFFFFFu << (31 - me);
+    return (mb <= me) ? (mask_begin & mask_end) : (mask_begin | mask_end);
+}
+
 // Reads `width` bytes at `reloc.addend` out of the named section's raw
 // (big-endian, as stored in the ELF file) bytes. Used to resolve a
 // `lis`+load/store pair addressing a read-only data constant -- see
@@ -288,6 +299,48 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
                 out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int8_t)" << reg(rA) << ";\n";
+                break;
+            }
+            case PPC_INS_RLWINM: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int32_t sh = simm(ppc.operands[2]);
+                int32_t mb = simm(ppc.operands[3]);
+                int32_t me = simm(ppc.operands[4]);
+                uint32_t mask = ppc_mask(mb, me);
+                std::string rotated = sh == 0 ? reg(rA) : ("ppc_rotl32(" + reg(rA) + ", " + std::to_string(sh) + ")");
+                out << "  " << reg(rD) << " = " << rotated << " & " << mask << "u;\n";
+                break;
+            }
+            case PPC_INS_RLWIMI: {
+                // Unlike rlwinm, rD is also a *source* here: bits inside the
+                // mask come from the rotated rA, bits outside it are left
+                // as whatever rD already held (an insert, not an
+                // overwrite).
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int32_t sh = simm(ppc.operands[2]);
+                int32_t mb = simm(ppc.operands[3]);
+                int32_t me = simm(ppc.operands[4]);
+                uint32_t mask = ppc_mask(mb, me);
+                std::string rotated = sh == 0 ? reg(rA) : ("ppc_rotl32(" + reg(rA) + ", " + std::to_string(sh) + ")");
+                out << "  " << reg(rD) << " = (" << rotated << " & " << mask << "u) | (" << reg(rD) << " & "
+                    << (~mask) << "u);\n";
+                break;
+            }
+            case PPC_INS_CLRLWI: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int32_t n = simm(ppc.operands[2]);
+                uint32_t mask = ppc_mask(n, 31);
+                out << "  " << reg(rD) << " = " << reg(rA) << " & " << mask << "u;\n";
+                break;
+            }
+            case PPC_INS_ROTLWI: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int32_t n = simm(ppc.operands[2]);
+                out << "  " << reg(rD) << " = ppc_rotl32(" << reg(rA) << ", " << n << ");\n";
                 break;
             }
             case PPC_INS_EXTSH: {

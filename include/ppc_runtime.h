@@ -65,6 +65,11 @@ static inline void ppc_store_u16(PpcContext *ctx, uint32_t addr, uint16_t val) {
     memcpy(&ctx->mem[addr & (sizeof(ctx->mem) - 1)], &val, sizeof(val));
 }
 
+static inline uint32_t ppc_rotl32(uint32_t v, unsigned int sh) {
+    sh &= 31;
+    return sh == 0 ? v : (v << sh) | (v >> (32 - sh));
+}
+
 static inline void ppc_cmpw(PpcContext *ctx, int32_t a, int32_t b) {
     ctx->cr0_lt = a < b;
     ctx->cr0_gt = a > b;
