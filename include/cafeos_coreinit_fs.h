@@ -144,6 +144,47 @@ static inline void ppc_import_coreinit_FSInitCmdBlock(PpcContext *ctx) { (void)c
 /* FSStatus FSGetLastError(FSClient *client); */
 static inline void ppc_import_coreinit_FSGetLastError(PpcContext *ctx) { ctx->r[3] = (uint32_t)g_ppc_fs_last_error; }
 
+/* FSError FSGetLastErrorCodeForViewer(FSClient *client); -- real signature
+ * confirmed against wut's coreinit/filesystem.h. A debug/viewer-facing
+ * variant of the same last-error state FSGetLastError already reports;
+ * this shim doesn't distinguish the two the real API might (e.g. a more
+ * detailed underlying code vs. a coarser FSStatus), so both read the
+ * same g_ppc_fs_last_error. */
+static inline void ppc_import_coreinit_FSGetLastErrorCodeForViewer(PpcContext *ctx) {
+    ctx->r[3] = (uint32_t)g_ppc_fs_last_error;
+}
+
+/* void FSSetStateChangeNotification(FSClient *client, FSStateChangeParams *info);
+ * real signature confirmed against wut's coreinit/filesystem.h -- void
+ * return, registers a callback for FS state changes (e.g. SD card
+ * removal). Safe no-op: nothing in this shim ever triggers such an
+ * event to invoke the callback from. */
+static inline void ppc_import_coreinit_FSSetStateChangeNotification(PpcContext *ctx) { (void)ctx; }
+
+/* FSStatus FSIsEof(FSClient*, FSCmdBlock*, FSFileHandle, FSErrorFlag);
+ * r3=client r4=block r5=handle r6=errorMask -- lower confidence than the
+ * rest of this file: not found in wut's public filesystem.h (same
+ * situation as cafeos_coreinit_im.h's IM* functions), so the parameter
+ * shape is inferred from every other FS* function's consistent
+ * (client, block, handle, errorMask) pattern rather than confirmed
+ * directly. Returns FS_STATUS_END when at end-of-file, matching how
+ * FSReadDir already signals "no more" with the same code, else
+ * FS_STATUS_OK. */
+static inline void ppc_import_coreinit_FSIsEof(PpcContext *ctx) {
+    FILE *f = ppc_fs_get_handle(ctx->r[5]);
+    if (!f) {
+        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        return;
+    }
+    int c = fgetc(f);
+    if (c == EOF) {
+        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_END;
+        return;
+    }
+    ungetc(c, f);
+    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+}
+
 /* FSStatus FSOpenFile(FSClient *client, FSCmdBlock *block, const char *path,
  *                      const char *mode, FSFileHandle *handle, FSErrorFlag errorMask);
  * r3=client r4=block r5=path r6=mode r7=out_handle r8=errorMask */
