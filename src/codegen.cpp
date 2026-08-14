@@ -545,6 +545,14 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << ");\n";
                 break;
             }
+            case PPC_INS_FCMPU: {
+                // operands[0] is the crf field (always cr0 in this model --
+                // see the struct-level fidelity note in ppc_runtime.h).
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fB = freg_idx(ppc.operands[2].reg);
+                out << "  ppc_fcmpu(ctx, " << freg(fA) << ", " << freg(fB) << ");\n";
+                break;
+            }
             case PPC_INS_FMR: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fB = freg_idx(ppc.operands[1].reg);

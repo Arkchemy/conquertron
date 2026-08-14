@@ -109,6 +109,17 @@ static inline void ppc_store_f32(PpcContext *ctx, uint32_t addr, double val) {
     memcpy(&ctx->mem[addr & (sizeof(ctx->mem) - 1)], &v, sizeof(v));
 }
 
+/* fcmpu: like ppc_cmpw but for floats. Real PPC also has an "unordered"
+ * (NaN) case reported via a 4th CR bit this model doesn't track (see the
+ * struct-level fidelity note above) -- comparisons involving NaN will
+ * silently fall through as if not-less/not-greater/not-equal here rather
+ * than setting an unordered flag. */
+static inline void ppc_fcmpu(PpcContext *ctx, double a, double b) {
+    ctx->cr0_lt = a < b;
+    ctx->cr0_gt = a > b;
+    ctx->cr0_eq = a == b;
+}
+
 /* Round-to-single-precision, matching PPC's single-precision FP ops
  * (fadds/fsubs/fmuls/fdivs/fmadds/...), which compute as double but store
  * a single-rounded result back into the (still 64-bit) FPR. */
