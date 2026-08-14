@@ -1,8 +1,10 @@
 #ifndef BRAMBLE_CAFEOS_COREINIT_FS_H
 #define BRAMBLE_CAFEOS_COREINIT_FS_H
 
+#include <dirent.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "ppc_runtime.h"
 
@@ -274,6 +276,137 @@ static inline void ppc_import_coreinit_FSGetStatFile(PpcContext *ctx) {
     uint32_t stat_addr = ctx->r[6];
     for (uint32_t i = 0; i < 0x64; i += 4) ppc_store_u32(ctx, stat_addr + i, 0);
     ppc_store_u32(ctx, stat_addr + 0x10, (uint32_t)size);
+    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+}
+
+/* Directory operations -- same handle-table pattern as the file ones
+ * above, just a second table since FSFileHandle and FSDirectoryHandle
+ * are numbered independently on real hardware. */
+#define BRAMBLE_FS_MAX_DIR_HANDLES 32
+static DIR *g_ppc_fs_dirs[BRAMBLE_FS_MAX_DIR_HANDLES];
+
+static inline uint32_t ppc_fs_alloc_dir_handle(DIR *d) {
+    for (uint32_t i = 0; i < BRAMBLE_FS_MAX_DIR_HANDLES; i++) {
+        if (!g_ppc_fs_dirs[i]) {
+            g_ppc_fs_dirs[i] = d;
+            return i + 1;
+        }
+    }
+    return 0;
+}
+
+static inline DIR *ppc_fs_get_dir_handle(uint32_t handle) {
+    if (handle == 0 || handle > BRAMBLE_FS_MAX_DIR_HANDLES) return NULL;
+    return g_ppc_fs_dirs[handle - 1];
+}
+
+static inline void ppc_fs_free_dir_handle(uint32_t handle) {
+    if (handle == 0 || handle > BRAMBLE_FS_MAX_DIR_HANDLES) return;
+    g_ppc_fs_dirs[handle - 1] = NULL;
+}
+
+/* FSStatus FSOpenDir(FSClient*, FSCmdBlock*, const char *path, FSDirectoryHandle*, FSErrorFlag);
+ * r3=client r4=block r5=path r6=out_handle r7=errorMask */
+static inline void ppc_import_coreinit_FSOpenDir(PpcContext *ctx) {
+    char path[512];
+    ppc_fs_read_cstr(ctx, ctx->r[5], path, sizeof(path));
+    DIR *d = opendir(path);
+    if (!d) {
+        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        return;
+    }
+    uint32_t handle = ppc_fs_alloc_dir_handle(d);
+    if (handle == 0) {
+        closedir(d);
+        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_ACCESS_ERROR;
+        return;
+    }
+    ppc_store_u32(ctx, ctx->r[6], handle);
+    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+}
+
+/* FSStatus FSCloseDir(FSClient*, FSCmdBlock*, FSDirectoryHandle, FSErrorFlag);
+ * r3=client r4=block r5=handle r6=errorMask */
+static inline void ppc_import_coreinit_FSCloseDir(PpcContext *ctx) {
+    DIR *d = ppc_fs_get_dir_handle(ctx->r[5]);
+    if (!d) {
+        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        return;
+    }
+    closedir(d);
+    ppc_fs_free_dir_handle(ctx->r[5]);
+    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+}
+
+/* FSStatus FSReadDir(FSClient*, FSCmdBlock*, FSDirectoryHandle, FSDirectoryEntry*, FSErrorFlag);
+ * r3=client r4=block r5=handle r6=out_entry r7=errorMask
+ *
+ * FSDirectoryEntry (from wut's coreinit/filesystem.h): `struct
+ * FSDirectoryEntry { FSStat info; char name[256]; };` -- info is the same
+ * 0x64-byte FSStat FSGetStatFile fills in (same "only `size`/`flags` are
+ * real, rest zeroed" simplification), name follows immediately at +0x64,
+ * NUL-terminated, matching a plain C string. FS_STATUS_END (-2) is the
+ * real, documented "no more entries" signal real code branches on to end
+ * its listing loop -- not just a generic error. */
+static inline void ppc_import_coreinit_FSReadDir(PpcContext *ctx) {
+    DIR *d = ppc_fs_get_dir_handle(ctx->r[5]);
+    if (!d) {
+        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        return;
+    }
+    /* Real Cafe OS directory listings don't include self/parent entries
+     * (that's POSIX opendir()'s own convention, not a Wii U one) -- skip
+     * them so real listing code iterating this doesn't see two entries
+     * it wouldn't on real hardware. */
+    struct dirent *de;
+    do {
+        de = readdir(d);
+    } while (de && (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0));
+    if (!de) {
+        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_END;
+        return;
+    }
+    uint32_t entry_addr = ctx->r[6];
+    for (uint32_t i = 0; i < 0x64; i += 4) ppc_store_u32(ctx, entry_addr + i, 0);
+    /* FSStat::flags (offset 0x00) real hardware sets bit 0x80000000 for
+     * directories -- the one flag bit real listing code actually checks
+     * to tell files and subdirectories apart. */
+#ifdef DT_DIR
+    if (de->d_type == DT_DIR) ppc_store_u32(ctx, entry_addr + 0x00, 0x80000000u);
+#endif
+    uint32_t name_addr = entry_addr + 0x64;
+    size_t i = 0;
+    for (; de->d_name[i] && i + 1 < 256; i++) ppc_store_u8(ctx, name_addr + (uint32_t)i, (uint8_t)de->d_name[i]);
+    ppc_store_u8(ctx, name_addr + (uint32_t)i, 0);
+    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+}
+
+/* FSStatus FSMakeDir(FSClient*, FSCmdBlock*, const char *path, FSErrorFlag);
+ * r3=client r4=block r5=path r6=errorMask */
+static inline void ppc_import_coreinit_FSMakeDir(PpcContext *ctx) {
+    char path[512];
+    ppc_fs_read_cstr(ctx, ctx->r[5], path, sizeof(path));
+#ifdef _WIN32
+    int rc = mkdir(path);
+#else
+    int rc = mkdir(path, 0777);
+#endif
+    if (rc != 0) {
+        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_EXISTS;
+        return;
+    }
+    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+}
+
+/* FSStatus FSRemove(FSClient*, FSCmdBlock*, const char *path, FSErrorFlag);
+ * r3=client r4=block r5=path r6=errorMask */
+static inline void ppc_import_coreinit_FSRemove(PpcContext *ctx) {
+    char path[512];
+    ppc_fs_read_cstr(ctx, ctx->r[5], path, sizeof(path));
+    if (remove(path) != 0) {
+        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        return;
+    }
     ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
 }
 
