@@ -130,6 +130,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_BLE:
             case PPC_INS_BGT:
             case PPC_INS_BGE:
+            case PPC_INS_BDNZ:
+            case PPC_INS_BDZ:
                 is_branch = true;
                 break;
             default:
@@ -582,6 +584,21 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     default: break;
                 }
                 out << "  if (" << cond << ") goto L_" << std::hex << target << std::dec << ";\n";
+                break;
+            }
+            case PPC_INS_BDNZ: {
+                // Decrements CTR (set up by an earlier mtctr, the loop trip
+                // count) and branches while it's still nonzero -- what a
+                // compiler emits for a `for`/`while` loop with a
+                // runtime-but-not-compile-time-known iteration count instead
+                // of a cmp+conditional-branch pair.
+                uint32_t target = (uint32_t)ppc.operands[0].imm;
+                out << "  if (--ctx->ctr != 0) goto L_" << std::hex << target << std::dec << ";\n";
+                break;
+            }
+            case PPC_INS_BDZ: {
+                uint32_t target = (uint32_t)ppc.operands[0].imm;
+                out << "  if (--ctx->ctr == 0) goto L_" << std::hex << target << std::dec << ";\n";
                 break;
             }
             case PPC_INS_MFLR: {
