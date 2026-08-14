@@ -42,6 +42,7 @@ int main(int argc, char **argv) {
         std::cerr << "error: " << err << "\n";
         return 1;
     }
+    recomp::assign_global_addrs(img);
 
     if (force_stripped || img.functions.empty()) {
         img.functions = recomp::recover_functions_heuristic(img.text, img.text_addr, img.entry, err);
@@ -95,6 +96,24 @@ int main(int argc, char **argv) {
         out << "void ppc_" << fn.name << "(PpcContext *ctx);\n";
     }
     out << "\n";
+
+    // Global/static variables (.data/.bss) live at synthetic addresses in
+    // ctx->mem (see ElfImage::global_section_base) -- .data's initial
+    // content has to actually be copied in before any recompiled function
+    // runs, the same job a real ELF loader does. Callers must invoke this
+    // once before calling any ppc_<function>.
+    out << "void ppc_init_globals(PpcContext *ctx) {\n";
+    for (const auto &entry : img.global_section_base) {
+        auto bytes_it = img.section_bytes.find(entry.first);
+        if (bytes_it == img.section_bytes.end()) continue; // e.g. .bss: no file content, mem is already zeroed
+        const std::vector<uint8_t> &bytes = bytes_it->second;
+        for (size_t i = 0; i < bytes.size(); i++) {
+            if (bytes[i] == 0) continue; // ctx->mem starts zeroed; skip no-op stores
+            out << "  ppc_store_u8(ctx, " << (entry.second + (uint32_t)i) << "u, " << (unsigned)bytes[i] << ");\n";
+        }
+    }
+    out << "}\n\n";
+
     out << body.str();
 
     if (unhandled_total > 0) {

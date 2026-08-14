@@ -50,7 +50,25 @@ struct ElfImage {
     // Raw bytes of every PROGBITS section, keyed by name, so codegen can
     // read the actual constant a DataReloc points at.
     std::map<std::string, std::vector<uint8_t>> section_bytes;
+
+    // Synthetic base address (an offset into PpcContext::mem) assigned to
+    // each *mutable* section referenced by a DataReloc (typically .data or
+    // .bss) -- read-only sections (.rodata*) don't need one, since codegen
+    // resolves those to compile-time literal constants instead (see
+    // DataReloc). A real symbol's address is this base plus its DataReloc
+    // addend, which correctly preserves relative offsets between symbols in
+    // the same section (needed for indexed access into e.g. a global
+    // array). Computed once, after load_elf finishes parsing relocations,
+    // by assign_global_addrs below.
+    std::map<std::string, uint32_t> global_section_base;
 };
+
+// Assigns global_section_base entries for every mutable section referenced
+// in img.data_relocs. Call once after load_elf succeeds and before
+// generating any function bodies (codegen.cpp assumes it's already been
+// done). Idempotent -- safe to call more than once, though there's no
+// reason to.
+void assign_global_addrs(ElfImage &img);
 
 // Loads a big-endian, 32-bit ELF relocatable object (as produced by
 // `zig cc -target powerpc-freestanding-eabi -c`) and extracts its .text

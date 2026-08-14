@@ -59,6 +59,19 @@ uint32_t ppc_mask(int mb, int me) {
     return (mb <= me) ? (mask_begin & mask_end) : (mask_begin | mask_end);
 }
 
+bool is_rodata_section(const std::string &name) { return name.rfind(".rodata", 0) == 0; }
+
+// True if `addr` carries an R_PPC_ADDR16_LO relocation targeting a mutable
+// (.data/.bss) section -- i.e. the consuming instruction's base register
+// already holds the complete synthetic address (assigned by
+// assign_global_addrs, via the paired lis -- see its PPC_INS_LIS case
+// below), so the instruction's own displacement/immediate field must be
+// ignored rather than added on top of it.
+bool is_mutable_lo_reloc(const ElfImage &img, uint32_t addr) {
+    auto it = img.data_relocs.find(addr);
+    return it != img.data_relocs.end() && it->second.type == DataReloc::LO && !is_rodata_section(it->second.section);
+}
+
 // Reads `width` bytes at `reloc.addend` out of the named section's raw
 // (big-endian, as stored in the ELF file) bytes. Used to resolve a
 // `lis`+load/store pair addressing a read-only data constant -- see
@@ -152,15 +165,19 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_STW: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  ppc_store_u32(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", " << reg(rD)
-                    << ");\n";
+                std::string addr_expr = is_mutable_lo_reloc(img, insn.address)
+                                             ? base_expr(m.base)
+                                             : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  ppc_store_u32(ctx, " << addr_expr << ", " << reg(rD) << ");\n";
                 break;
             }
             case PPC_INS_LWZ: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
-                    << ");\n";
+                std::string addr_expr = is_mutable_lo_reloc(img, insn.address)
+                                             ? base_expr(m.base)
+                                             : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << addr_expr << ");\n";
                 break;
             }
             case PPC_INS_LBZ: {
@@ -213,13 +230,27 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rD = reg_idx(ppc.operands[0].reg);
                 auto it = img.data_relocs.find(insn.address);
                 if (it != img.data_relocs.end() && it->second.type == DataReloc::HA) {
-                    // Not linked, so this "address" isn't real -- record it
-                    // for the paired consumer instruction (below) to
-                    // resolve to a literal value, and don't touch rD at
-                    // all (the consumer won't use it either).
-                    pending_hi[rD] = it->second;
-                    out << "  /* address-of " << it->second.section << "+" << it->second.addend
-                        << " -- resolved at compile time by the paired load/store */\n";
+                    if (is_rodata_section(it->second.section)) {
+                        // Read-only, so codegen resolves the whole
+                        // lis+consumer pair to a compile-time literal
+                        // value instead (see e.g. PPC_INS_LFS below) --
+                        // not linked yet, so this "address" isn't real,
+                        // and there's nothing to write it to at runtime
+                        // anyway. rD is deliberately left untouched.
+                        pending_hi[rD] = it->second;
+                        out << "  /* address-of " << it->second.section << "+" << it->second.addend
+                            << " -- resolved at compile time by the paired load/store */\n";
+                    } else {
+                        // Mutable global -- give rD the real synthetic
+                        // address (assign_global_addrs), since unlike the
+                        // read-only case there's an actual runtime value
+                        // that needs a stable, real address other
+                        // functions' accesses to the same symbol will
+                        // agree on.
+                        uint32_t addr = img.global_section_base.at(it->second.section) + (uint32_t)it->second.addend;
+                        out << "  " << reg(rD) << " = " << addr << "u; /* &" << it->second.section << "+"
+                            << it->second.addend << " */\n";
+                    }
                 } else {
                     out << "  " << reg(rD) << " = " << uimm(ppc.operands[1]) << "u << 16;\n";
                 }
@@ -234,8 +265,16 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_ADDI: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
-                out << "  " << reg(rD) << " = " << base_expr(rA) << " + (uint32_t)(int32_t)" << simm(ppc.operands[2])
-                    << ";\n";
+                if (is_mutable_lo_reloc(img, insn.address)) {
+                    // lis+addi computing a global's address for later
+                    // (usually indexed) use -- rA already holds the
+                    // complete synthetic address, so the immediate here is
+                    // a relocation placeholder, not real data.
+                    out << "  " << reg(rD) << " = " << base_expr(rA) << ";\n";
+                } else {
+                    out << "  " << reg(rD) << " = " << base_expr(rA) << " + (uint32_t)(int32_t)"
+                        << simm(ppc.operands[2]) << ";\n";
+                }
                 break;
             }
             case PPC_INS_ADD: {

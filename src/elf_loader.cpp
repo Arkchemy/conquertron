@@ -196,4 +196,32 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
     return true;
 }
 
+namespace {
+bool is_rodata_section(const std::string &name) {
+    return name.rfind(".rodata", 0) == 0; // starts with
+}
+}  // namespace
+
+void assign_global_addrs(ElfImage &img) {
+    // Fixed, generous starting point in PpcContext::mem -- well clear of
+    // where these small test programs' stacks operate (mem is 65536 bytes;
+    // the stack starts near the top and grows down). Each section gets at
+    // least 256 bytes of room, rounded up, which is plenty for this
+    // milestone's scope but is a real, documented limitation: a genuinely
+    // large .data/.bss (as real Wii U game code will have) would need a
+    // proper size-aware allocator, not this fixed-stride placeholder.
+    uint32_t next_addr = 0x2000;
+    for (const auto &entry : img.data_relocs) {
+        const std::string &section = entry.second.section;
+        if (is_rodata_section(section)) continue; // constant-folded instead, see codegen.cpp
+        if (img.global_section_base.count(section)) continue;
+
+        img.global_section_base[section] = next_addr;
+        size_t sz = 256;
+        auto it = img.section_bytes.find(section);
+        if (it != img.section_bytes.end() && it->second.size() > sz) sz = it->second.size();
+        next_addr += (uint32_t)((sz + 15) & ~15u); // round up to 16
+    }
+}
+
 }  // namespace recomp
