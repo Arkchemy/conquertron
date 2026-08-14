@@ -3,6 +3,7 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -45,6 +46,23 @@ uint32_t scan_forward_for_blr_size(const std::vector<uint8_t> &text, uint32_t te
         if (rd_be32(&text[p]) == 0x4e800020u) return (p - off) + 4;
     }
     return 0;
+}
+
+// GHS emits some symbol names that are valid ELF strings but not valid C
+// identifiers -- e.g. debug begin-of-file/end-of-file markers shaped like
+// "..bof.C.3A.5CDev.5Cdepot...src.cpp..<hash>..0" (a percent-encoded-ish
+// source path, literal dots and all). Every symbol name in this file
+// eventually gets used as `ppc_<name>` in generated C, so any character
+// outside [A-Za-z0-9_] has to be neutralized once, here, rather than at
+// every call site that later stringifies a name into C source. Confirmed
+// necessary against the real binary: gcc failed with "expected '=', ',',
+// ';'... before '.' token" on exactly these symbols before this existed.
+std::string sanitize_c_identifier(const std::string &name) {
+    std::string out = name;
+    for (char &c : out) {
+        if (!std::isalnum((unsigned char)c) && c != '_') c = '_';
+    }
+    return out;
 }
 
 constexpr int STT_FUNC = 2;
@@ -225,7 +243,8 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         uint16_t st_shndx = rd_be16(sym + 14);
 
         if (st_name < strtab_bytes.size()) {
-            all_sym_names[i] = reinterpret_cast<const char *>(&strtab_bytes[st_name]);
+            all_sym_names[i] =
+                sanitize_c_identifier(reinterpret_cast<const char *>(&strtab_bytes[st_name]));
         }
         if (st_shndx < e_shnum) {
             sym_section_names[i] = secname(rd_be32(shdr(st_shndx) + 0));

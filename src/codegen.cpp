@@ -88,6 +88,61 @@ bool is_synthetic_addr_lo_reloc(const ElfImage &img, uint32_t addr) {
     return it != img.data_relocs.end() && it->second.type == DataReloc::LO;
 }
 
+// Resolves a call target (the instruction's own address, for relocation
+// lookup, plus the raw target address) to a C call statement -- shared by
+// every branch-like instruction that can turn into a call: bl, the
+// conditional beql/bnel, and a tail-call b (see PPC_INS_B below) whose
+// target lands outside the current function. Returns "" if the target
+// can't be resolved through any of call_relocs/addr_to_name/
+// import_trampolines.
+std::string resolve_call_stmt(const ElfImage &img, const std::map<uint32_t, std::string> &addr_to_name,
+                               uint32_t insn_addr, uint32_t target) {
+    auto it = img.call_relocs.find(insn_addr);
+    if (it != img.call_relocs.end()) {
+        return "ppc_" + it->second + "(ctx);";
+    }
+    // No relocation (already-linked binary): the raw immediate is a real
+    // target address.
+    auto it2 = addr_to_name.find(target);
+    if (it2 != addr_to_name.end()) {
+        return "ppc_" + it2->second + "(ctx);";
+    }
+    // A real linked .rpx/.rpl calls into other system libraries through a
+    // small linker-synthesized trampoline (see ImportTrampoline) rather
+    // than a real local function -- resolve straight through it to a
+    // named external call instead of treating the trampoline's own four
+    // instructions as something to recompile.
+    auto it3 = img.import_trampolines.find(target);
+    if (it3 != img.import_trampolines.end()) {
+        return "ppc_import_" + it3->second.library + "_" + it3->second.function + "(ctx);";
+    }
+    return "";
+}
+
+// Emits a conditional branch as a local goto, or -- if the target lands
+// outside this function's own address range -- as a conditional tail
+// call (see PPC_INS_B's comment for why real compiled code does this).
+// Shared by beq/bne/blt/ble/bgt/bge and bdnz/bdz; `cond` may itself have a
+// side effect (bdnz/bdz's `--ctx->ctr`), which is fine since it only ever
+// appears once in the emitted C either way.
+void emit_conditional_branch(std::ostream &out, const std::string &cond, uint32_t target, const ElfImage &img,
+                              const ElfFunction &func, const cs_insn &insn,
+                              const std::map<uint32_t, std::string> &addr_to_name,
+                              std::vector<std::string> &unhandled) {
+    if (target >= func.addr && target < func.addr + func.size) {
+        out << "  if (" << cond << ") goto L_" << std::hex << target << std::dec << ";\n";
+        return;
+    }
+    std::string call_stmt = resolve_call_stmt(img, addr_to_name, insn.address, target);
+    if (call_stmt.empty()) {
+        out << "#error \"unresolved conditional tail call at 0x" << std::hex << insn.address << " to 0x" << target
+            << std::dec << " in function " << func.name << "\"\n";
+        unhandled.push_back(insn.mnemonic);
+        return;
+    }
+    out << "  if (" << cond << ") { " << call_stmt << " return; }\n";
+}
+
 }  // namespace
 
 std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunction &func, const DisasmResult &insns,
@@ -619,8 +674,36 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_B: {
+                // A plain `b` can be a real intra-function jump (the
+                // common case -- goto a local label) or a tail call: real
+                // compiled code reuses the current stack frame and jumps
+                // directly to another whole function when there's no work
+                // left to do after the call, relying on the callee's own
+                // blr to return using the *original* caller's still-intact
+                // LR. Confirmed as a real, not hypothetical, gap running
+                // against the actual Spyro's Adventure binary -- gcc
+                // rejected "goto"s to labels that were never defined
+                // because the real target was a different function
+                // entirely (GHS adjustor thunks and Bink audio/IO thread
+                // routines both do this). Targets inside this function's
+                // own address range are still a local goto; anything
+                // outside is resolved as a call, same as bl, followed by
+                // an immediate return (nothing else in this function runs
+                // after a tail call).
                 uint32_t target = (uint32_t)ppc.operands[0].imm;
-                out << "  goto L_" << std::hex << target << std::dec << ";\n";
+                if (target >= func.addr && target < func.addr + func.size) {
+                    out << "  goto L_" << std::hex << target << std::dec << ";\n";
+                    break;
+                }
+                std::string call_stmt = resolve_call_stmt(img, addr_to_name, insn.address, target);
+                if (call_stmt.empty()) {
+                    out << "#error \"unresolved tail call at 0x" << std::hex << insn.address << " to 0x" << target
+                        << std::dec << " in function " << func.name << "\"\n";
+                    unhandled.push_back(insn.mnemonic);
+                    break;
+                }
+                out << "  " << call_stmt << "\n";
+                out << "  return;\n";
                 break;
             }
             case PPC_INS_BEQ:
@@ -640,7 +723,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     case PPC_INS_BGE: cond = "(ctx->cr0_gt || ctx->cr0_eq)"; break;
                     default: break;
                 }
-                out << "  if (" << cond << ") goto L_" << std::hex << target << std::dec << ";\n";
+                emit_conditional_branch(out, cond, target, img, func, insn, addr_to_name, unhandled);
                 break;
             }
             case PPC_INS_BDNZ: {
@@ -650,12 +733,12 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // runtime-but-not-compile-time-known iteration count instead
                 // of a cmp+conditional-branch pair.
                 uint32_t target = (uint32_t)ppc.operands[0].imm;
-                out << "  if (--ctx->ctr != 0) goto L_" << std::hex << target << std::dec << ";\n";
+                emit_conditional_branch(out, "--ctx->ctr != 0", target, img, func, insn, addr_to_name, unhandled);
                 break;
             }
             case PPC_INS_BDZ: {
                 uint32_t target = (uint32_t)ppc.operands[0].imm;
-                out << "  if (--ctx->ctr == 0) goto L_" << std::hex << target << std::dec << ";\n";
+                emit_conditional_branch(out, "--ctx->ctr == 0", target, img, func, insn, addr_to_name, unhandled);
                 break;
             }
             case PPC_INS_MFLR: {
@@ -789,33 +872,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_BL: {
-                auto it = img.call_relocs.find(insn.address);
-                if (it != img.call_relocs.end()) {
-                    out << "  ppc_" << it->second << "(ctx);\n";
-                    break;
-                }
-                // No relocation (already-linked binary): the raw immediate
-                // is a real target address.
                 uint32_t target = (uint32_t)ppc.operands[0].imm;
-                auto it2 = addr_to_name.find(target);
-                if (it2 != addr_to_name.end()) {
-                    out << "  ppc_" << it2->second << "(ctx);\n";
+                std::string call_stmt = resolve_call_stmt(img, addr_to_name, insn.address, target);
+                if (call_stmt.empty()) {
+                    out << "#error \"unresolved call at 0x" << std::hex << insn.address << " to 0x" << target
+                        << std::dec << " in function " << func.name << "\"\n";
+                    unhandled.push_back(insn.mnemonic);
                     break;
                 }
-                // A real linked .rpx/.rpl calls into other system
-                // libraries through a small linker-synthesized trampoline
-                // (see ImportTrampoline) rather than a real local function
-                // -- resolve straight through it to a named external call
-                // instead of treating the trampoline's own four
-                // instructions as something to recompile.
-                auto it3 = img.import_trampolines.find(target);
-                if (it3 != img.import_trampolines.end()) {
-                    out << "  ppc_import_" << it3->second.library << "_" << it3->second.function << "(ctx);\n";
-                    break;
-                }
-                out << "#error \"unresolved call at 0x" << std::hex << insn.address << " to 0x" << target << std::dec
-                    << " in function " << func.name << "\"\n";
-                unhandled.push_back(insn.mnemonic);
+                out << "  " << call_stmt << "\n";
                 break;
             }
             case PPC_INS_LFS: {
@@ -1324,23 +1389,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // call_relocs/addr_to_name/import_trampolines paths bl
                 // itself uses below, just wrapped in the condition.
                 std::string cond = insn.id == PPC_INS_BEQL ? "ctx->cr0_eq" : "!ctx->cr0_eq";
-                std::string call_stmt;
-                auto it = img.call_relocs.find(insn.address);
-                if (it != img.call_relocs.end()) {
-                    call_stmt = "ppc_" + it->second + "(ctx);";
-                } else {
-                    uint32_t target = (uint32_t)ppc.operands[0].imm;
-                    auto it2 = addr_to_name.find(target);
-                    if (it2 != addr_to_name.end()) {
-                        call_stmt = "ppc_" + it2->second + "(ctx);";
-                    } else {
-                        auto it3 = img.import_trampolines.find(target);
-                        if (it3 != img.import_trampolines.end()) {
-                            call_stmt =
-                                "ppc_import_" + it3->second.library + "_" + it3->second.function + "(ctx);";
-                        }
-                    }
-                }
+                uint32_t target = (uint32_t)ppc.operands[0].imm;
+                std::string call_stmt = resolve_call_stmt(img, addr_to_name, insn.address, target);
                 if (call_stmt.empty()) {
                     out << "#error \"unresolved call at 0x" << std::hex << insn.address << std::dec
                         << " in function " << func.name << "\"\n";
