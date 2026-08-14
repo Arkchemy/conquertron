@@ -83,19 +83,54 @@ bool try_decode_paired_single(uint32_t word, uint64_t addr, cs_insn *insn) {
     }
 
     if (primary == 4) {
-        // ps_merge00/01/10/11 -- X-form-ish, XO (bits 21-30) selects which
-        // of frA/frB's two lanes feed frD's ps0/ps1. Other primary-4
-        // paired-single opcodes (ps_add, ps_mul, ...) exist on real
-        // hardware but haven't been seen in practice yet, so they're
-        // deliberately left unrecognized here rather than guessed at.
+        uint32_t c_field = (word >> 6) & 0x1F;    // frC, for the 3-source (D,A,B,C) family
+        uint32_t crfD = (word >> 23) & 0x7;       // for ps_cmp*
         uint32_t xo10 = (word >> 1) & 0x3FF;
+        uint32_t xo5 = (word >> 1) & 0x1F;
+
+        // 10-bit-XO families first: ps_merge* (D,A,B), ps_neg/mr/nabs/abs
+        // (D,B; A architecturally 0), ps_cmp* (crfD,A,B). None of these
+        // XO10 values can coincide with a real 5-bit-XO-family encoding
+        // below (they all reduce to XO5 in {0, 8, 16}, none of which the
+        // 5-bit family below uses), so checking these first is safe.
         switch (xo10) {
-            case 528: id = PPC_INS_BRAMBLE_PS_MERGE00; mnemonic = "ps_merge00"; break;
-            case 560: id = PPC_INS_BRAMBLE_PS_MERGE01; mnemonic = "ps_merge01"; break;
-            case 592: id = PPC_INS_BRAMBLE_PS_MERGE10; mnemonic = "ps_merge10"; break;
-            case 624: id = PPC_INS_BRAMBLE_PS_MERGE11; mnemonic = "ps_merge11"; break;
+            case 528: mnemonic = "ps_merge00"; id = PPC_INS_BRAMBLE_PS_MERGE00; goto emit_dab;
+            case 560: mnemonic = "ps_merge01"; id = PPC_INS_BRAMBLE_PS_MERGE01; goto emit_dab;
+            case 592: mnemonic = "ps_merge10"; id = PPC_INS_BRAMBLE_PS_MERGE10; goto emit_dab;
+            case 624: mnemonic = "ps_merge11"; id = PPC_INS_BRAMBLE_PS_MERGE11; goto emit_dab;
+            case 40: mnemonic = "ps_neg"; id = PPC_INS_BRAMBLE_PS_NEG; goto emit_db;
+            case 72: mnemonic = "ps_mr"; id = PPC_INS_BRAMBLE_PS_MR; goto emit_db;
+            case 136: mnemonic = "ps_nabs"; id = PPC_INS_BRAMBLE_PS_NABS; goto emit_db;
+            case 264: mnemonic = "ps_abs"; id = PPC_INS_BRAMBLE_PS_ABS; goto emit_db;
+            case 0: mnemonic = "ps_cmpu0"; id = PPC_INS_BRAMBLE_PS_CMPU0; goto emit_cmp;
+            case 32: mnemonic = "ps_cmpo0"; id = PPC_INS_BRAMBLE_PS_CMPO0; goto emit_cmp;
+            case 64: mnemonic = "ps_cmpu1"; id = PPC_INS_BRAMBLE_PS_CMPU1; goto emit_cmp;
+            case 96: mnemonic = "ps_cmpo1"; id = PPC_INS_BRAMBLE_PS_CMPO1; goto emit_cmp;
+            default: break;
+        }
+
+        switch (xo5) {
+            case 18: mnemonic = "ps_div"; id = PPC_INS_BRAMBLE_PS_DIV; goto emit_dab;
+            case 20: mnemonic = "ps_sub"; id = PPC_INS_BRAMBLE_PS_SUB; goto emit_dab;
+            case 21: mnemonic = "ps_add"; id = PPC_INS_BRAMBLE_PS_ADD; goto emit_dab;
+            case 24: mnemonic = "ps_res"; id = PPC_INS_BRAMBLE_PS_RES; goto emit_db;
+            case 26: mnemonic = "ps_rsqrte"; id = PPC_INS_BRAMBLE_PS_RSQRTE; goto emit_db;
+            case 12: mnemonic = "ps_muls0"; id = PPC_INS_BRAMBLE_PS_MULS0; goto emit_dac;
+            case 13: mnemonic = "ps_muls1"; id = PPC_INS_BRAMBLE_PS_MULS1; goto emit_dac;
+            case 25: mnemonic = "ps_mul"; id = PPC_INS_BRAMBLE_PS_MUL; goto emit_dac;
+            case 10: mnemonic = "ps_sum0"; id = PPC_INS_BRAMBLE_PS_SUM0; goto emit_dabc;
+            case 11: mnemonic = "ps_sum1"; id = PPC_INS_BRAMBLE_PS_SUM1; goto emit_dabc;
+            case 14: mnemonic = "ps_madds0"; id = PPC_INS_BRAMBLE_PS_MADDS0; goto emit_dabc;
+            case 15: mnemonic = "ps_madds1"; id = PPC_INS_BRAMBLE_PS_MADDS1; goto emit_dabc;
+            case 23: mnemonic = "ps_sel"; id = PPC_INS_BRAMBLE_PS_SEL; goto emit_dabc;
+            case 28: mnemonic = "ps_msub"; id = PPC_INS_BRAMBLE_PS_MSUB; goto emit_dabc;
+            case 29: mnemonic = "ps_madd"; id = PPC_INS_BRAMBLE_PS_MADD; goto emit_dabc;
+            case 30: mnemonic = "ps_nmsub"; id = PPC_INS_BRAMBLE_PS_NMSUB; goto emit_dabc;
+            case 31: mnemonic = "ps_nmadd"; id = PPC_INS_BRAMBLE_PS_NMADD; goto emit_dabc;
             default: return false;
         }
+
+    emit_dab : {  // D, A, B (3-operand: frD, frA, frB)
         insn->id = id;
         strncpy(insn->mnemonic, mnemonic, sizeof(insn->mnemonic) - 1);
         insn->mnemonic[sizeof(insn->mnemonic) - 1] = '\0';
@@ -106,6 +141,56 @@ bool try_decode_paired_single(uint32_t word, uint64_t addr, cs_insn *insn) {
         set_reg_op(ppc.operands[1], PPC_REG_F0 + a_field);
         set_reg_op(ppc.operands[2], PPC_REG_F0 + b_field);
         return true;
+    }
+    emit_dac : {  // D, A, C (3-operand: frD, frA, frC -- B field unused)
+        insn->id = id;
+        strncpy(insn->mnemonic, mnemonic, sizeof(insn->mnemonic) - 1);
+        insn->mnemonic[sizeof(insn->mnemonic) - 1] = '\0';
+        snprintf(insn->op_str, sizeof(insn->op_str), "f%u, f%u, f%u", d_field, a_field, c_field);
+        cs_ppc &ppc = insn->detail->ppc;
+        ppc.op_count = 3;
+        set_reg_op(ppc.operands[0], PPC_REG_F0 + d_field);
+        set_reg_op(ppc.operands[1], PPC_REG_F0 + a_field);
+        set_reg_op(ppc.operands[2], PPC_REG_F0 + c_field);
+        return true;
+    }
+    emit_db : {  // D, B (2-operand: frD, frB -- A field unused)
+        insn->id = id;
+        strncpy(insn->mnemonic, mnemonic, sizeof(insn->mnemonic) - 1);
+        insn->mnemonic[sizeof(insn->mnemonic) - 1] = '\0';
+        snprintf(insn->op_str, sizeof(insn->op_str), "f%u, f%u", d_field, b_field);
+        cs_ppc &ppc = insn->detail->ppc;
+        ppc.op_count = 2;
+        set_reg_op(ppc.operands[0], PPC_REG_F0 + d_field);
+        set_reg_op(ppc.operands[1], PPC_REG_F0 + b_field);
+        return true;
+    }
+    emit_dabc : {  // D, A, B, C (4-operand fused multiply-add family)
+        insn->id = id;
+        strncpy(insn->mnemonic, mnemonic, sizeof(insn->mnemonic) - 1);
+        insn->mnemonic[sizeof(insn->mnemonic) - 1] = '\0';
+        snprintf(insn->op_str, sizeof(insn->op_str), "f%u, f%u, f%u, f%u", d_field, a_field, c_field, b_field);
+        cs_ppc &ppc = insn->detail->ppc;
+        ppc.op_count = 4;
+        set_reg_op(ppc.operands[0], PPC_REG_F0 + d_field);
+        set_reg_op(ppc.operands[1], PPC_REG_F0 + a_field);
+        set_reg_op(ppc.operands[2], PPC_REG_F0 + c_field);
+        set_reg_op(ppc.operands[3], PPC_REG_F0 + b_field);
+        return true;
+    }
+    emit_cmp : {  // ps_cmp* -- only crfD==0 (CR0) is tracked by this
+        // runtime, matching fcmpu/cmpw's existing CR0-only convention.
+        insn->id = id;
+        strncpy(insn->mnemonic, mnemonic, sizeof(insn->mnemonic) - 1);
+        insn->mnemonic[sizeof(insn->mnemonic) - 1] = '\0';
+        snprintf(insn->op_str, sizeof(insn->op_str), "cr%u, f%u, f%u", crfD, a_field, b_field);
+        cs_ppc &ppc = insn->detail->ppc;
+        ppc.op_count = 3;
+        set_imm_op(ppc.operands[0], crfD);
+        set_reg_op(ppc.operands[1], PPC_REG_F0 + a_field);
+        set_reg_op(ppc.operands[2], PPC_REG_F0 + b_field);
+        return true;
+    }
     }
 
     return false;

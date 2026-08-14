@@ -25,6 +25,38 @@ enum {
     PPC_INS_BRAMBLE_PS_MERGE01,
     PPC_INS_BRAMBLE_PS_MERGE10,
     PPC_INS_BRAMBLE_PS_MERGE11,
+    // Rest of the paired-single arithmetic family -- added after
+    // confirming (against real Skylanders: Spyro's Adventure code) that
+    // Capstone doesn't just fail to decode these, it confidently mislabels
+    // them as unrelated POWER8+ VMX/VSX instructions (ps_sub as
+    // "vmsumshm", ps_add as "vsel", ps_sel as "vmaddfp", ps_div as
+    // "vmsumubm" -- all four verified by hand-decoding real instruction
+    // words). Encodings from PPCInstrPaired.td (Tilka/llvm-ppc750cl).
+    PPC_INS_BRAMBLE_PS_ADD,
+    PPC_INS_BRAMBLE_PS_SUB,
+    PPC_INS_BRAMBLE_PS_MUL,
+    PPC_INS_BRAMBLE_PS_DIV,
+    PPC_INS_BRAMBLE_PS_MULS0,
+    PPC_INS_BRAMBLE_PS_MULS1,
+    PPC_INS_BRAMBLE_PS_RES,
+    PPC_INS_BRAMBLE_PS_RSQRTE,
+    PPC_INS_BRAMBLE_PS_NEG,
+    PPC_INS_BRAMBLE_PS_MR,
+    PPC_INS_BRAMBLE_PS_NABS,
+    PPC_INS_BRAMBLE_PS_ABS,
+    PPC_INS_BRAMBLE_PS_SUM0,
+    PPC_INS_BRAMBLE_PS_SUM1,
+    PPC_INS_BRAMBLE_PS_MADDS0,
+    PPC_INS_BRAMBLE_PS_MADDS1,
+    PPC_INS_BRAMBLE_PS_SEL,
+    PPC_INS_BRAMBLE_PS_MSUB,
+    PPC_INS_BRAMBLE_PS_MADD,
+    PPC_INS_BRAMBLE_PS_NMSUB,
+    PPC_INS_BRAMBLE_PS_NMADD,
+    PPC_INS_BRAMBLE_PS_CMPU0,
+    PPC_INS_BRAMBLE_PS_CMPO0,
+    PPC_INS_BRAMBLE_PS_CMPU1,
+    PPC_INS_BRAMBLE_PS_CMPO1,
 };
 
 // Owns a set of individually Capstone-allocated instructions (each a

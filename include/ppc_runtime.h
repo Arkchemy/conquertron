@@ -1,7 +1,9 @@
 #ifndef BRAMBLE_PPC_RUNTIME_H
 #define BRAMBLE_PPC_RUNTIME_H
 
+#include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 /*
@@ -100,6 +102,19 @@ static inline void ppc_store_u16(PpcContext *ctx, uint32_t addr, uint16_t val) {
     p[1] = (uint8_t)val;
 }
 
+/* lwbrx/lhbrx: byte-reversed loads (real hardware reads the same
+ * big-endian bytes as ppc_load_u32/u16, then swaps them) -- code that
+ * needs little-endian data from a big-endian machine, or vice versa. */
+static inline uint32_t ppc_load_u32_brx(const PpcContext *ctx, uint32_t addr) {
+    const uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) | ((uint32_t)p[1] << 8) | (uint32_t)p[0];
+}
+
+static inline uint16_t ppc_load_u16_brx(const PpcContext *ctx, uint32_t addr) {
+    const uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    return (uint16_t)(((uint32_t)p[1] << 8) | (uint32_t)p[0]);
+}
+
 static inline uint64_t ppc_load_u64(const PpcContext *ctx, uint32_t addr) {
     return ((uint64_t)ppc_load_u32(ctx, addr) << 32) | (uint64_t)ppc_load_u32(ctx, addr + 4);
 }
@@ -195,6 +210,32 @@ static inline uint32_t ppc_subfe(PpcContext *ctx, uint32_t a, uint32_t b) {
     uint64_t full = (uint64_t)(~a) + (uint64_t)b + (uint64_t)ctx->xer_ca;
     ctx->xer_ca = (uint8_t)((full >> 32) & 1);
     return (uint32_t)full;
+}
+
+/* addme rD, rA: rD = rA + XER[CA] - 1 ("add minus one extended") -- the
+ * -1-biased sibling of addze, used the same way in wider add chains. */
+static inline uint32_t ppc_addme(PpcContext *ctx, uint32_t a) {
+    uint64_t full = (uint64_t)a + (uint64_t)ctx->xer_ca + 0xFFFFFFFFull;
+    ctx->xer_ca = (uint8_t)((full >> 32) & 1);
+    return (uint32_t)full;
+}
+
+/* sraw rA, rS, rB: arithmetic shift right by a *register*-specified amount
+ * (0-63, though only 0-31 shift distinctly -- 32+ saturates to all-sign-
+ * bit). Unlike a plain `>>`, real hardware also sets XER[CA] here: 1 if
+ * the source was negative and any 1-bits were shifted out (i.e. the
+ * shifted-out bits would have needed a borrow to reconstruct via a
+ * later shift-left -- the same "was information lost from a negative
+ * value" signal subfe-style carry chains rely on elsewhere). */
+static inline uint32_t ppc_sraw(PpcContext *ctx, int32_t a, uint32_t shift_reg) {
+    uint32_t n = shift_reg & 0x3Fu;
+    if (n >= 32) {
+        ctx->xer_ca = (a < 0) ? 1u : 0u;
+        return (a < 0) ? 0xFFFFFFFFu : 0u;
+    }
+    uint32_t mask = (n == 0) ? 0u : ((1u << n) - 1u);
+    ctx->xer_ca = (a < 0 && ((uint32_t)a & mask) != 0) ? 1u : 0u;
+    return (uint32_t)(a >> n);
 }
 
 /* addic rD, rA, SIMM: like addc, but the second operand is an immediate. */
@@ -304,9 +345,62 @@ static inline void ppc_fcmpu(PpcContext *ctx, double a, double b) {
  * <math.h> for something this simple. */
 static inline double ppc_fabs(double val) { return val < 0.0 ? -val : val; }
 
+/* tw/twu (unconditional trap): real hardware raises a program exception,
+ * which real compiled code relies on to actually stop execution (e.g.
+ * compiler-inserted bounds/null-pointer/assert checks on a path that
+ * should be unreachable in correct code). abort() is the closest
+ * equivalent this runtime has -- deliberately not a no-op, since silently
+ * continuing past a real trap would let known-corrupt state keep
+ * executing instead of failing loudly the way the original binary
+ * would. */
+static inline void ppc_trap(void) { abort(); }
+
+/* lswi rD, rA, NB: loads NB bytes (1-32; 0 means 32) from memory starting
+ * at EA into consecutive GPRs starting at rD, wrapping r31 -> r0. Each
+ * register is packed MSB-first (byte 0 of the copy goes in the top byte
+ * of the first register), matching how a real struct/array byte-copy
+ * naturally lays out; a register only partially filled by the final few
+ * bytes has its remaining low-order bytes zeroed, matching real hardware
+ * (this is a real ISA instruction, e.g. for structs whose size isn't a
+ * multiple of 4, not a byte-order guess). */
+static inline void ppc_lswi(PpcContext *ctx, uint32_t rD_start, uint32_t addr, uint32_t nb) {
+    if (nb == 0) nb = 32;
+    uint32_t idx = rD_start;
+    uint32_t word = 0;
+    for (uint32_t i = 0; i < nb; i++) {
+        uint32_t byte_in_word = i & 3u;
+        word |= (uint32_t)ppc_load_u8(ctx, addr + i) << (24 - 8 * byte_in_word);
+        if (byte_in_word == 3 || i == nb - 1) {
+            ctx->r[idx] = word;
+            word = 0;
+            idx = (idx + 1) & 31u;
+        }
+    }
+}
+
+/* stswi rS, rA, NB: the store counterpart to lswi -- same byte packing
+ * and register wraparound, in reverse. */
+static inline void ppc_stswi(PpcContext *ctx, uint32_t rS_start, uint32_t addr, uint32_t nb) {
+    if (nb == 0) nb = 32;
+    uint32_t idx = rS_start;
+    for (uint32_t i = 0; i < nb; i++) {
+        uint32_t byte_in_word = i & 3u;
+        uint8_t b = (uint8_t)(ctx->r[idx] >> (24 - 8 * byte_in_word));
+        ppc_store_u8(ctx, addr + i, b);
+        if (byte_in_word == 3) idx = (idx + 1) & 31u;
+    }
+}
+
 /* mftb rD: see the PpcContext::tb field comment for what this does and
  * doesn't model. */
 static inline uint32_t ppc_mftb(PpcContext *ctx) { return ++ctx->tb; }
+
+/* frsqrte: reciprocal square root *estimate* on real hardware (a fast,
+ * low-precision lookup used as a Newton-Raphson starting point). Computed
+ * exactly here instead -- a more-precise-than-real-hardware estimate is
+ * still a valid starting point for any refinement steps the compiled
+ * code performs afterward, so this doesn't change final results. */
+static inline double ppc_frsqrte(double val) { return 1.0 / sqrt(val); }
 
 /* Round-to-single-precision, matching PPC's single-precision FP ops
  * (fadds/fsubs/fmuls/fdivs/fmadds/...), which compute as double but store

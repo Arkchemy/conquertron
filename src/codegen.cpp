@@ -26,6 +26,11 @@ std::string freg(int i) {
     return "ctx->f[" + std::to_string(i) + "]";
 }
 
+// The paired-single second lane -- see PpcContext::ps1's comment.
+std::string ps1(int i) {
+    return "ctx->ps1[" + std::to_string(i) + "]";
+}
+
 // Sign-extending cast: matches how addi/li/mulli/branch-displacement
 // immediates are meant to be interpreted.
 int32_t simm(const cs_ppc_op &op) { return (int32_t)op.imm; }
@@ -1137,6 +1142,447 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_MFTB: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 out << "  " << reg(rD) << " = ppc_mftb(ctx);\n";
+                break;
+            }
+            case PPC_INS_FSEL: {
+                // fsel fD, fA, fC, fB: fD = (fA >= 0.0) ? fC : fB. Operand
+                // order matches the mnemonic's own textual order (D, A, C,
+                // B), same convention as fmadd/fmsub above.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                out << "  " << freg(fD) << " = (" << freg(fA) << " >= 0.0) ? " << freg(fC) << " : " << freg(fB)
+                    << ";\n";
+                break;
+            }
+            case PPC_INS_FNMSUBS: {
+                // fnmsubs fD, fA, fC, fB: fD = -(fA*fC - fB) = fB - fA*fC,
+                // single-precision rounded.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                out << "  " << freg(fD) << " = ppc_frsp(" << freg(fB) << " - " << freg(fA) << " * " << freg(fC)
+                    << ");\n";
+                break;
+            }
+            case PPC_INS_FRSQRTE: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fB = freg_idx(ppc.operands[1].reg);
+                out << "  " << freg(fD) << " = ppc_frsqrte(" << freg(fB) << ");\n";
+                break;
+            }
+            case PPC_INS_SRAW: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_sraw(ctx, (int32_t)" << reg(rA) << ", " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_LWZUX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rA) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << reg(rA) << ");\n";
+                break;
+            }
+            case PPC_INS_STFSUX: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rA) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                out << "  ppc_store_f32(ctx, " << reg(rA) << ", " << freg(fD) << ");\n";
+                break;
+            }
+            case PPC_INS_LHAUX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rA) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)ppc_load_u16(ctx, " << reg(rA) << ");\n";
+                break;
+            }
+            case PPC_INS_CRSET: {
+                // Sets a single CR bit to 1 -- the set counterpart to
+                // crclr. Only CR0's LT/GT/EQ are tracked (see crclr).
+                unsigned int r = ppc.operands[0].reg;
+                if (r == PPC_REG_CR0LT) out << "  ctx->cr0_lt = 1;\n";
+                else if (r == PPC_REG_CR0GT) out << "  ctx->cr0_gt = 1;\n";
+                else if (r == PPC_REG_CR0EQ) out << "  ctx->cr0_eq = 1;\n";
+                else out << "  /* crset on an untracked CR bit -- no-op */\n";
+                break;
+            }
+            case PPC_INS_STHU: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  ppc_store_u16(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", (uint16_t)"
+                    << reg(rD) << ");\n";
+                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                break;
+            }
+            case PPC_INS_LWBRX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_load_u32_brx(ctx, " << base_expr(rA) << " + " << reg(rB)
+                    << ");\n";
+                break;
+            }
+            case PPC_INS_LHBRX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_load_u16_brx(ctx, " << base_expr(rA) << " + " << reg(rB)
+                    << ");\n";
+                break;
+            }
+            case PPC_INS_LHAU: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)ppc_load_u16(ctx, " << base_expr(m.base)
+                    << " + (int32_t)" << m.disp << ");\n";
+                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                break;
+            }
+            case PPC_INS_STHUX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rA) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                out << "  ppc_store_u16(ctx, " << reg(rA) << ", (uint16_t)" << reg(rD) << ");\n";
+                break;
+            }
+            case PPC_INS_STBUX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rA) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                out << "  ppc_store_u8(ctx, " << reg(rA) << ", (uint8_t)" << reg(rD) << ");\n";
+                break;
+            }
+            case PPC_INS_ADDME: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = ppc_addme(ctx, " << reg(rA) << ");\n";
+                break;
+            }
+            case PPC_INS_ROTLW: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_rotl32(" << reg(rA) << ", " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_RLWNM: {
+                // rlwnm rA, rS, rB, MB, ME -- like rlwinm, but the rotate
+                // amount comes from a register (masked to 5 bits by
+                // ppc_rotl32 itself) instead of a compile-time immediate.
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                int32_t mb = simm(ppc.operands[3]);
+                int32_t me = simm(ppc.operands[4]);
+                uint32_t mask = ppc_mask(mb, me);
+                out << "  " << reg(rD) << " = ppc_rotl32(" << reg(rA) << ", " << reg(rB) << ") & " << mask
+                    << "u;\n";
+                break;
+            }
+            case PPC_INS_STFDX: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  ppc_store_f64(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << freg(fD) << ");\n";
+                break;
+            }
+            case PPC_INS_STFDU: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  ppc_store_f64(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", " << freg(fD)
+                    << ");\n";
+                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                break;
+            }
+            case PPC_INS_LWSYNC: {
+                // Memory-ordering barrier -- see the DCBST/ISYNC no-op
+                // rationale above; no reordering model exists to
+                // synchronize against here.
+                break;
+            }
+            case PPC_INS_LFDX: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << freg(fD) << " = ppc_load_f64(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_BEQL:
+            case PPC_INS_BNEL: {
+                // Conditional call (branch-and-link) -- the bl-flavored
+                // counterpart to beq/bne, resolved through the same
+                // call_relocs/addr_to_name/import_trampolines paths bl
+                // itself uses below, just wrapped in the condition.
+                std::string cond = insn.id == PPC_INS_BEQL ? "ctx->cr0_eq" : "!ctx->cr0_eq";
+                std::string call_stmt;
+                auto it = img.call_relocs.find(insn.address);
+                if (it != img.call_relocs.end()) {
+                    call_stmt = "ppc_" + it->second + "(ctx);";
+                } else {
+                    uint32_t target = (uint32_t)ppc.operands[0].imm;
+                    auto it2 = addr_to_name.find(target);
+                    if (it2 != addr_to_name.end()) {
+                        call_stmt = "ppc_" + it2->second + "(ctx);";
+                    } else {
+                        auto it3 = img.import_trampolines.find(target);
+                        if (it3 != img.import_trampolines.end()) {
+                            call_stmt =
+                                "ppc_import_" + it3->second.library + "_" + it3->second.function + "(ctx);";
+                        }
+                    }
+                }
+                if (call_stmt.empty()) {
+                    out << "#error \"unresolved call at 0x" << std::hex << insn.address << std::dec
+                        << " in function " << func.name << "\"\n";
+                    unhandled.push_back(insn.mnemonic);
+                    break;
+                }
+                out << "  if (" << cond << ") { " << call_stmt << " }\n";
+                break;
+            }
+            case PPC_INS_TWU:
+            case PPC_INS_TRAP: {
+                out << "  ppc_trap();\n";
+                break;
+            }
+            case PPC_INS_LSWI: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                uint32_t nb = (uint32_t)ppc.operands[2].imm;
+                out << "  ppc_lswi(ctx, " << rD << "u, " << base_expr(rA) << ", " << nb << "u);\n";
+                break;
+            }
+            case PPC_INS_STSWI: {
+                int rS = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                uint32_t nb = (uint32_t)ppc.operands[2].imm;
+                out << "  ppc_stswi(ctx, " << rS << "u, " << base_expr(rA) << ", " << nb << "u);\n";
+                break;
+            }
+            case PPC_INS_FNMSUB: {
+                // fnmsub fD,fA,fC,fB: fD = -(fA*fC - fB) = fB - fA*fC,
+                // double precision (no ppc_frsp) -- the non-single-
+                // rounded sibling of fnmsubs above.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                out << "  " << freg(fD) << " = " << freg(fB) << " - " << freg(fA) << " * " << freg(fC) << ";\n";
+                break;
+            }
+            case PPC_INS_FNABS: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fB = freg_idx(ppc.operands[1].reg);
+                out << "  " << freg(fD) << " = -ppc_fabs(" << freg(fB) << ");\n";
+                break;
+            }
+            case PPC_INS_ORC: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = " << reg(rA) << " | ~" << reg(rB) << ";\n";
+                break;
+            }
+            case PPC_INS_ANDIS: {
+                // andis. (like andi., always dotted -- there's no
+                // non-recording form) always sets CR0 from the result.
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = " << reg(rA) << " & (" << uimm(ppc.operands[2]) << "u << 16);\n";
+                out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                break;
+            }
+            case PPC_INS_SYNC: {
+                // Full memory barrier -- see the DCBST/ISYNC/LWSYNC no-op
+                // rationale above.
+                break;
+            }
+            case PPC_INS_LHZUX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rA) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                out << "  " << reg(rD) << " = ppc_load_u16(ctx, " << reg(rA) << ");\n";
+                break;
+            }
+            case PPC_INS_LFDU: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  " << freg(fD) << " = ppc_load_f64(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
+                    << ");\n";
+                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_ADD:
+            case PPC_INS_BRAMBLE_PS_SUB:
+            case PPC_INS_BRAMBLE_PS_DIV: {
+                // Per-lane binary op: fD.ps0 = fA.ps0 op fB.ps0, fD.ps1 =
+                // fA.ps1 op fB.ps1. Reads both lanes of both sources into
+                // temporaries first since fD may alias fA/fB.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fB = freg_idx(ppc.operands[2].reg);
+                char op = insn.id == PPC_INS_BRAMBLE_PS_ADD ? '+' : insn.id == PPC_INS_BRAMBLE_PS_SUB ? '-' : '/';
+                out << "  { double _p0 = " << freg(fA) << " " << op << " " << freg(fB) << "; float _p1 = "
+                    << ps1(fA) << " " << op << " " << ps1(fB) << "; " << freg(fD) << " = _p0; " << ps1(fD)
+                    << " = _p1; }\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_MUL: {
+                // ps_mul fD, fA, fC (no frB operand -- see emit_dac).
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                out << "  { double _p0 = " << freg(fA) << " * " << freg(fC) << "; float _p1 = " << ps1(fA) << " * "
+                    << ps1(fC) << "; " << freg(fD) << " = _p0; " << ps1(fD) << " = _p1; }\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_MULS0:
+            case PPC_INS_BRAMBLE_PS_MULS1: {
+                // ps_muls0/1: both lanes of fA multiplied by a single
+                // broadcast lane of fC (ps0 for muls0, ps1 for muls1).
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                std::string c_bcast = insn.id == PPC_INS_BRAMBLE_PS_MULS0 ? freg(fC) : ("(double)" + ps1(fC));
+                out << "  { double _cb = " << c_bcast << "; double _p0 = " << freg(fA) << " * _cb; float _p1 = "
+                    << ps1(fA) << " * (float)_cb; " << freg(fD) << " = _p0; " << ps1(fD) << " = _p1; }\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_RES:
+            case PPC_INS_BRAMBLE_PS_RSQRTE: {
+                // Per-lane reciprocal / reciprocal-sqrt estimate (see
+                // ppc_frsqrte's comment: computed exactly rather than as a
+                // low-precision hardware estimate).
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fB = freg_idx(ppc.operands[1].reg);
+                bool rsqrt = insn.id == PPC_INS_BRAMBLE_PS_RSQRTE;
+                std::string p0 = rsqrt ? ("ppc_frsqrte(" + freg(fB) + ")") : ("1.0 / " + freg(fB));
+                std::string p1 = rsqrt ? ("1.0f / sqrtf(" + ps1(fB) + ")") : ("1.0f / " + ps1(fB));
+                out << "  { double _p0 = " << p0 << "; float _p1 = " << p1 << "; " << freg(fD) << " = _p0; "
+                    << ps1(fD) << " = _p1; }\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_NEG:
+            case PPC_INS_BRAMBLE_PS_ABS:
+            case PPC_INS_BRAMBLE_PS_NABS: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fB = freg_idx(ppc.operands[1].reg);
+                std::string p0, p1;
+                if (insn.id == PPC_INS_BRAMBLE_PS_NEG) {
+                    p0 = "-" + freg(fB);
+                    p1 = "-" + ps1(fB);
+                } else if (insn.id == PPC_INS_BRAMBLE_PS_ABS) {
+                    p0 = "ppc_fabs(" + freg(fB) + ")";
+                    p1 = "fabsf(" + ps1(fB) + ")";
+                } else {
+                    p0 = "-ppc_fabs(" + freg(fB) + ")";
+                    p1 = "-fabsf(" + ps1(fB) + ")";
+                }
+                out << "  { double _p0 = " << p0 << "; float _p1 = " << p1 << "; " << freg(fD) << " = _p0; "
+                    << ps1(fD) << " = _p1; }\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_MR: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fB = freg_idx(ppc.operands[1].reg);
+                out << "  { double _p0 = " << freg(fB) << "; float _p1 = " << ps1(fB) << "; " << freg(fD)
+                    << " = _p0; " << ps1(fD) << " = _p1; }\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_SUM0:
+            case PPC_INS_BRAMBLE_PS_SUM1: {
+                // ps_sum0 fD,fA,fC,fB: fD.ps0 = fA.ps0+fB.ps1; fD.ps1 = fC.ps1
+                // ps_sum1 fD,fA,fC,fB: fD.ps0 = fC.ps0;        fD.ps1 = fA.ps0+fB.ps1
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                std::string sum = "(" + freg(fA) + " + (double)" + ps1(fB) + ")";
+                std::string p0 = insn.id == PPC_INS_BRAMBLE_PS_SUM0 ? sum : freg(fC);
+                std::string p1 = insn.id == PPC_INS_BRAMBLE_PS_SUM0 ? ps1(fC) : ("(float)" + sum);
+                out << "  { double _p0 = " << p0 << "; float _p1 = " << p1 << "; " << freg(fD) << " = _p0; "
+                    << ps1(fD) << " = _p1; }\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_MADDS0:
+            case PPC_INS_BRAMBLE_PS_MADDS1: {
+                // Both lanes of fA multiplied by a broadcast lane of fC
+                // (ps0 for madds0, ps1 for madds1), then fB added per-lane.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                std::string c_bcast = insn.id == PPC_INS_BRAMBLE_PS_MADDS0 ? freg(fC) : ("(double)" + ps1(fC));
+                out << "  { double _cb = " << c_bcast << "; double _p0 = " << freg(fA) << " * _cb + " << freg(fB)
+                    << "; float _p1 = " << ps1(fA) << " * (float)_cb + " << ps1(fB) << "; " << freg(fD)
+                    << " = _p0; " << ps1(fD) << " = _p1; }\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_SEL: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                out << "  { double _p0 = (" << freg(fA) << " >= 0.0) ? " << freg(fC) << " : " << freg(fB)
+                    << "; float _p1 = (" << ps1(fA) << " >= 0.0f) ? " << ps1(fC) << " : " << ps1(fB) << "; "
+                    << freg(fD) << " = _p0; " << ps1(fD) << " = _p1; }\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_MSUB:
+            case PPC_INS_BRAMBLE_PS_MADD:
+            case PPC_INS_BRAMBLE_PS_NMSUB:
+            case PPC_INS_BRAMBLE_PS_NMADD: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                bool is_add = insn.id == PPC_INS_BRAMBLE_PS_MADD || insn.id == PPC_INS_BRAMBLE_PS_NMADD;
+                bool negate = insn.id == PPC_INS_BRAMBLE_PS_NMSUB || insn.id == PPC_INS_BRAMBLE_PS_NMADD;
+                char op = is_add ? '+' : '-';
+                std::string p0 = freg(fA) + " * " + freg(fC) + " " + op + " " + freg(fB);
+                std::string p1 = ps1(fA) + " * " + ps1(fC) + " " + op + " " + ps1(fB);
+                if (negate) {
+                    p0 = "-(" + p0 + ")";
+                    p1 = "-(" + p1 + ")";
+                }
+                out << "  { double _p0 = " << p0 << "; float _p1 = " << p1 << "; " << freg(fD) << " = _p0; "
+                    << ps1(fD) << " = _p1; }\n";
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_CMPU0:
+            case PPC_INS_BRAMBLE_PS_CMPO0:
+            case PPC_INS_BRAMBLE_PS_CMPU1:
+            case PPC_INS_BRAMBLE_PS_CMPO1: {
+                // Only crfD==0 (CR0) is tracked -- matching fcmpu/cmpw's
+                // existing CR0-only convention (see ppc_runtime.h). ps0 is
+                // compared for cmp*0, ps1 for cmp*1; "ordered" (NaN-aware)
+                // vs "unordered" variants aren't distinguished, same known
+                // gap ppc_fcmpu's comment already documents.
+                uint32_t crfD = (uint32_t)ppc.operands[0].imm;
+                if (crfD != 0) {
+                    out << "  /* ps_cmp targeting a CR field other than CR0 -- not tracked, no-op */\n";
+                    break;
+                }
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fB = freg_idx(ppc.operands[2].reg);
+                bool lane1 = insn.id == PPC_INS_BRAMBLE_PS_CMPU1 || insn.id == PPC_INS_BRAMBLE_PS_CMPO1;
+                if (lane1) {
+                    out << "  ctx->cr0_lt = " << ps1(fA) << " < " << ps1(fB) << "; ctx->cr0_gt = " << ps1(fA)
+                        << " > " << ps1(fB) << "; ctx->cr0_eq = " << ps1(fA) << " == " << ps1(fB) << ";\n";
+                } else {
+                    out << "  ppc_fcmpu(ctx, " << freg(fA) << ", " << freg(fB) << ");\n";
+                }
                 break;
             }
             case PPC_INS_BRAMBLE_PSQ_L:
