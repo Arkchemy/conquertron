@@ -552,6 +552,64 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 }
                 break;
             }
+            case PPC_INS_LFD: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  " << freg(fD) << " = ppc_load_f64(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
+                    << ");\n";
+                break;
+            }
+            case PPC_INS_STFD: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  ppc_store_f64(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", " << freg(fD)
+                    << ");\n";
+                break;
+            }
+            case PPC_INS_FCTIWZ: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fB = freg_idx(ppc.operands[1].reg);
+                out << "  " << freg(fD) << " = ppc_fctiwz(" << freg(fB) << ");\n";
+                break;
+            }
+            case PPC_INS_XORIS: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = " << reg(rA) << " ^ (" << uimm(ppc.operands[2]) << "u << 16);\n";
+                break;
+            }
+            case PPC_INS_FADD:
+            case PPC_INS_FSUB:
+            case PPC_INS_FMUL:
+            case PPC_INS_FDIV: {
+                // Double-precision forms: no ppc_frsp rounding, unlike the
+                // single-precision fadds/fsubs/fmuls/fdivs above.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fB = freg_idx(ppc.operands[2].reg);
+                char op = '+';
+                switch (insn.id) {
+                    case PPC_INS_FADD: op = '+'; break;
+                    case PPC_INS_FSUB: op = '-'; break;
+                    case PPC_INS_FMUL: op = '*'; break;
+                    case PPC_INS_FDIV: op = '/'; break;
+                    default: break;
+                }
+                out << "  " << freg(fD) << " = " << freg(fA) << " " << op << " " << freg(fB) << ";\n";
+                break;
+            }
+            case PPC_INS_FMADD:
+            case PPC_INS_FMSUB: {
+                // fD = (fA * fC) op fB, double precision (no ppc_frsp).
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                char op = insn.id == PPC_INS_FMADD ? '+' : '-';
+                out << "  " << freg(fD) << " = " << freg(fA) << " * " << freg(fC) << " " << op << " " << freg(fB)
+                    << ";\n";
+                break;
+            }
             case PPC_INS_STFS: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
