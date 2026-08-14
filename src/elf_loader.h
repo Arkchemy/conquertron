@@ -28,7 +28,15 @@ struct ElfFunction {
 // address, indexed at runtime) -- see is_synthetic_addr_lo_reloc in
 // codegen.cpp.
 struct DataReloc {
-    enum Type { HA, LO } type;
+    // HI is R_PPC_ADDR16_HI's unrounded high-16-bits counterpart to HA
+    // (used with a plain `ori` low half instead of a signed `addi`/load,
+    // which doesn't need HA's +0x10000 rounding correction) -- real
+    // linked .rpx output uses HI/LO for RPL import trampolines. Treated
+    // identically to HA everywhere in this codebase: both just mark "the
+    // high-half instruction of a lis+something pair", since codegen
+    // resolves the whole pair to a literal computed address rather than
+    // reconstructing it via real bitwise hi/lo assembly.
+    enum Type { HA, LO, HI } type;
     std::string section;  // e.g. ".rodata.cst4"
     int32_t addend = 0;   // byte offset within that section
 
@@ -44,6 +52,29 @@ struct DataReloc {
     bool is_function = false;
     std::string func_name;
     uint32_t func_addr = 0;
+
+    // Set when the relocation's symbol lives in a `.fimport_<library>`
+    // section -- an RPL cross-library import, not a real local address at
+    // all. See ImportTrampoline/find_import_trampolines.
+    bool is_import = false;
+    std::string import_library;
+    std::string import_function;
+};
+
+// A real Wii U .rpx/.rpl calls into other system libraries (coreinit,
+// vpad, proc_ui, ...) through a small linker-synthesized stub in .text:
+// `lis r0,HI(import_addr) / ori r0,r0,LO(import_addr) / mtctr r0 / bctr`.
+// The stub itself has no symbol table entry (the linker invents it), but
+// its `lis`/`ori` pair carries R_PPC_ADDR16_HI/LO relocations targeting a
+// real, named FUNC symbol defined in a `.fimport_<library>` section (see
+// WiiUBrew's RPL format docs) -- confirmed against a real devkitPPC-built
+// .rpx, not guessed. find_import_trampolines below recognizes this exact
+// instruction pattern and records what each stub's address really means,
+// so a `bl` to one resolves to a named external call instead of an
+// "unresolved call" error.
+struct ImportTrampoline {
+    std::string library;   // e.g. "coreinit", from the .fimport_<library> section name
+    std::string function;  // e.g. "FSFlushFile"
 };
 
 struct ElfImage {
@@ -51,6 +82,11 @@ struct ElfImage {
     uint32_t text_addr = 0;  // sh_addr of .text (usually 0 for a relocatable .o)
     uint32_t entry = 0;      // ELF header e_entry (meaningful for linked executables, not relocatable .o)
     std::vector<ElfFunction> functions;
+
+    // Import trampoline addresses (within .text) resolved by
+    // find_import_trampolines, keyed by the trampoline's own start
+    // address (the same address a `bl` targeting it would use).
+    std::map<uint32_t, ImportTrampoline> import_trampolines;
 
     // R_PPC_REL24 relocations found in .rela.text, keyed by the address of
     // the `bl` instruction they apply to, valued by the target function's
@@ -84,6 +120,15 @@ struct ElfImage {
 // done). Idempotent -- safe to call more than once, though there's no
 // reason to.
 void assign_global_addrs(ElfImage &img);
+
+// Scans img.data_relocs for HI-type relocations targeting a `.fimport_*`
+// section, confirms the classic `lis/ori/mtctr/bctr` trampoline shape
+// immediately follows in img.text, and populates
+// img.import_trampolines for each match. Call once after load_elf
+// succeeds (order relative to assign_global_addrs doesn't matter).
+// Harmless no-op on objects with no RPL imports (ordinary relocatable
+// .o test objects, for instance).
+void find_import_trampolines(ElfImage &img);
 
 // Loads a big-endian, 32-bit ELF relocatable object (as produced by
 // `zig cc -target powerpc-freestanding-eabi -c`) and extracts its .text

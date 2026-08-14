@@ -4,6 +4,8 @@
 #include <cstring>
 #include <fstream>
 
+#include "disassembler.h"
+
 namespace recomp {
 
 namespace {
@@ -20,8 +22,11 @@ constexpr int STT_FUNC = 2;
 constexpr uint32_t SHT_RELA = 4;
 constexpr uint32_t SHT_NOBITS = 8;
 constexpr uint32_t R_PPC_ADDR16_LO = 4;
+constexpr uint32_t R_PPC_ADDR16_HI = 5;
 constexpr uint32_t R_PPC_ADDR16_HA = 6;
 constexpr uint32_t R_PPC_REL24 = 10;
+
+const char kImportSectionPrefix[] = ".fimport_";
 
 }  // namespace
 
@@ -181,18 +186,29 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
 
             if (r_type == R_PPC_REL24) {
                 out.call_relocs[r_offset] = all_sym_names[r_sym];
-            } else if (r_type == R_PPC_ADDR16_HA || r_type == R_PPC_ADDR16_LO) {
+            } else if (r_type == R_PPC_ADDR16_HA || r_type == R_PPC_ADDR16_LO || r_type == R_PPC_ADDR16_HI) {
                 // Unlike REL24 (which points at the instruction's own start
-                // address), ADDR16_HA/LO point at byte offset+2 within the
-                // instruction word -- the low halfword, in PPC's
+                // address), ADDR16_HA/HI/LO point at byte offset+2 within
+                // the instruction word -- the low halfword, in PPC's
                 // big-endian encoding. Align down to recover the
                 // instruction's address so this can be looked up the same
                 // way as everything else keyed by insn.address.
                 DataReloc dr;
-                dr.type = (r_type == R_PPC_ADDR16_HA) ? DataReloc::HA : DataReloc::LO;
+                dr.type = (r_type == R_PPC_ADDR16_LO)   ? DataReloc::LO
+                          : (r_type == R_PPC_ADDR16_HI) ? DataReloc::HI
+                                                         : DataReloc::HA;
                 dr.section = sym_section_names[r_sym];
                 dr.addend = r_addend;
-                if (sym_types[r_sym] == STT_FUNC) {
+                if (sym_types[r_sym] == STT_FUNC && dr.section.rfind(kImportSectionPrefix, 0) == 0) {
+                    // RPL cross-library import (e.g. a coreinit function
+                    // called via a linker-synthesized trampoline stub) --
+                    // see ImportTrampoline. Checked before the plain
+                    // is_function case below since import symbols are also
+                    // STT_FUNC, just not local code.
+                    dr.is_import = true;
+                    dr.import_library = dr.section.substr(sizeof(kImportSectionPrefix) - 1);
+                    dr.import_function = all_sym_names[r_sym];
+                } else if (sym_types[r_sym] == STT_FUNC) {
                     // &function idiom (e.g. building a function-pointer
                     // table) -- same lis+addi relocation pair as addressing
                     // mutable data, but the value needed is the function's
@@ -227,6 +243,7 @@ void assign_global_addrs(ElfImage &img) {
     uint32_t next_addr = 0x2000;
     for (const auto &entry : img.data_relocs) {
         if (entry.second.is_function) continue;  // handled separately, see codegen.cpp
+        if (entry.second.is_import) continue;    // not a real address at all, see find_import_trampolines
         const std::string &section = entry.second.section;
         if (img.global_section_base.count(section)) continue;
 
@@ -235,6 +252,30 @@ void assign_global_addrs(ElfImage &img) {
         auto it = img.section_bytes.find(section);
         if (it != img.section_bytes.end() && it->second.size() > sz) sz = it->second.size();
         next_addr += (uint32_t)((sz + 15) & ~15u); // round up to 16
+    }
+}
+
+void find_import_trampolines(ElfImage &img) {
+    for (const auto &entry : img.data_relocs) {
+        uint32_t addr = entry.first;
+        const DataReloc &reloc = entry.second;
+        if (!reloc.is_import || reloc.type != DataReloc::HI) continue;
+        if (addr < img.text_addr) continue;
+        uint32_t off = addr - img.text_addr;
+        // lis/ori(or addi)/mtctr/bctr -- 16 bytes, 4 instructions.
+        if (off + 16 > img.text.size()) continue;
+
+        DisasmResult insns;
+        std::string err;
+        if (!disassemble_range(&img.text[off], 16, addr, insns, err) || insns.size() < 4) continue;
+
+        bool is_lis = insns[0].id == PPC_INS_LIS;
+        bool is_lo_half = insns[1].id == PPC_INS_ORI || insns[1].id == PPC_INS_ADDI || insns[1].id == PPC_INS_NOP;
+        bool is_mtctr = insns[2].id == PPC_INS_MTCTR;
+        bool is_bctr = insns[3].id == PPC_INS_BCTR;
+        if (is_lis && is_lo_half && is_mtctr && is_bctr) {
+            img.import_trampolines[addr] = {reloc.import_library, reloc.import_function};
+        }
     }
 }
 

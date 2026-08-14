@@ -186,6 +186,48 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << reg(rD) << ");\n";
                 break;
             }
+            case PPC_INS_LWZU: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
+                    << ");\n";
+                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                break;
+            }
+            case PPC_INS_LBZU: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  " << reg(rD) << " = ppc_load_u8(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
+                    << ");\n";
+                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                break;
+            }
+            case PPC_INS_STBU: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  ppc_store_u8(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", (uint8_t)"
+                    << reg(rD) << ");\n";
+                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                break;
+            }
+            case PPC_INS_LBZUX: {
+                // indexed update form: rA(base) += rB, then load from the
+                // new address
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rA) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                out << "  " << reg(rD) << " = ppc_load_u8(ctx, " << reg(rA) << ");\n";
+                break;
+            }
+            case PPC_INS_STWUX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rA) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                out << "  ppc_store_u32(ctx, " << reg(rA) << ", " << reg(rD) << ");\n";
+                break;
+            }
             case PPC_INS_STH: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
@@ -227,6 +269,38 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 } else {
                     out << "  " << reg(rD) << " = " << uimm(ppc.operands[1]) << "u << 16;\n";
                 }
+                break;
+            }
+            case PPC_INS_ADDIS: {
+                // Same as PPC_INS_LIS's relocation handling, except rA is a
+                // real input to add to (lis is this instruction with an
+                // implied rA=0, which capstone already reports as the
+                // separate 2-operand PPC_INS_LIS case above).
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                auto it = img.data_relocs.find(insn.address);
+                if (it != img.data_relocs.end() && it->second.type == DataReloc::HA) {
+                    if (it->second.is_function) {
+                        out << "  " << reg(rD) << " = " << base_expr(rA) << " + " << it->second.func_addr
+                            << "u; /* &" << it->second.func_name << " */\n";
+                    } else {
+                        uint32_t addr = img.global_section_base.at(it->second.section) + (uint32_t)it->second.addend;
+                        out << "  " << reg(rD) << " = " << base_expr(rA) << " + " << addr << "u; /* &"
+                            << it->second.section << "+" << it->second.addend << " */\n";
+                    }
+                } else {
+                    out << "  " << reg(rD) << " = " << base_expr(rA) << " + (" << uimm(ppc.operands[2])
+                        << "u << 16);\n";
+                }
+                break;
+            }
+            case PPC_INS_ANDI: {
+                // andi. (unlike `and`, there's no non-recording immediate
+                // AND in the ISA) always sets CR0 from the result.
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = " << reg(rA) << " & " << uimm(ppc.operands[2]) << "u;\n";
+                out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
                 break;
             }
             case PPC_INS_ORI: {
@@ -518,6 +592,27 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 out << "  " << reg(rD) << " = ppc_adde(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
                 break;
             }
+            case PPC_INS_ADDIC: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = ppc_addic(ctx, " << reg(rA) << ", " << simm(ppc.operands[2]) << ");\n";
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
+                break;
+            }
+            case PPC_INS_ADDZE: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = ppc_addze(ctx, " << reg(rA) << ");\n";
+                break;
+            }
+            case PPC_INS_SUBFZE: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = ppc_subfze(ctx, " << reg(rA) << ");\n";
+                break;
+            }
             case PPC_INS_B: {
                 uint32_t target = (uint32_t)ppc.operands[0].imm;
                 out << "  goto L_" << std::hex << target << std::dec << ";\n";
@@ -572,6 +667,107 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 out << "  return;\n";
                 break;
             }
+            case PPC_INS_BEQLR:
+            case PPC_INS_BNELR:
+            case PPC_INS_BLTLR:
+            case PPC_INS_BLELR:
+            case PPC_INS_BGTLR:
+            case PPC_INS_BGELR: {
+                // Conditional early return -- the blr-flavored counterpart
+                // to the beq/bne/... conditional branches above, common
+                // for "if (some guard fails) return;" prologues.
+                std::string cond;
+                switch (insn.id) {
+                    case PPC_INS_BEQLR: cond = "ctx->cr0_eq"; break;
+                    case PPC_INS_BNELR: cond = "!ctx->cr0_eq"; break;
+                    case PPC_INS_BLTLR: cond = "ctx->cr0_lt"; break;
+                    case PPC_INS_BLELR: cond = "(ctx->cr0_lt || ctx->cr0_eq)"; break;
+                    case PPC_INS_BGTLR: cond = "ctx->cr0_gt"; break;
+                    case PPC_INS_BGELR: cond = "(ctx->cr0_gt || ctx->cr0_eq)"; break;
+                    default: break;
+                }
+                out << "  if (" << cond << ") return;\n";
+                break;
+            }
+            case PPC_INS_MFCR: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                out << "  " << reg(rD) << " = ppc_mfcr(ctx);\n";
+                break;
+            }
+            case PPC_INS_MTCRF: {
+                // Only field 0 (CR0) is tracked by this runtime -- see
+                // ppc_mtcrf_cr0's comment. The field mask (crm) operand is
+                // an immediate; only bother emitting anything when it
+                // actually selects field 0 (mask bit 0x80).
+                if ((uimm(ppc.operands[0]) & 0x80u) != 0) {
+                    int rS = reg_idx(ppc.operands[1].reg);
+                    out << "  ppc_mtcrf_cr0(ctx, " << reg(rS) << ");\n";
+                } else {
+                    out << "  /* mtcrf targeting a CR field other than CR0 -- not tracked, no-op */\n";
+                }
+                break;
+            }
+            case PPC_INS_CRCLR: {
+                // Clears a single CR bit. Only CR0's LT/GT/EQ are tracked;
+                // any other field (including CR0's SO, which this runtime
+                // never sets anyway) is silently a no-op.
+                //
+                // Real bug fixed here: this originally read
+                // operands[0].crx.reg, assuming capstone reports crclr's
+                // bit operand as a PPC_OP_CRX operand (crx is a struct
+                // with a leading `scale` field before `reg`). Real capstone
+                // output for both crclr and cror is a plain PPC_OP_REG
+                // operand instead -- .crx.reg was reading past the union's
+                // actual populated bytes, which happened to silently
+                // no-op every time rather than crash (the garbage never
+                // matched a tracked enum value), masking that CR0-bit
+                // cases were never actually being applied.
+                unsigned int r = ppc.operands[0].reg;
+                if (r == PPC_REG_CR0LT) out << "  ctx->cr0_lt = 0;\n";
+                else if (r == PPC_REG_CR0GT) out << "  ctx->cr0_gt = 0;\n";
+                else if (r == PPC_REG_CR0EQ) out << "  ctx->cr0_eq = 0;\n";
+                else out << "  /* crclr on an untracked CR bit -- no-op */\n";
+                break;
+            }
+            case PPC_INS_CROR:
+            case PPC_INS_CRMOVE: {
+                // ORs two CR bits into a third (crmove crD,crA is the
+                // `cror crD,crA,crA` alias -- capstone reports some
+                // 3-distinct-operand encodings under PPC_INS_CRMOVE too
+                // rather than PPC_INS_CROR, confirmed against real
+                // devkitPPC-compiled code, so both IDs are handled the
+                // same way here). Only representable when all three
+                // operands are tracked CR0 bits -- see PPC_INS_CRCLR
+                // above for why this reads plain .reg, not .crx.reg.
+                auto trackedFlag = [](unsigned int r) -> const char * {
+                    if (r == PPC_REG_CR0LT) return "ctx->cr0_lt";
+                    if (r == PPC_REG_CR0GT) return "ctx->cr0_gt";
+                    if (r == PPC_REG_CR0EQ) return "ctx->cr0_eq";
+                    return nullptr;
+                };
+                const char *bt = trackedFlag(ppc.operands[0].reg);
+                const char *ba = trackedFlag(ppc.operands[1].reg);
+                const char *bb = insn.id == PPC_INS_CRMOVE && ppc.op_count == 2 ? ba : trackedFlag(ppc.operands[2].reg);
+                if (bt && ba && bb) {
+                    out << "  " << bt << " = (" << ba << " || " << bb << ");\n";
+                } else {
+                    out << "  /* cror/crmove involving an untracked CR bit -- no-op */\n";
+                }
+                break;
+            }
+            case PPC_INS_MCRF: {
+                // Copies one whole CR field to another. Always a no-op
+                // here: copying *out of* CR0 into some other (untracked)
+                // field can't do anything useful since nothing reads that
+                // field back, and copying *into* CR0 from some other
+                // (untracked, always-zero-in-this-model) field would
+                // incorrectly clobber real CR0 state with nothing.
+                out << "  /* mcrf -- CR fields other than CR0 aren't tracked, no-op */\n";
+                break;
+            }
+            case PPC_INS_NOP: {
+                break;
+            }
             case PPC_INS_MTCTR: {
                 int rS = reg_idx(ppc.operands[0].reg);
                 out << "  ctx->ctr = " << reg(rS) << ";\n";
@@ -599,6 +795,17 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 auto it2 = addr_to_name.find(target);
                 if (it2 != addr_to_name.end()) {
                     out << "  ppc_" << it2->second << "(ctx);\n";
+                    break;
+                }
+                // A real linked .rpx/.rpl calls into other system
+                // libraries through a small linker-synthesized trampoline
+                // (see ImportTrampoline) rather than a real local function
+                // -- resolve straight through it to a named external call
+                // instead of treating the trampoline's own four
+                // instructions as something to recompile.
+                auto it3 = img.import_trampolines.find(target);
+                if (it3 != img.import_trampolines.end()) {
+                    out << "  ppc_import_" << it3->second.library << "_" << it3->second.function << "(ctx);\n";
                     break;
                 }
                 out << "#error \"unresolved call at 0x" << std::hex << insn.address << " to 0x" << target << std::dec
@@ -637,6 +844,23 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fB = freg_idx(ppc.operands[1].reg);
                 out << "  " << freg(fD) << " = ppc_fctiwz(" << freg(fB) << ");\n";
+                break;
+            }
+            case PPC_INS_FRSP: {
+                // Explicit round-to-single, as its own instruction --
+                // distinct from the implicit rounding fadds/fsubs/etc.
+                // already apply via ppc_frsp internally.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fB = freg_idx(ppc.operands[1].reg);
+                out << "  " << freg(fD) << " = ppc_frsp(" << freg(fB) << ");\n";
+                break;
+            }
+            case PPC_INS_STFIWX: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  ppc_store_f64_low32(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << freg(fD)
+                    << ");\n";
                 break;
             }
             case PPC_INS_XORIS: {
@@ -732,6 +956,16 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
                 out << "  " << freg(fD) << " = ppc_frsp(" << freg(fA) << " * " << freg(fC) << " + " << freg(fB)
+                    << ");\n";
+                break;
+            }
+            case PPC_INS_FMSUBS: {
+                // fD = (fA * fC) - fB, single-precision rounded.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                out << "  " << freg(fD) << " = ppc_frsp(" << freg(fA) << " * " << freg(fC) << " - " << freg(fB)
                     << ");\n";
                 break;
             }

@@ -118,6 +118,27 @@ static inline void ppc_cmplw(PpcContext *ctx, uint32_t a, uint32_t b) {
     ctx->cr0_eq = a == b;
 }
 
+/* mfcr: packs CR0 (the only CR field this model tracks -- see the
+ * struct-level fidelity note above) into bits 28-31 of a 32-bit value,
+ * matching the real CR register layout (CR0 is the top 4 bits: LT,GT,EQ,
+ * SO). SO is never tracked/set, so that bit is always 0. Other CR fields
+ * are always 0 here too, which is only actually correct if nothing in
+ * the recompiled code reads them -- a real but narrow gap shared with
+ * every other cr0-only piece of this runtime. */
+static inline uint32_t ppc_mfcr(const PpcContext *ctx) {
+    uint32_t cr0 = (ctx->cr0_lt ? 8u : 0u) | (ctx->cr0_gt ? 4u : 0u) | (ctx->cr0_eq ? 2u : 0u);
+    return cr0 << 28;
+}
+
+/* mtcrf targeting field 0 (CR0) specifically -- see codegen.cpp's
+ * PPC_INS_MTCRF handling for why only field 0 is wired up. */
+static inline void ppc_mtcrf_cr0(PpcContext *ctx, uint32_t val) {
+    uint32_t cr0 = (val >> 28) & 0xFu;
+    ctx->cr0_lt = (cr0 & 8u) != 0;
+    ctx->cr0_gt = (cr0 & 4u) != 0;
+    ctx->cr0_eq = (cr0 & 2u) != 0;
+}
+
 /* addc/adde: used together to add 64-bit (or wider) values held across
  * pairs of 32-bit registers -- addc computes the low word and captures the
  * carry-out in XER[CA], adde consumes that carry into the high word. */
@@ -137,6 +158,29 @@ static inline uint32_t ppc_adde(PpcContext *ctx, uint32_t a, uint32_t b) {
  * two's-complement way real hardware does it: ~rA + SIMM + 1. */
 static inline uint32_t ppc_subfic(PpcContext *ctx, uint32_t a, int32_t simm) {
     uint64_t full = (uint64_t)(~a) + (uint64_t)(uint32_t)simm + 1u;
+    ctx->xer_ca = (uint8_t)((full >> 32) & 1);
+    return (uint32_t)full;
+}
+
+/* addic rD, rA, SIMM: like addc, but the second operand is an immediate. */
+static inline uint32_t ppc_addic(PpcContext *ctx, uint32_t a, int32_t simm) {
+    uint64_t full = (uint64_t)a + (uint64_t)(uint32_t)simm;
+    ctx->xer_ca = (uint8_t)((full >> 32) & 1);
+    return (uint32_t)full;
+}
+
+/* addze rD, rA: rD = rA + XER[CA] (propagating a carry into the next word
+ * of a wider add, when there's nothing else to add at this word). */
+static inline uint32_t ppc_addze(PpcContext *ctx, uint32_t a) {
+    uint64_t full = (uint64_t)a + (uint64_t)ctx->xer_ca;
+    ctx->xer_ca = (uint8_t)((full >> 32) & 1);
+    return (uint32_t)full;
+}
+
+/* subfze rD, rA: rD = ~rA + XER[CA] -- the subtract-with-borrow counterpart
+ * to addze, for wider subtraction chains. */
+static inline uint32_t ppc_subfze(PpcContext *ctx, uint32_t a) {
+    uint64_t full = (uint64_t)(uint32_t)(~a) + (uint64_t)ctx->xer_ca;
     ctx->xer_ca = (uint8_t)((full >> 32) & 1);
     return (uint32_t)full;
 }
@@ -196,6 +240,18 @@ static inline double ppc_fctiwz(double val) {
     double result;
     memcpy(&result, &bits, sizeof(result));
     return result;
+}
+
+/* stfiwx: store the low 32 bits of an FPR's raw bit pattern to memory, as
+ * a plain integer word -- the single-instruction shortcut for the
+ * fctiwz-then-stfd-then-read-low-word idiom ppc_fctiwz's own comment
+ * describes. (uint32_t)bits truncates by *value*, not byte layout, so
+ * this is host-endianness-independent; ppc_store_u32 handles writing it
+ * out in genuine PPC big-endian order. */
+static inline void ppc_store_f64_low32(PpcContext *ctx, uint32_t addr, double val) {
+    uint64_t bits;
+    memcpy(&bits, &val, sizeof(bits));
+    ppc_store_u32(ctx, addr, (uint32_t)bits);
 }
 
 /* fcmpu: like ppc_cmpw but for floats. Real PPC also has an "unordered"

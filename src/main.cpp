@@ -63,6 +63,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     recomp::assign_global_addrs(img);
+    recomp::find_import_trampolines(img);
 
     if (extern_globals && !img.global_section_base.empty()) {
         std::cerr << "error: --extern-globals was passed, but this object has its own "
@@ -135,6 +136,20 @@ int main(int argc, char **argv) {
         const std::string &name = entry.second;
         if (declared.insert(name).second) {
             out << "void ppc_" << name << "(PpcContext *ctx); /* external -- defined in another translation unit */\n";
+        }
+    }
+    // RPL cross-library imports (real Cafe OS system calls, e.g.
+    // coreinit's FSFlushFile) resolved through find_import_trampolines --
+    // these have no recompiled implementation at all yet. Declaring them
+    // here makes the generated C compile and clearly documents exactly
+    // which system functions a real CafeOS runtime shim (Phase 1d) needs
+    // to provide, instead of leaving a #error at every call site.
+    std::set<std::string> declared_imports;
+    for (const auto &entry : img.import_trampolines) {
+        const std::string key = entry.second.library + "_" + entry.second.function;
+        if (declared_imports.insert(key).second) {
+            out << "void ppc_import_" << key << "(PpcContext *ctx); /* RPL import: " << entry.second.library << "."
+                << entry.second.function << " -- not implemented, needs the CafeOS runtime shim */\n";
         }
     }
     out << "void ppc_dispatch(PpcContext *ctx, uint32_t addr);\n";
