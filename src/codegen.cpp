@@ -402,6 +402,55 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 out << "  ppc_cmplw(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
                 break;
             }
+            case PPC_INS_CMPLWI: {
+                int rA = reg_idx(ppc.operands[0].reg);
+                out << "  ppc_cmplw(ctx, " << reg(rA) << ", " << uimm(ppc.operands[1]) << "u);\n";
+                break;
+            }
+            case PPC_INS_LWZX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_STWX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  ppc_store_u32(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << reg(rD) << ");\n";
+                break;
+            }
+            case PPC_INS_LBZX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_load_u8(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_STBX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  ppc_store_u8(ctx, " << base_expr(rA) << " + " << reg(rB) << ", (uint8_t)" << reg(rD)
+                    << ");\n";
+                break;
+            }
+            case PPC_INS_LHZX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_load_u16(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_STHX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  ppc_store_u16(ctx, " << base_expr(rA) << " + " << reg(rB) << ", (uint16_t)" << reg(rD)
+                    << ");\n";
+                break;
+            }
             case PPC_INS_ADDC: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
