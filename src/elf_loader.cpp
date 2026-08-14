@@ -209,12 +209,6 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
     return true;
 }
 
-namespace {
-bool is_rodata_section(const std::string &name) {
-    return name.rfind(".rodata", 0) == 0; // starts with
-}
-}  // namespace
-
 void assign_global_addrs(ElfImage &img) {
     // Fixed, generous starting point in PpcContext::mem -- well clear of
     // where these small test programs' stacks operate (mem is 65536 bytes;
@@ -223,10 +217,17 @@ void assign_global_addrs(ElfImage &img) {
     // milestone's scope but is a real, documented limitation: a genuinely
     // large .data/.bss (as real Wii U game code will have) would need a
     // proper size-aware allocator, not this fixed-stride placeholder.
+    //
+    // Read-only (.rodata*) sections get a real synthetic address here too,
+    // same as mutable .data/.bss -- see is_synthetic_addr_lo_reloc in
+    // codegen.cpp for why an earlier compile-time-constant-fold approach
+    // for rodata was wrong in general (it only handled a single scalar
+    // load, not e.g. a switch-statement jump/lookup table's *address*
+    // being taken for later runtime-indexed access).
     uint32_t next_addr = 0x2000;
     for (const auto &entry : img.data_relocs) {
+        if (entry.second.is_function) continue;  // handled separately, see codegen.cpp
         const std::string &section = entry.second.section;
-        if (is_rodata_section(section)) continue; // constant-folded instead, see codegen.cpp
         if (img.global_section_base.count(section)) continue;
 
         img.global_section_base[section] = next_addr;

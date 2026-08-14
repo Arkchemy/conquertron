@@ -59,54 +59,28 @@ uint32_t ppc_mask(int mb, int me) {
     return (mb <= me) ? (mask_begin & mask_end) : (mask_begin | mask_end);
 }
 
-bool is_rodata_section(const std::string &name) { return name.rfind(".rodata", 0) == 0; }
-
-// True if `addr` carries an R_PPC_ADDR16_LO relocation targeting a mutable
-// (.data/.bss) section -- i.e. the consuming instruction's base register
-// already holds the complete synthetic address (assigned by
-// assign_global_addrs, via the paired lis -- see its PPC_INS_LIS case
-// below), so the instruction's own displacement/immediate field must be
-// ignored rather than added on top of it.
-bool is_mutable_lo_reloc(const ElfImage &img, uint32_t addr) {
+// True if `addr` carries an R_PPC_ADDR16_LO relocation -- i.e. the
+// consuming instruction's base register already holds the complete
+// synthetic (or, for functions, real) address, written there by the
+// paired `lis`'s R_PPC_ADDR16_HA handling (see PPC_INS_LIS below), so the
+// instruction's own displacement/immediate field is a relocation
+// placeholder to be ignored rather than added on top of it.
+//
+// This applies uniformly to read-only (.rodata*) and mutable (.data/.bss)
+// sections alike: an earlier version of this code constant-folded
+// .rodata* accesses to a compile-time literal instead, which is only
+// correct for the single narrow case of a `lis`+single-scalar-load pair
+// (e.g. a float/double literal pool entry) -- it silently miscompiled
+// anything that takes a rodata array's *address* for later runtime-
+// indexed access (a compiler-generated switch-statement jump/lookup
+// table, notably, but the same shape applies to any `static const`
+// array indexed by a variable). Treating rodata addresses as real,
+// though technically writable, entries in PpcContext::mem -- exactly
+// like mutable globals, just never actually written to by generated
+// code -- handles both cases uniformly and correctly.
+bool is_synthetic_addr_lo_reloc(const ElfImage &img, uint32_t addr) {
     auto it = img.data_relocs.find(addr);
-    if (it == img.data_relocs.end() || it->second.type != DataReloc::LO) return false;
-    // Function addresses behave the same way as mutable-global addresses
-    // here: the paired `lis` already wrote the complete value into the base
-    // register, so the LO-relocated instruction's own displacement/
-    // immediate field is a relocation placeholder to be ignored, not real
-    // data.
-    if (it->second.is_function) return true;
-    return !is_rodata_section(it->second.section);
-}
-
-// Reads `width` bytes at `reloc.addend` out of the named section's raw
-// (big-endian, as stored in the ELF file) bytes. Used to resolve a
-// `lis`+load/store pair addressing a read-only data constant -- see
-// DataReloc in elf_loader.h.
-bool read_data_const(const ElfImage &img, const DataReloc &reloc, uint32_t width, std::vector<uint8_t> &out) {
-    auto it = img.section_bytes.find(reloc.section);
-    if (it == img.section_bytes.end()) return false;
-    const std::vector<uint8_t> &bytes = it->second;
-    if (reloc.addend < 0) return false;
-    size_t off = (size_t)reloc.addend;
-    if (off + width > bytes.size()) return false;
-    out.assign(bytes.begin() + off, bytes.begin() + off + width);
-    return true;
-}
-
-float be_bytes_to_float(const std::vector<uint8_t> &b) {
-    uint32_t v = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | b[3];
-    float f;
-    memcpy(&f, &v, sizeof(f));
-    return f;
-}
-
-// %a (hex float) round-trips exactly and sidesteps any decimal-rounding
-// concerns -- valid C99/C++ syntax, understood by both gcc and clang.
-std::string hexfloat(double v) {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%a", v);
-    return buf;
+    return it != img.data_relocs.end() && it->second.type == DataReloc::LO;
 }
 
 }  // namespace
@@ -144,11 +118,6 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
 
     out << "void ppc_" << func.name << "(PpcContext *ctx) {\n";
 
-    // Tracks GPRs holding the "high half" of a not-yet-linked data address,
-    // set by a `lis` with an R_PPC_ADDR16_HA relocation and consumed by the
-    // paired load/store's R_PPC_ADDR16_LO relocation. See DataReloc.
-    std::map<int, DataReloc> pending_hi;
-
     for (size_t i = 0; i < insns.size(); i++) {
         const cs_insn &insn = insns[i];
         const cs_ppc &ppc = insn.detail->ppc;
@@ -174,7 +143,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_STW: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                std::string addr_expr = is_mutable_lo_reloc(img, insn.address)
+                std::string addr_expr = is_synthetic_addr_lo_reloc(img, insn.address)
                                              ? base_expr(m.base)
                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
                 out << "  ppc_store_u32(ctx, " << addr_expr << ", " << reg(rD) << ");\n";
@@ -183,7 +152,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_LWZ: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                std::string addr_expr = is_mutable_lo_reloc(img, insn.address)
+                std::string addr_expr = is_synthetic_addr_lo_reloc(img, insn.address)
                                              ? base_expr(m.base)
                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
                 out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << addr_expr << ");\n";
@@ -246,23 +215,11 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                         // bctrl.
                         out << "  " << reg(rD) << " = " << it->second.func_addr << "u; /* &" << it->second.func_name
                             << " */\n";
-                    } else if (is_rodata_section(it->second.section)) {
-                        // Read-only, so codegen resolves the whole
-                        // lis+consumer pair to a compile-time literal
-                        // value instead (see e.g. PPC_INS_LFS below) --
-                        // not linked yet, so this "address" isn't real,
-                        // and there's nothing to write it to at runtime
-                        // anyway. rD is deliberately left untouched.
-                        pending_hi[rD] = it->second;
-                        out << "  /* address-of " << it->second.section << "+" << it->second.addend
-                            << " -- resolved at compile time by the paired load/store */\n";
                     } else {
-                        // Mutable global -- give rD the real synthetic
-                        // address (assign_global_addrs), since unlike the
-                        // read-only case there's an actual runtime value
-                        // that needs a stable, real address other
-                        // functions' accesses to the same symbol will
-                        // agree on.
+                        // Real synthetic address (assign_global_addrs) --
+                        // applies uniformly to mutable globals and
+                        // read-only data alike, see
+                        // is_synthetic_addr_lo_reloc above.
                         uint32_t addr = img.global_section_base.at(it->second.section) + (uint32_t)it->second.addend;
                         out << "  " << reg(rD) << " = " << addr << "u; /* &" << it->second.section << "+"
                             << it->second.addend << " */\n";
@@ -281,7 +238,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_ADDI: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
-                if (is_mutable_lo_reloc(img, insn.address)) {
+                if (is_synthetic_addr_lo_reloc(img, insn.address)) {
                     // lis+addi computing a global's address for later
                     // (usually indexed) use -- rA already holds the
                     // complete synthetic address, so the immediate here is
@@ -652,30 +609,28 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_LFS: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                auto rit = img.data_relocs.find(insn.address);
-                auto pit = pending_hi.find(m.base);
-                std::vector<uint8_t> bytes;
-                if (rit != img.data_relocs.end() && rit->second.type == DataReloc::LO && pit != pending_hi.end() &&
-                    read_data_const(img, pit->second, 4, bytes)) {
-                    out << "  " << freg(fD) << " = " << hexfloat((double)be_bytes_to_float(bytes)) << ";\n";
-                } else {
-                    out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << base_expr(m.base) << " + (int32_t)"
-                        << m.disp << ");\n";
-                }
+                std::string addr_expr = is_synthetic_addr_lo_reloc(img, insn.address)
+                                             ? base_expr(m.base)
+                                             : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << addr_expr << ");\n";
                 break;
             }
             case PPC_INS_LFD: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << freg(fD) << " = ppc_load_f64(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
-                    << ");\n";
+                std::string addr_expr = is_synthetic_addr_lo_reloc(img, insn.address)
+                                             ? base_expr(m.base)
+                                             : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << freg(fD) << " = ppc_load_f64(ctx, " << addr_expr << ");\n";
                 break;
             }
             case PPC_INS_STFD: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  ppc_store_f64(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", " << freg(fD)
-                    << ");\n";
+                std::string addr_expr = is_synthetic_addr_lo_reloc(img, insn.address)
+                                             ? base_expr(m.base)
+                                             : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  ppc_store_f64(ctx, " << addr_expr << ", " << freg(fD) << ");\n";
                 break;
             }
             case PPC_INS_FCTIWZ: {
@@ -725,8 +680,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_STFS: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  ppc_store_f32(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", " << freg(fD)
-                    << ");\n";
+                std::string addr_expr = is_synthetic_addr_lo_reloc(img, insn.address)
+                                             ? base_expr(m.base)
+                                             : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  ppc_store_f32(ctx, " << addr_expr << ", " << freg(fD) << ");\n";
                 break;
             }
             case PPC_INS_FCMPU: {

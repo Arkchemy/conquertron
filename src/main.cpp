@@ -98,11 +98,11 @@ int main(int argc, char **argv) {
     out << "void ppc_dispatch(PpcContext *ctx, uint32_t addr);\n";
     out << "\n";
 
-    // Global/static variables (.data/.bss) live at synthetic addresses in
-    // ctx->mem (see ElfImage::global_section_base) -- .data's initial
-    // content has to actually be copied in before any recompiled function
-    // runs, the same job a real ELF loader does. Callers must invoke this
-    // once before calling any ppc_<function>.
+    // Global/static variables and read-only data (.data/.bss/.rodata*) live
+    // at synthetic addresses in ctx->mem (see ElfImage::global_section_base)
+    // -- each section's initial content has to actually be copied in before
+    // any recompiled function runs, the same job a real ELF loader does.
+    // Callers must invoke this once before calling any ppc_<function>.
     out << "void ppc_init_globals(PpcContext *ctx) {\n";
     for (const auto &entry : img.global_section_base) {
         auto bytes_it = img.section_bytes.find(entry.first);

@@ -18,13 +18,15 @@ struct ElfFunction {
     uint32_t size = 0;  // bytes
 };
 
-// A `lis`/load-or-store instruction pair addressing a read-only data
-// constant (float/double literal pools, mainly) hasn't been linked yet, so
-// the address it computes doesn't exist as a real, dereferenceable address
-// in our recompiled world. Since the referenced data is always immutable
-// (it's in a .rodata* section), codegen resolves these to a literal value
-// at compile time instead of simulating address arithmetic -- see
-// codegen.cpp's handling of PPC_INS_LIS/consuming-instruction pairs.
+// A `lis`/load-or-store instruction pair addressing a data symbol -- the
+// object isn't linked yet, so there's no real address to resolve to;
+// codegen instead gives every referenced section (mutable .data/.bss and
+// read-only .rodata* alike) a synthetic address in PpcContext::mem, real
+// enough for indexed/pointer-taking access to work correctly regardless of
+// whether the eventual use is a single scalar load or something more
+// general (e.g. a compiler-generated switch-statement lookup table's
+// address, indexed at runtime) -- see is_synthetic_addr_lo_reloc in
+// codegen.cpp.
 struct DataReloc {
     enum Type { HA, LO } type;
     std::string section;  // e.g. ".rodata.cst4"
