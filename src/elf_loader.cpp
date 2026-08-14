@@ -18,6 +18,9 @@ uint32_t rd_be32(const uint8_t *p) {
 
 constexpr int STT_FUNC = 2;
 constexpr uint32_t SHT_RELA = 4;
+constexpr uint32_t SHT_NOBITS = 8;
+constexpr uint32_t R_PPC_ADDR16_LO = 4;
+constexpr uint32_t R_PPC_ADDR16_HA = 6;
 constexpr uint32_t R_PPC_REL24 = 10;
 
 }  // namespace
@@ -73,11 +76,19 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         const uint8_t *sh = shdr(i);
         uint32_t name_off = rd_be32(sh + 0);
         uint32_t sh_type = rd_be32(sh + 4);
+        uint32_t sh_offset = rd_be32(sh + 16);
+        uint32_t sh_size = rd_be32(sh + 20);
         std::string name = secname(name_off);
         if (name == ".text") text_idx = i;
         if (sh_type == 2 /* SHT_SYMTAB */) symtab_idx = i;
         if (name == ".strtab") strtab_idx = i;
         if (name == ".rela.text" && sh_type == SHT_RELA) rela_text_idx = i;
+
+        // Keep raw bytes of every real (non-bss) section so DataReloc
+        // lookups can read constants directly out of e.g. .rodata.cst4.
+        if (sh_type != 0 && sh_type != SHT_NOBITS && !name.empty()) {
+            out.section_bytes[name] = std::vector<uint8_t>(data.begin() + sh_offset, data.begin() + sh_offset + sh_size);
+        }
     }
 
     if (text_idx < 0) {
@@ -112,6 +123,10 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
 
     uint32_t nsyms = sym_size / sym_entsize;
     std::vector<std::string> all_sym_names(nsyms);
+    // For STT_SECTION symbols (what data relocations normally target), the
+    // symbol's own name is empty -- the name that matters is the section
+    // it points at, looked up via st_shndx.
+    std::vector<std::string> sym_section_names(nsyms);
     for (uint32_t i = 0; i < nsyms; i++) {
         const uint8_t *sym = &data[sym_off + (size_t)i * sym_entsize];
         uint32_t st_name = rd_be32(sym + 0);
@@ -122,6 +137,9 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
 
         const char *name = reinterpret_cast<const char *>(&data[str_off + st_name]);
         all_sym_names[i] = name;
+        if (st_shndx < e_shnum) {
+            sym_section_names[i] = secname(rd_be32(shdr(st_shndx) + 0));
+        }
 
         int type = st_info & 0xf;
         if (type != STT_FUNC) continue;
@@ -151,13 +169,27 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
             const uint8_t *r = &data[rela_off + (size_t)i * rela_entsize];
             uint32_t r_offset = rd_be32(r + 0);
             uint32_t r_info = rd_be32(r + 4);
+            int32_t r_addend = (int32_t)rd_be32(r + 8);
             uint32_t r_sym = r_info >> 8;
             uint32_t r_type = r_info & 0xff;
 
-            if (r_type != R_PPC_REL24) continue;  // only `bl`-style call relocations
             if (r_sym >= all_sym_names.size()) continue;
 
-            out.call_relocs[r_offset] = all_sym_names[r_sym];
+            if (r_type == R_PPC_REL24) {
+                out.call_relocs[r_offset] = all_sym_names[r_sym];
+            } else if (r_type == R_PPC_ADDR16_HA || r_type == R_PPC_ADDR16_LO) {
+                // Unlike REL24 (which points at the instruction's own start
+                // address), ADDR16_HA/LO point at byte offset+2 within the
+                // instruction word -- the low halfword, in PPC's
+                // big-endian encoding. Align down to recover the
+                // instruction's address so this can be looked up the same
+                // way as everything else keyed by insn.address.
+                DataReloc dr;
+                dr.type = (r_type == R_PPC_ADDR16_HA) ? DataReloc::HA : DataReloc::LO;
+                dr.section = sym_section_names[r_sym];
+                dr.addend = r_addend;
+                out.data_relocs[r_offset & ~3u] = dr;
+            }
         }
     }
 

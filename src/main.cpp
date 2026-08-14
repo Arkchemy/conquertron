@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        auto unhandled = recomp::generate_function_c(fn, insns, img.call_relocs, addr_to_name, body);
+        auto unhandled = recomp::generate_function_c(img, fn, insns, addr_to_name, body);
         unhandled_total += (int)unhandled.size();
         std::cerr << "recompiled " << fn.name << " (" << insns.size() << " instructions, " << unhandled.size()
                    << " unhandled)\n";
