@@ -40,6 +40,17 @@
 typedef struct PpcContext {
     uint32_t r[32];
     double f[32];
+    /* ps1: the second lane of each FPR when used in PowerPC 750CL
+     * ("Gekko"/Broadway/Espresso) paired-single mode -- a real vendor SIMD
+     * extension, not modeled by generic PowerPC. Real hardware packs ps0
+     * and ps1 as two 32-bit floats sharing one 64-bit FPR; ps0 reuses the
+     * existing f[] slot (same convention as every other single-precision
+     * value in this runtime -- see the f[] comment below), ps1 has no
+     * scalar-FPR equivalent so it needs its own array. Only ever written
+     * by paired-single loads/merges (see codegen.cpp's PSQ_L/PS_MERGE*
+     * handling) -- plain scalar FP instructions never touch it, matching
+     * real hardware where non-paired ops don't disturb ps1. */
+    float ps1[32];
     uint32_t lr;
     uint32_t ctr; /* count register -- used here for mtctr/bctrl indirect calls, not bdnz/bdz loop counting yet */
     uint8_t cr0_lt;

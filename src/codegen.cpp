@@ -969,6 +969,81 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << ");\n";
                 break;
             }
+            case PPC_INS_BRAMBLE_PSQ_L:
+            case PPC_INS_BRAMBLE_PSQ_LU: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                uint32_t w = (uint32_t)ppc.operands[2].imm;
+                uint32_t gqr_i = (uint32_t)ppc.operands[3].imm;
+                std::string addr_expr = is_synthetic_addr_lo_reloc(img, insn.address)
+                                             ? base_expr(m.base)
+                                             : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                if (gqr_i != 0) {
+                    // GQR-selected quantized (non-float) formats aren't
+                    // modeled -- no GQR register state tracked by this
+                    // runtime. Left as an honest gap rather than a silent
+                    // wrong decode; not seen in practice yet.
+                    out << "#error \"psq_l/psq_lu with non-zero quantization type (I=" << gqr_i << ") at 0x"
+                        << std::hex << insn.address << std::dec << " in function " << func.name << "\"\n";
+                    unhandled.push_back(insn.mnemonic);
+                    break;
+                }
+                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << addr_expr << ");\n";
+                if (w == 0) {
+                    out << "  ctx->ps1[" << fD << "] = ppc_load_f32(ctx, " << addr_expr << " + 4);\n";
+                } else {
+                    // W=1 (single-element mode): ps1 is defined to be set
+                    // to 1.0, not left stale -- see the ISA note.
+                    out << "  ctx->ps1[" << fD << "] = 1.0f;\n";
+                }
+                if (insn.id == PPC_INS_BRAMBLE_PSQ_LU) {
+                    out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                }
+                break;
+            }
+            case PPC_INS_BRAMBLE_PSQ_ST:
+            case PPC_INS_BRAMBLE_PSQ_STU: {
+                int fS = freg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                uint32_t w = (uint32_t)ppc.operands[2].imm;
+                uint32_t gqr_i = (uint32_t)ppc.operands[3].imm;
+                std::string addr_expr = is_synthetic_addr_lo_reloc(img, insn.address)
+                                             ? base_expr(m.base)
+                                             : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                if (gqr_i != 0) {
+                    out << "#error \"psq_st/psq_stu with non-zero quantization type (I=" << gqr_i << ") at 0x"
+                        << std::hex << insn.address << std::dec << " in function " << func.name << "\"\n";
+                    unhandled.push_back(insn.mnemonic);
+                    break;
+                }
+                out << "  ppc_store_f32(ctx, " << addr_expr << ", " << freg(fS) << ");\n";
+                if (w == 0) {
+                    out << "  ppc_store_f32(ctx, " << addr_expr << " + 4, (double)ctx->ps1[" << fS << "]);\n";
+                }
+                if (insn.id == PPC_INS_BRAMBLE_PSQ_STU) {
+                    out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                }
+                break;
+            }
+            case PPC_INS_BRAMBLE_PS_MERGE00:
+            case PPC_INS_BRAMBLE_PS_MERGE01:
+            case PPC_INS_BRAMBLE_PS_MERGE10:
+            case PPC_INS_BRAMBLE_PS_MERGE11: {
+                // ps_mergeXY: frD.ps0 = frA's laneX, frD.ps1 = frB's laneY
+                // (X/Y in {0,1} per the mnemonic's trailing digits). Reads
+                // both source lanes into temporaries before writing frD's
+                // two slots, since frD may alias frA and/or frB.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fB = freg_idx(ppc.operands[2].reg);
+                bool a_lane1 = insn.id == PPC_INS_BRAMBLE_PS_MERGE10 || insn.id == PPC_INS_BRAMBLE_PS_MERGE11;
+                bool b_lane1 = insn.id == PPC_INS_BRAMBLE_PS_MERGE01 || insn.id == PPC_INS_BRAMBLE_PS_MERGE11;
+                std::string ps0_src = a_lane1 ? ("(double)ctx->ps1[" + std::to_string(fA) + "]") : freg(fA);
+                std::string ps1_src = b_lane1 ? ("ctx->ps1[" + std::to_string(fB) + "]") : ("(float)" + freg(fB));
+                out << "  { double _ps0 = " << ps0_src << "; float _ps1 = " << ps1_src << "; " << freg(fD)
+                    << " = _ps0; ctx->ps1[" << fD << "] = _ps1; }\n";
+                break;
+            }
             default: {
                 out << "#error \"unhandled PPC instruction '" << insn.mnemonic << "' at 0x" << std::hex
                     << insn.address << std::dec << " in function " << func.name << "\"\n";
