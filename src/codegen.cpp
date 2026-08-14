@@ -261,6 +261,33 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 out << "  " << reg(rD) << " = " << reg(rA) << " " << op << " " << reg(rB) << ";\n";
                 break;
             }
+            case PPC_INS_ANDC: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = " << reg(rA) << " & ~" << reg(rB) << ";\n";
+                break;
+            }
+            case PPC_INS_EQV: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ~(" << reg(rA) << " ^ " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_CNTLZW: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = ppc_cntlzw(" << reg(rA) << ");\n";
+                break;
+            }
+            case PPC_INS_SUBFIC: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = ppc_subfic(ctx, " << reg(rA) << ", " << simm(ppc.operands[2])
+                    << ");\n";
+                break;
+            }
             case PPC_INS_NOR: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);

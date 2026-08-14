@@ -132,6 +132,26 @@ static inline uint32_t ppc_adde(PpcContext *ctx, uint32_t a, uint32_t b) {
     return (uint32_t)full;
 }
 
+/* subfic rD, rA, SIMM: rD = SIMM - rA, computed (and XER[CA] set) the same
+ * two's-complement way real hardware does it: ~rA + SIMM + 1. */
+static inline uint32_t ppc_subfic(PpcContext *ctx, uint32_t a, int32_t simm) {
+    uint64_t full = (uint64_t)(~a) + (uint64_t)(uint32_t)simm + 1u;
+    ctx->xer_ca = (uint8_t)((full >> 32) & 1);
+    return (uint32_t)full;
+}
+
+/* Count of leading zero bits (0-32). Common for float/fixed-point
+ * normalization and bit-scanning idioms. */
+static inline uint32_t ppc_cntlzw(uint32_t v) {
+    if (v == 0) return 32;
+    uint32_t n = 0;
+    while ((v & 0x80000000u) == 0) {
+        v <<= 1;
+        n++;
+    }
+    return n;
+}
+
 static inline float ppc_load_f32(const PpcContext *ctx, uint32_t addr) {
     uint32_t bits = ppc_load_u32(ctx, addr);
     float v;
