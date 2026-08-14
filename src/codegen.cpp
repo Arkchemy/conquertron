@@ -363,6 +363,20 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << ";\n";
                 break;
             }
+            case PPC_INS_MULHW: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_mulhw((int32_t)" << reg(rA) << ", (int32_t)" << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_MULHWU: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_mulhwu(" << reg(rA) << ", " << reg(rB) << ");\n";
+                break;
+            }
             case PPC_INS_DIVW: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);

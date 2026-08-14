@@ -66,6 +66,17 @@ static inline void ppc_store_u16(PpcContext *ctx, uint32_t addr, uint16_t val) {
     memcpy(&ctx->mem[addr & (sizeof(ctx->mem) - 1)], &val, sizeof(val));
 }
 
+/* High 32 bits of a 64-bit product -- what a compiler emits for
+ * division-by-constant (the well-known multiply-by-reciprocal trick), so
+ * these show up constantly in real optimized code despite looking obscure. */
+static inline uint32_t ppc_mulhw(int32_t a, int32_t b) {
+    return (uint32_t)(((int64_t)a * (int64_t)b) >> 32);
+}
+
+static inline uint32_t ppc_mulhwu(uint32_t a, uint32_t b) {
+    return (uint32_t)(((uint64_t)a * (uint64_t)b) >> 32);
+}
+
 static inline uint32_t ppc_rotl32(uint32_t v, unsigned int sh) {
     sh &= 31;
     return sh == 0 ? v : (v << sh) | (v >> (32 - sh));
