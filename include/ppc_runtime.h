@@ -57,6 +57,14 @@ typedef struct PpcContext {
     uint8_t cr0_gt;
     uint8_t cr0_eq;
     uint8_t xer_ca; /* XER carry bit, set by addc/adde (used for multi-word/64-bit arithmetic) */
+    /* mftb (move-from-timebase): real code reads this as a free-running
+     * hardware cycle counter (profiling, or occasionally a random seed).
+     * No real timing model exists here, so this is just a counter that
+     * advances by 1 on every read -- monotonic and always-changing (so
+     * "poll until the timebase moves" loops still terminate) but not a
+     * real elapsed-time value. Anything relying on actual wall-clock
+     * timing from this would be a known, narrow gap. */
+    uint32_t tb;
     uint8_t mem[65536];
 } PpcContext;
 
@@ -173,6 +181,22 @@ static inline uint32_t ppc_subfic(PpcContext *ctx, uint32_t a, int32_t simm) {
     return (uint32_t)full;
 }
 
+/* subfc rD, rA, rB: rD = rB - rA (register form of subfic), same
+ * ~rA + rB + 1 formulation, capturing XER[CA]. */
+static inline uint32_t ppc_subfc(PpcContext *ctx, uint32_t a, uint32_t b) {
+    uint64_t full = (uint64_t)(~a) + (uint64_t)b + 1u;
+    ctx->xer_ca = (uint8_t)((full >> 32) & 1);
+    return (uint32_t)full;
+}
+
+/* subfe rD, rA, rB: rD = ~rA + rB + XER[CA] -- the subtract-with-borrow
+ * counterpart to adde, for wider subtraction chains built from subfc. */
+static inline uint32_t ppc_subfe(PpcContext *ctx, uint32_t a, uint32_t b) {
+    uint64_t full = (uint64_t)(~a) + (uint64_t)b + (uint64_t)ctx->xer_ca;
+    ctx->xer_ca = (uint8_t)((full >> 32) & 1);
+    return (uint32_t)full;
+}
+
 /* addic rD, rA, SIMM: like addc, but the second operand is an immediate. */
 static inline uint32_t ppc_addic(PpcContext *ctx, uint32_t a, int32_t simm) {
     uint64_t full = (uint64_t)a + (uint64_t)(uint32_t)simm;
@@ -275,6 +299,14 @@ static inline void ppc_fcmpu(PpcContext *ctx, double a, double b) {
     ctx->cr0_gt = a > b;
     ctx->cr0_eq = a == b;
 }
+
+/* fabs fD, fB: absolute value, done branchlessly here to avoid pulling in
+ * <math.h> for something this simple. */
+static inline double ppc_fabs(double val) { return val < 0.0 ? -val : val; }
+
+/* mftb rD: see the PpcContext::tb field comment for what this does and
+ * doesn't model. */
+static inline uint32_t ppc_mftb(PpcContext *ctx) { return ++ctx->tb; }
 
 /* Round-to-single-precision, matching PPC's single-precision FP ops
  * (fadds/fsubs/fmuls/fdivs/fmadds/...), which compute as double but store

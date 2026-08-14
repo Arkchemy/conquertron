@@ -969,6 +969,176 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << ");\n";
                 break;
             }
+            case PPC_INS_LMW: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                for (int i = rD; i <= 31; i++) {
+                    out << "  " << reg(i) << " = ppc_load_u32(ctx, " << base_expr(m.base) << " + (int32_t)"
+                        << (m.disp + 4 * (i - rD)) << ");\n";
+                }
+                break;
+            }
+            case PPC_INS_STMW: {
+                int rS = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                for (int i = rS; i <= 31; i++) {
+                    out << "  ppc_store_u32(ctx, " << base_expr(m.base) << " + (int32_t)" << (m.disp + 4 * (i - rS))
+                        << ", " << reg(i) << ");\n";
+                }
+                break;
+            }
+            case PPC_INS_DCBST:
+            case PPC_INS_ISYNC: {
+                // Cache-management/memory-ordering barriers -- meaningless
+                // in this purely sequential single-threaded interpreter
+                // model (no cache, no reordering to synchronize against),
+                // so both are genuine no-ops here.
+                break;
+            }
+            case PPC_INS_LWARX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_STWCX: {
+                // stwcx. (always dotted -- Rc=1 is baked into the real
+                // encoding). Reservation-based atomicity isn't modeled at
+                // all: no multi-core/multi-threaded execution exists in
+                // this runtime, so the store always "succeeds" (CR0 EQ=1).
+                // Correct for the single-threaded case this runtime
+                // actually executes; not real multi-core contention.
+                int rS = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  ppc_store_u32(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << reg(rS) << ");\n";
+                out << "  ctx->cr0_lt = 0; ctx->cr0_gt = 0; ctx->cr0_eq = 1;\n";
+                break;
+            }
+            case PPC_INS_SLW: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = (" << reg(rB) << " & 0x20u) ? 0u : (" << reg(rA) << " << (" << reg(rB)
+                    << " & 0x1Fu));\n";
+                break;
+            }
+            case PPC_INS_SRW: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = (" << reg(rB) << " & 0x20u) ? 0u : (" << reg(rA) << " >> (" << reg(rB)
+                    << " & 0x1Fu));\n";
+                break;
+            }
+            case PPC_INS_SUBFC: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_subfc(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_SUBFE: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = ppc_subfe(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_XORI: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = " << reg(rA) << " ^ " << uimm(ppc.operands[2]) << "u;\n";
+                break;
+            }
+            case PPC_INS_ORIS: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                out << "  " << reg(rD) << " = " << reg(rA) << " | (" << uimm(ppc.operands[2]) << "u << 16);\n";
+                break;
+            }
+            case PPC_INS_FABS: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fB = freg_idx(ppc.operands[1].reg);
+                out << "  " << freg(fD) << " = ppc_fabs(" << freg(fB) << ");\n";
+                break;
+            }
+            case PPC_INS_LFSX: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << base_expr(rA) << " + " << reg(rB)
+                    << ");\n";
+                break;
+            }
+            case PPC_INS_STFSX: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  ppc_store_f32(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << freg(fD) << ");\n";
+                break;
+            }
+            case PPC_INS_LFSU: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << base_expr(m.base) << " + (int32_t)"
+                    << m.disp << ");\n";
+                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                break;
+            }
+            case PPC_INS_STFSU: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  ppc_store_f32(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", " << freg(fD)
+                    << ");\n";
+                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                break;
+            }
+            case PPC_INS_LFSUX: {
+                int fD = freg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rA) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << reg(rA) << ");\n";
+                break;
+            }
+            case PPC_INS_LHZU: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                MemOp m = mem_operand(ppc.operands[1]);
+                out << "  " << reg(rD) << " = ppc_load_u16(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
+                    << ");\n";
+                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                break;
+            }
+            case PPC_INS_LHAX: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                int rA = reg_idx(ppc.operands[1].reg);
+                int rB = reg_idx(ppc.operands[2].reg);
+                out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)ppc_load_u16(ctx, " << base_expr(rA)
+                    << " + " << reg(rB) << ");\n";
+                break;
+            }
+            case PPC_INS_BCTR: {
+                // Unconditional jump through CTR. Compilers use this for
+                // both tail calls (jump-with-no-return) and computed
+                // intra-function jump tables (dense switch statements).
+                // Only the tail-call case is modeled: ppc_dispatch
+                // resolves the target as if it were a whole other
+                // recompiled function, then this function returns. An
+                // intra-function jump-table use (branching to a label
+                // within *this* function rather than another function's
+                // entry point) isn't representable this way -- a known
+                // gap, not yet seen needing it.
+                out << "  ppc_dispatch(ctx, ctx->ctr);\n";
+                out << "  return;\n";
+                break;
+            }
+            case PPC_INS_MFTB: {
+                int rD = reg_idx(ppc.operands[0].reg);
+                out << "  " << reg(rD) << " = ppc_mftb(ctx);\n";
+                break;
+            }
             case PPC_INS_BRAMBLE_PSQ_L:
             case PPC_INS_BRAMBLE_PSQ_LU: {
                 int fD = freg_idx(ppc.operands[0].reg);
