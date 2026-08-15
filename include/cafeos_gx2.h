@@ -419,6 +419,100 @@ static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) {
     dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &write_state);
 }
 
+static inline DkCompareOp bramble_gx2_compare_func_to_dk(uint32_t gx2_func) {
+    /* GX2CompareFunction -> DkCompareOp. Real GX2 order (confirmed
+     * against wut's gx2/enum.h: NEVER=0, LESS=1, EQUAL=2, LEQUAL=3,
+     * GREATER=4, NOT_EQUAL=5, GEQUAL=6, ALWAYS=7) is a uniform +1
+     * offset from deko3d's real order (confirmed against deko3d.h:
+     * Never=1, Less=2, Equal=3, Lequal=4, Greater=5, NotEqual=6,
+     * Gequal=7, Always=8) -- both APIs enumerate the same 8 real
+     * comparison functions in the exact same order. */
+    if (gx2_func >= 8) return DkCompareOp_Always; /* defensive fallback for an out-of-range/unrecognized value */
+    return (DkCompareOp)(gx2_func + 1);
+}
+
+static inline DkStencilOp bramble_gx2_stencil_func_to_dk(uint32_t gx2_func) {
+    /* GX2StencilFunction -> DkStencilOp. Real GX2 order (confirmed
+     * against wut's gx2/enum.h: KEEP=0, ZERO=1, REPLACE=2,
+     * INCR_CLAMP=3, DECR_CLAMP=4, INV=5, INCR_WRAP=6, DECR_WRAP=7) is a
+     * uniform +1 offset from deko3d's real order (confirmed against
+     * deko3d.h: Keep=1, Zero=2, Replace=3, Incr=4, Decr=5, Invert=6,
+     * IncrWrap=7, DecrWrap=8) -- both APIs enumerate the same 8 real
+     * stencil operations in the exact same order. */
+    if (gx2_func >= 8) return DkStencilOp_Keep; /* defensive fallback for an out-of-range/unrecognized value */
+    return (DkStencilOp)(gx2_func + 1);
+}
+
+static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) {
+    /* void GX2SetDepthStencilControl(BOOL depthTest, BOOL depthWrite,
+     * GX2CompareFunction depthCompare, BOOL stencilTest,
+     * BOOL backfaceStencil, GX2CompareFunction frontStencilFunc,
+     * GX2StencilFunction frontStencilZPass,
+     * GX2StencilFunction frontStencilZFail,
+     * GX2StencilFunction frontStencilFail,
+     * GX2CompareFunction backStencilFunc,
+     * GX2StencilFunction backStencilZPass,
+     * GX2StencilFunction backStencilZFail,
+     * GX2StencilFunction backStencilFail) -- real signature confirmed
+     * against wut's gx2/registers.h, 13 real params. Only the first 8
+     * fit in r3-r10 (real PPC32 SVR4 ABI); the remaining 5
+     * (frontStencilFail, backStencilFunc, backStencilZPass,
+     * backStencilZFail, backStencilFail) are real stack-passed args at
+     * r1+8/r1+12/r1+16/r1+20/r1+24 -- the exact same real convention
+     * already confirmed and used by
+     * `ppc_import_coreinit_FSReadFileWithPosAsync`
+     * (cafeos_coreinit_fs.h) for its own 9th/10th stack args, verified
+     * against this project's own manyargs.c test, not a new
+     * assumption.
+     *
+     * backfaceStencil (real GX2 "does back-facing geometry use its own
+     * separate stencil state") has no matching single on/off field in
+     * deko3d's DkDepthStencilState (which always carries independent
+     * front/back fields) -- when false, this mirrors the front stencil
+     * settings into the back fields, a documented, unconfirmed
+     * simplification (consistent with how this file already handles
+     * GX2SetBlendControl's useAlphaBlend). */
+    uint32_t depth_test = ctx->r[3];
+    uint32_t depth_write = ctx->r[4];
+    uint32_t depth_compare = ctx->r[5];
+    uint32_t stencil_test = ctx->r[6];
+    uint32_t backface_stencil = ctx->r[7];
+    uint32_t front_stencil_func = ctx->r[8];
+    uint32_t front_stencil_zpass = ctx->r[9];
+    uint32_t front_stencil_zfail = ctx->r[10];
+    uint32_t front_stencil_fail = ppc_load_u32(ctx, ctx->r[1] + 8);
+    uint32_t back_stencil_func = ppc_load_u32(ctx, ctx->r[1] + 12);
+    uint32_t back_stencil_zpass = ppc_load_u32(ctx, ctx->r[1] + 16);
+    uint32_t back_stencil_zfail = ppc_load_u32(ctx, ctx->r[1] + 20);
+    uint32_t back_stencil_fail = ppc_load_u32(ctx, ctx->r[1] + 24);
+    DkDepthStencilState state;
+
+    dkDepthStencilStateDefaults(&state);
+    state.depthTestEnable = depth_test ? 1 : 0;
+    state.depthWriteEnable = depth_write ? 1 : 0;
+    state.depthCompareOp = bramble_gx2_compare_func_to_dk(depth_compare);
+    state.stencilTestEnable = stencil_test ? 1 : 0;
+
+    state.stencilFrontCompareOp = bramble_gx2_compare_func_to_dk(front_stencil_func);
+    state.stencilFrontPassOp = bramble_gx2_stencil_func_to_dk(front_stencil_zpass);
+    state.stencilFrontDepthFailOp = bramble_gx2_stencil_func_to_dk(front_stencil_zfail);
+    state.stencilFrontFailOp = bramble_gx2_stencil_func_to_dk(front_stencil_fail);
+
+    if (backface_stencil) {
+        state.stencilBackCompareOp = bramble_gx2_compare_func_to_dk(back_stencil_func);
+        state.stencilBackPassOp = bramble_gx2_stencil_func_to_dk(back_stencil_zpass);
+        state.stencilBackDepthFailOp = bramble_gx2_stencil_func_to_dk(back_stencil_zfail);
+        state.stencilBackFailOp = bramble_gx2_stencil_func_to_dk(back_stencil_fail);
+    } else {
+        state.stencilBackCompareOp = state.stencilFrontCompareOp;
+        state.stencilBackPassOp = state.stencilFrontPassOp;
+        state.stencilBackDepthFailOp = state.stencilFrontDepthFailOp;
+        state.stencilBackFailOp = state.stencilFrontFailOp;
+    }
+
+    dkCmdBufBindDepthStencilState(g_bramble_gx2.cmdbuf, &state);
+}
+
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
     /* void GX2SetPrimitiveRestartIndex(uint32_t index) -- real GX2
      * signature has no separate enable flag; deko3d's
@@ -510,6 +604,7 @@ static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) { (void)c
 static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { (void)ctx; }
