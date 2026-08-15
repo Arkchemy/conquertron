@@ -67,38 +67,49 @@ typedef struct PpcContext {
      * real elapsed-time value. Anything relying on actual wall-clock
      * timing from this would be a known, narrow gap. */
     uint32_t tb;
-    /* Was 65536 (64KB) -- sized only for tiny test programs, and by this
-     * point genuinely too tight: cafeos_coreinit_mem.h's MEM1/MEM2 base
-     * heaps, cafeos_snd_core.h's AXVoice pool, and the small fixed slots
-     * for errno/OSSystemInfo already reserve a meaningful fraction of
-     * it, on top of whatever a real object's own .data/.bss/.rodata*
-     * needs (assign_global_addrs) and the stack (which starts at
-     * `sizeof(mem) - 256` and grows down). Grown 64x to 4MB -- still an
-     * arbitrary, generous placeholder, *not* a claim this now matches
-     * real Wii U game scale (unmeasured; the real binary's actual
-     * .data/.bss size hasn't been checked), so still a known, documented
-     * limitation, just a substantially less cramped one. Every existing
-     * fixed reservation (0x8000/0xB000/0xE000/0xE008/0xE100) stays
-     * valid unchanged -- they're small absolute offsets near the bottom
-     * of the address space, and the stack's `sizeof(mem)`-relative init
-     * point automatically gains all the new headroom for free.
+    /* `shared`, not an inline array: was a 65536-byte (64KB) inline
+     * `mem[]` sized only for tiny test programs, then grown 64x to 4MB
+     * inline -- still fine for one `PpcContext`, but real threading
+     * (OSCreateThread, still unimplemented at the time of this change)
+     * needs multiple *concurrent* PpcContexts (one per real host thread,
+     * each with its own registers) that all see the *same* underlying
+     * guest memory, the same way real Wii U threads share one address
+     * space. An inline array can't be shared between separate struct
+     * instances; a pointer to a separately-allocated `PpcSharedMemory`
+     * can -- every thread's `PpcContext` gets its own fresh registers
+     * but points `shared` at the same block. A single-threaded program
+     * (everything so far) just points its one `PpcContext` at its own
+     * privately-owned `PpcSharedMemory` -- behaviorally identical to the
+     * old inline array, see `PPC_MEM_SIZE` below for the size (unchanged
+     * at 4MB, still an arbitrary, generous, documented placeholder, not
+     * a claim this matches real Wii U game scale).
      *
-     * PpcContext is large enough that every existing consumer already
-     * uses `static` storage instead of a stack-local, not just now
-     * (tools/gen_harness*.c and switch/native/source/main.c both
-     * already did this before this change) -- new standalone shim tests
-     * should follow the same convention.
+     * Every existing `PpcContext` consumer (tools/gen_harness*.c,
+     * switch/native/source/main.c) already used `static` storage
+     * instead of a stack-local -- updated to also allocate and bind a
+     * `static PpcSharedMemory` alongside, the same mechanical pattern
+     * every one of those files now follows. New standalone shim tests
+     * should do the same (`ctx.shared = &some_static_PpcSharedMemory;`
+     * before first use) -- `shared` is NULL by default (zeroed BSS/
+     * stack), so forgetting this is a fast, loud NULL-deref crash, not
+     * a silent wrong-answer bug.
      */
-    uint8_t mem[4 * 1024 * 1024];
+    struct PpcSharedMemory *shared;
 } PpcContext;
 
+#define PPC_MEM_SIZE (4 * 1024 * 1024)
+
+typedef struct PpcSharedMemory {
+    uint8_t mem[PPC_MEM_SIZE];
+} PpcSharedMemory;
+
 static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {
-    const uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
-    uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     p[0] = (uint8_t)(val >> 24);
     p[1] = (uint8_t)(val >> 16);
     p[2] = (uint8_t)(val >> 8);
@@ -106,20 +117,20 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
 }
 
 static inline uint8_t ppc_load_u8(const PpcContext *ctx, uint32_t addr) {
-    return ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    return ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
 }
 
 static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
-    ctx->mem[addr & (sizeof(ctx->mem) - 1)] = val;
+    ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)] = val;
 }
 
 static inline uint16_t ppc_load_u16(const PpcContext *ctx, uint32_t addr) {
-    const uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return (uint16_t)(((uint32_t)p[0] << 8) | (uint32_t)p[1]);
 }
 
 static inline void ppc_store_u16(PpcContext *ctx, uint32_t addr, uint16_t val) {
-    uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     p[0] = (uint8_t)(val >> 8);
     p[1] = (uint8_t)val;
 }
@@ -128,12 +139,12 @@ static inline void ppc_store_u16(PpcContext *ctx, uint32_t addr, uint16_t val) {
  * big-endian bytes as ppc_load_u32/u16, then swaps them) -- code that
  * needs little-endian data from a big-endian machine, or vice versa. */
 static inline uint32_t ppc_load_u32_brx(const PpcContext *ctx, uint32_t addr) {
-    const uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) | ((uint32_t)p[1] << 8) | (uint32_t)p[0];
 }
 
 static inline uint16_t ppc_load_u16_brx(const PpcContext *ctx, uint32_t addr) {
-    const uint8_t *p = &ctx->mem[addr & (sizeof(ctx->mem) - 1)];
+    const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return (uint16_t)(((uint32_t)p[1] << 8) | (uint32_t)p[0]);
 }
 
