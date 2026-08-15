@@ -1,6 +1,22 @@
 #ifndef BRAMBLE_PPC_RUNTIME_H
 #define BRAMBLE_PPC_RUNTIME_H
 
+/* Some cafeos_*.h shims (e.g. cafeos_coreinit_sync.h's real pthread-
+ * backed OSMutex/OSEvent/OSSemaphore) need POSIX APIs (clock_gettime,
+ * nanosleep, gmtime_r, pthread_mutexattr_settype/PTHREAD_MUTEX_RECURSIVE,
+ * ...) beyond ISO C. glibc feature-test macros only take effect if
+ * defined before the *first* system header of the translation unit is
+ * ever processed (glibc's <features.h> computes and locks its __USE_*
+ * set once, then no-ops on repeat inclusion) -- since this header is
+ * always the first thing every cafeos_*.h includes, and in turn is
+ * always the first #include in any translation unit that pulls in more
+ * than one cafeos_*.h file, defining it here (rather than redundantly,
+ * and too late to matter, in cafeos_coreinit_sync.h alone) is what
+ * actually makes it reliably apply regardless of header include order. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>

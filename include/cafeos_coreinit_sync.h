@@ -1,54 +1,290 @@
 #ifndef BRAMBLE_CAFEOS_COREINIT_SYNC_H
 #define BRAMBLE_CAFEOS_COREINIT_SYNC_H
 
-/* clock_gettime/nanosleep/gmtime_r are POSIX, not ISO C -- needed under
- * strict -std=c11 (glibc exposes them by default under looser standards
- * modes, which is why this went unnoticed until compiled strictly). */
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200809L
-#endif
+/* ppc_runtime.h must come first, before <pthread.h>/<time.h> below --
+ * it's what defines _POSIX_C_SOURCE (needed for clock_gettime/nanosleep/
+ * gmtime_r/pthread_mutexattr_settype+PTHREAD_MUTEX_RECURSIVE), and
+ * glibc's feature-test macros only take effect if defined before the
+ * *first* system header of the translation unit -- see ppc_runtime.h's
+ * own comment on this. */
+#include "ppc_runtime.h"
 
+#include <pthread.h>
 #include <time.h>
 
-#include "ppc_runtime.h"
+/* Real Wii U hardware clock constants -- sourced from Cemu's real
+ * emulation core (src/Cafe/HW/Espresso/PPCState.h), not guessed. Used
+ * by OSWaitEventWithTimeout below (real tick->wall-clock conversion for
+ * its timeout) and by OSGetSystemInfo/OSSleepTicks/OSTicksToCalendarTime
+ * further down this file -- moved up here since it's now needed before
+ * those. See those functions' own comments for the full story. */
+enum {
+    BRAMBLE_ESPRESSO_CORE_CLOCK = 1243125000,
+    BRAMBLE_ESPRESSO_BUS_CLOCK = 248625000,
+    BRAMBLE_ESPRESSO_TIMER_CLOCK = BRAMBLE_ESPRESSO_BUS_CLOCK / 4,
+};
 
 /*
  * Phase 1d CafeOS runtime shim -- coreinit synchronization primitives
  * (OSMutex/OSEvent) and timing.
  *
- * OSMutex/OSEvent are opaque structs the *game* allocates (in its own
- * .bss/.data or on its own stack), the same way FSClient/FSCmdBlock work
- * in cafeos_coreinit_fs.h -- this shim never needs to allocate or write
- * through them, so there's no guest-memory-address problem here the way
- * there is for __gh_errno_ptr.
+ * Previously every one of these was a genuine no-op, correct only
+ * because this runtime had exactly one PpcContext executing
+ * sequentially with no real concurrent execution at all. Real threading
+ * (OSCreateThread, cafeos_coreinit_thread.h) now exists, which makes
+ * that reasoning actively *wrong*: two real host threads really can
+ * contend for the same OSMutex or wait on the same OSEvent now, so a
+ * no-op here would be a real, silent data race -- exactly the failure
+ * mode this project's whole verification discipline exists to prevent.
+ * Rewritten to be genuinely real, backed by real pthread primitives.
  *
- * Every OSInitMutex/OSLockMutex/OSUnlockMutex/OSInitEvent/OSSignalEvent/
- * OSResetEvent/OSWaitEvent below is a genuine no-op, not a shortcut: this
- * runtime has exactly one PpcContext executing sequentially with no real
- * concurrent execution at all (OSCreateThread isn't implemented -- there
- * is no second thread that could ever contend for a lock or need to be
- * woken by an event). A no-op mutex is trivially correct with nothing to
- * exclude; a no-op "wait" that returns immediately is *more* correct
- * than actually blocking would be, since actually blocking would
- * deadlock forever waiting for a signal from a thread that will never
- * run. OSTryLockMutex returns true (lock always "acquired") for the same
- * reason.
+ * OSMutex/OSEvent/OSSemaphore are opaque, caller-allocated structs in
+ * the real API (real game code never reads/writes their fields itself,
+ * only passes the pointer to these functions) -- this shim still never
+ * writes through them, but now needs *some* real, persistent state to
+ * back a real lock/wait, so it keeps a small host-side (not
+ * guest-memory) table per primitive type, keyed by the real, stable
+ * guest address the game already allocated -- the same "host-side state
+ * keyed by a real guest address" pattern already used throughout this
+ * project (the FS handle table, the MEM* heap table, the AXVoice pool).
  *
- * Real thread creation (OSCreateThread and friends) is a separate, much
- * larger problem -- genuine concurrent (or at least interleaved)
- * execution of more than one recompiled function -- not attempted here.
+ * Real signatures/semantics confirmed against devkitPro/wut's
+ * coreinit/mutex.h, event.h, semaphore.h, cross-checked against Cemu's
+ * real HLE implementation (src/Cafe/OS/libs/coreinit/
+ * coreinit_Synchronization.cpp) for exact return-value conventions wut's
+ * headers don't spell out (e.g. OSSignalSemaphore/OSWaitSemaphore both
+ * return the *previous* count, confirmed directly from Cemu's source,
+ * not guessed).
+ *
+ * OSMutex is real, confirmed *recursive* (wut: "supports recursive
+ * locking", same as std::recursive_mutex) -- backed by a real
+ * `pthread_mutex_t` created with `PTHREAD_MUTEX_RECURSIVE`, which
+ * matches this exactly with no extra bookkeeping needed.
+ *
+ * OSEvent's manual/auto-reset semantics (confirmed against wut's docs
+ * and Cemu's real branching logic) are implemented with the standard,
+ * race-free mutex+condvar+flag+epoch pattern: `signaled` is a sticky
+ * flag for "signaled with nobody currently waiting" (persists for the
+ * next waiter), `epoch` is bumped on every broadcast-style wake so
+ * every *currently* blocked waiter reliably wakes exactly once without
+ * a shared single-use flag racing between them (needed because real
+ * hardware's explicit per-thread wake queue doesn't have a direct
+ * analog in POSIX condvars, which always require a recheck loop).
+ * `waiting_count` tracks whether anyone is currently blocked, to
+ * replicate the real "empty queue -> stays signaled" vs. "non-empty
+ * queue -> wakes waiters, doesn't persist" branch Cemu's source shows
+ * for both OSSignalEvent and OSSignalEventAll in AUTO mode.
  */
-static inline void ppc_import_coreinit_OSInitMutex(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSLockMutex(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSUnlockMutex(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSTryLockMutex(PpcContext *ctx) { ctx->r[3] = 1; /* BOOL true: always "acquired" */ }
 
-static inline void ppc_import_coreinit_OSInitEvent(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSSignalEvent(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSSignalEventAll(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSResetEvent(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) { ctx->r[3] = 1; /* BOOL true: "signaled" (never actually times out) */ }
+#define BRAMBLE_SYNC_TABLE_SIZE 64
+
+/* --- OSMutex (real, recursive) --- */
+typedef struct {
+    uint32_t guest_addr;
+    int active;
+    pthread_mutex_t mutex;
+} BrambleMutexEntry;
+static BrambleMutexEntry g_bramble_mutexes[BRAMBLE_SYNC_TABLE_SIZE];
+static pthread_mutex_t g_bramble_mutex_table_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Finds (or, if requested, lazily creates) the real pthread_mutex_t
+ * backing a given guest OSMutex address. Lazy creation on first use
+ * (not just on OSInitMutex) is a defensive safety net -- real code
+ * always calls OSInitMutex first, but this avoids a NULL-mutex crash
+ * if that assumption is ever violated, at the cost of never resetting
+ * an already-initialized entry's state (fine: real OSInitMutex on an
+ * address already in use would be a real game bug regardless). */
+static inline pthread_mutex_t *bramble_mutex_get(uint32_t addr) {
+    int i, free_slot = -1;
+    pthread_mutex_t *result = NULL;
+    pthread_mutex_lock(&g_bramble_mutex_table_lock);
+    for (i = 0; i < BRAMBLE_SYNC_TABLE_SIZE; i++) {
+        if (g_bramble_mutexes[i].active && g_bramble_mutexes[i].guest_addr == addr) {
+            result = &g_bramble_mutexes[i].mutex;
+            break;
+        }
+        if (free_slot < 0 && !g_bramble_mutexes[i].active) free_slot = i;
+    }
+    if (result == NULL && free_slot >= 0) {
+        pthread_mutexattr_t attr;
+        pthread_mutexattr_init(&attr);
+        pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+        pthread_mutex_init(&g_bramble_mutexes[free_slot].mutex, &attr);
+        pthread_mutexattr_destroy(&attr);
+        g_bramble_mutexes[free_slot].guest_addr = addr;
+        g_bramble_mutexes[free_slot].active = 1;
+        result = &g_bramble_mutexes[free_slot].mutex;
+    }
+    pthread_mutex_unlock(&g_bramble_mutex_table_lock);
+    return result;
+}
+
+static inline void ppc_import_coreinit_OSInitMutex(PpcContext *ctx) { (void)bramble_mutex_get(ctx->r[3]); }
+static inline void ppc_import_coreinit_OSLockMutex(PpcContext *ctx) { pthread_mutex_lock(bramble_mutex_get(ctx->r[3])); }
+static inline void ppc_import_coreinit_OSUnlockMutex(PpcContext *ctx) { pthread_mutex_unlock(bramble_mutex_get(ctx->r[3])); }
+static inline void ppc_import_coreinit_OSTryLockMutex(PpcContext *ctx) {
+    ctx->r[3] = (pthread_mutex_trylock(bramble_mutex_get(ctx->r[3])) == 0) ? 1u : 0u;
+}
+
+/* --- OSEvent (real, manual/auto-reset) --- */
+typedef struct {
+    uint32_t guest_addr;
+    int active;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int signaled;
+    int mode; /* 0 = OS_EVENT_MODE_MANUAL, 1 = OS_EVENT_MODE_AUTO */
+    uint64_t epoch;
+    int waiting_count;
+} BrambleEventEntry;
+static BrambleEventEntry g_bramble_events[BRAMBLE_SYNC_TABLE_SIZE];
+static pthread_mutex_t g_bramble_event_table_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static inline BrambleEventEntry *bramble_event_get(uint32_t addr, int create_with_value, int create_with_mode) {
+    int i, free_slot = -1;
+    BrambleEventEntry *result = NULL;
+    pthread_mutex_lock(&g_bramble_event_table_lock);
+    for (i = 0; i < BRAMBLE_SYNC_TABLE_SIZE; i++) {
+        if (g_bramble_events[i].active && g_bramble_events[i].guest_addr == addr) {
+            result = &g_bramble_events[i];
+            break;
+        }
+        if (free_slot < 0 && !g_bramble_events[i].active) free_slot = i;
+    }
+    if (result == NULL && free_slot >= 0) {
+        BrambleEventEntry *e = &g_bramble_events[free_slot];
+        pthread_mutex_init(&e->lock, NULL);
+        pthread_cond_init(&e->cond, NULL);
+        e->guest_addr = addr;
+        e->active = 1;
+        e->signaled = create_with_value;
+        e->mode = create_with_mode;
+        e->epoch = 0;
+        e->waiting_count = 0;
+        result = e;
+    }
+    pthread_mutex_unlock(&g_bramble_event_table_lock);
+    return result;
+}
+
+static inline void ppc_import_coreinit_OSInitEvent(PpcContext *ctx) {
+    /* void OSInitEvent(OSEvent *event, BOOL value, OSEventMode mode) */
+    uint32_t addr = ctx->r[3];
+    int value = (int)(ctx->r[4] != 0);
+    int mode = (int)ctx->r[5];
+    BrambleEventEntry *e = bramble_event_get(addr, value, mode);
+    /* Re-initializing an address already in this table (a real Init
+     * called twice) resets its state -- matches real hardware, which
+     * always fully re-initializes the struct. */
+    pthread_mutex_lock(&e->lock);
+    e->signaled = value;
+    e->mode = mode;
+    e->epoch++;
+    pthread_mutex_unlock(&e->lock);
+}
+
+static inline void ppc_import_coreinit_OSSignalEvent(PpcContext *ctx) {
+    BrambleEventEntry *e = bramble_event_get(ctx->r[3], 0, 1 /* AUTO default if never Init'd */);
+    pthread_mutex_lock(&e->lock);
+    if (!e->signaled) {
+        if (e->mode == 1 /* AUTO */) {
+            if (e->waiting_count == 0) {
+                e->signaled = 1;
+            } else {
+                e->epoch++;
+                pthread_cond_signal(&e->cond); /* wake exactly one */
+            }
+        } else { /* MANUAL */
+            e->signaled = 1;
+            e->epoch++;
+            pthread_cond_broadcast(&e->cond);
+        }
+    }
+    pthread_mutex_unlock(&e->lock);
+}
+
+static inline void ppc_import_coreinit_OSSignalEventAll(PpcContext *ctx) {
+    BrambleEventEntry *e = bramble_event_get(ctx->r[3], 0, 1);
+    pthread_mutex_lock(&e->lock);
+    if (!e->signaled) {
+        if (e->mode == 1 /* AUTO */) {
+            if (e->waiting_count == 0) {
+                e->signaled = 1;
+            } else {
+                e->epoch++;
+                pthread_cond_broadcast(&e->cond); /* wake everyone currently waiting; doesn't persist */
+            }
+        } else { /* MANUAL */
+            e->signaled = 1;
+            e->epoch++;
+            pthread_cond_broadcast(&e->cond);
+        }
+    }
+    pthread_mutex_unlock(&e->lock);
+}
+
+static inline void ppc_import_coreinit_OSResetEvent(PpcContext *ctx) {
+    BrambleEventEntry *e = bramble_event_get(ctx->r[3], 0, 1);
+    pthread_mutex_lock(&e->lock);
+    e->signaled = 0;
+    pthread_mutex_unlock(&e->lock);
+}
+
+static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
+    BrambleEventEntry *e = bramble_event_get(ctx->r[3], 0, 1);
+    pthread_mutex_lock(&e->lock);
+    if (e->signaled) {
+        if (e->mode == 1 /* AUTO */) e->signaled = 0;
+    } else {
+        uint64_t my_epoch = e->epoch;
+        e->waiting_count++;
+        while (!e->signaled && e->epoch == my_epoch) {
+            pthread_cond_wait(&e->cond, &e->lock);
+        }
+        e->waiting_count--;
+        if (e->signaled && e->mode == 1 /* AUTO */) e->signaled = 0;
+    }
+    pthread_mutex_unlock(&e->lock);
+}
+
+static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) {
+    /* BOOL OSWaitEventWithTimeout(OSEvent *event, OSTime timeout) --
+     * timeout is a real relative duration in timer ticks (confirmed via
+     * Cemu's real HLE: ConvertNsToTimerTicks), not an absolute deadline.
+     * Converted to real wall-clock time via the same confirmed
+     * BRAMBLE_ESPRESSO_TIMER_CLOCK this file's OSSleepTicks already
+     * uses. Returns real TRUE if actually signaled, FALSE on a real
+     * timeout -- not the old "always true, never times out" stand-in. */
+    BrambleEventEntry *e = bramble_event_get(ctx->r[3], 0, 1);
+    int64_t timeout_ticks = ((int64_t)ctx->r[4] << 32) | (int64_t)ctx->r[5];
+    int woke_signaled = 1;
+    pthread_mutex_lock(&e->lock);
+    if (e->signaled) {
+        if (e->mode == 1) e->signaled = 0;
+    } else if (timeout_ticks <= 0) {
+        woke_signaled = 0; /* zero/negative timeout, not yet signaled -- immediate timeout */
+    } else {
+        struct timespec deadline;
+        int64_t ns = (timeout_ticks * 1000000000LL) / BRAMBLE_ESPRESSO_TIMER_CLOCK;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += (time_t)(ns / 1000000000LL);
+        deadline.tv_nsec += (long)(ns % 1000000000LL);
+        if (deadline.tv_nsec >= 1000000000L) { deadline.tv_nsec -= 1000000000L; deadline.tv_sec += 1; }
+        uint64_t my_epoch = e->epoch;
+        e->waiting_count++;
+        while (!e->signaled && e->epoch == my_epoch) {
+            if (pthread_cond_timedwait(&e->cond, &e->lock, &deadline) != 0) break; /* real timeout */
+        }
+        e->waiting_count--;
+        if (e->signaled) {
+            if (e->mode == 1) e->signaled = 0;
+        } else if (e->epoch == my_epoch) {
+            woke_signaled = 0; /* timed out, never woken */
+        }
+    }
+    pthread_mutex_unlock(&e->lock);
+    ctx->r[3] = (uint32_t)woke_signaled;
+}
 
 /* OSTime OSGetTime(void) / OSGetTick(void): both real, well-documented
  * CafeOS calls -- OSGetTime returns a 64-bit tick count since console
@@ -76,30 +312,104 @@ static inline void ppc_import_coreinit_OSGetTick(PpcContext *ctx) {
 }
 
 /*
- * OSSemaphore -- real signature confirmed against devkitPro/wut's
- * coreinit/semaphore.h: `void OSInitSemaphore(OSSemaphore*, int32_t
- * count)`, `int32_t OSSignalSemaphore(OSSemaphore*)`, `int32_t
- * OSWaitSemaphore(OSSemaphore*)`, `int32_t OSTryWaitSemaphore(OSSemaphore*)`
- * -- same "caller-allocated opaque struct" shape as OSMutex/OSEvent above,
- * and the same single-PpcContext reasoning applies: with no second thread
- * ever able to contend for it, a semaphore can't meaningfully block or
- * need signaling. OSWaitSemaphore/OSTryWaitSemaphore both report success
- * (the wait is immediately satisfied) rather than tracking a real count
- * in guest memory -- consistent with OSTryLockMutex above, and for the
- * same reason: this shim never allocates or writes through game-owned
- * structs (see the __gh_errno_ptr/MEM* note in cafeos_coreinit.h for why
- * that's a real, deliberate boundary, not an oversight). Real code that
- * depends on an exact post-signal/wait *count* (rather than just
- * treating the semaphore as a binary gate) isn't modeled correctly here
- * -- a known limitation of this whole no-op-synchronization approach, not
- * specific to semaphores.
+ * OSSemaphore -- real, genuine counting semaphore now, backed by the
+ * same host-side-table-keyed-by-guest-address pattern as OSMutex/OSEvent
+ * above (same reason: no guest-memory writes needed, but real
+ * persistent state is). Real signatures confirmed against
+ * coreinit/semaphore.h. Real *return-value* semantics for
+ * OSSignalSemaphore/OSWaitSemaphore -- not documented in wut's header
+ * comments -- confirmed directly against Cemu's actual HLE source
+ * (src/Cafe/OS/libs/coreinit/coreinit_Synchronization.cpp): both return
+ * the count *before* their respective increment/decrement, exactly
+ * matching OSTryWaitSemaphore's own documented "returns previous count"
+ * convention, so all three are now consistent (previously guessed at
+ * with placeholder 0/1 values that didn't match this real convention).
  */
-static inline void ppc_import_coreinit_OSInitSemaphore(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSInitSemaphoreEx(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSSignalSemaphore(PpcContext *ctx) { ctx->r[3] = 0; }
-static inline void ppc_import_coreinit_OSWaitSemaphore(PpcContext *ctx) { ctx->r[3] = 0; }
-static inline void ppc_import_coreinit_OSTryWaitSemaphore(PpcContext *ctx) { ctx->r[3] = 1; /* BOOL/int32_t true: always immediately available */ }
-static inline void ppc_import_coreinit_OSGetSemaphoreCount(PpcContext *ctx) { ctx->r[3] = 0; }
+typedef struct {
+    uint32_t guest_addr;
+    int active;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int32_t count;
+} BrambleSemEntry;
+static BrambleSemEntry g_bramble_sems[BRAMBLE_SYNC_TABLE_SIZE];
+static pthread_mutex_t g_bramble_sem_table_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static inline BrambleSemEntry *bramble_sem_get(uint32_t addr, int create_with_count) {
+    int i, free_slot = -1;
+    BrambleSemEntry *result = NULL;
+    pthread_mutex_lock(&g_bramble_sem_table_lock);
+    for (i = 0; i < BRAMBLE_SYNC_TABLE_SIZE; i++) {
+        if (g_bramble_sems[i].active && g_bramble_sems[i].guest_addr == addr) {
+            result = &g_bramble_sems[i];
+            break;
+        }
+        if (free_slot < 0 && !g_bramble_sems[i].active) free_slot = i;
+    }
+    if (result == NULL && free_slot >= 0) {
+        BrambleSemEntry *s = &g_bramble_sems[free_slot];
+        pthread_mutex_init(&s->lock, NULL);
+        pthread_cond_init(&s->cond, NULL);
+        s->guest_addr = addr;
+        s->active = 1;
+        s->count = create_with_count;
+        result = s;
+    }
+    pthread_mutex_unlock(&g_bramble_sem_table_lock);
+    return result;
+}
+
+static inline void ppc_import_coreinit_OSInitSemaphore(PpcContext *ctx) {
+    /* void OSInitSemaphore(OSSemaphore*, int32_t count) */
+    BrambleSemEntry *s = bramble_sem_get(ctx->r[3], (int32_t)ctx->r[4]);
+    pthread_mutex_lock(&s->lock);
+    s->count = (int32_t)ctx->r[4]; /* re-Init on an already-used address resets it, matching real hardware */
+    pthread_mutex_unlock(&s->lock);
+}
+static inline void ppc_import_coreinit_OSInitSemaphoreEx(PpcContext *ctx) { ppc_import_coreinit_OSInitSemaphore(ctx); }
+
+static inline void ppc_import_coreinit_OSSignalSemaphore(PpcContext *ctx) {
+    BrambleSemEntry *s = bramble_sem_get(ctx->r[3], 0);
+    int32_t prev;
+    pthread_mutex_lock(&s->lock);
+    prev = s->count;
+    s->count = prev + 1;
+    pthread_cond_signal(&s->cond);
+    pthread_mutex_unlock(&s->lock);
+    ctx->r[3] = (uint32_t)prev;
+}
+
+static inline void ppc_import_coreinit_OSWaitSemaphore(PpcContext *ctx) {
+    BrambleSemEntry *s = bramble_sem_get(ctx->r[3], 0);
+    int32_t prev;
+    pthread_mutex_lock(&s->lock);
+    while (s->count <= 0) {
+        pthread_cond_wait(&s->cond, &s->lock);
+    }
+    prev = s->count;
+    s->count = prev - 1;
+    pthread_mutex_unlock(&s->lock);
+    ctx->r[3] = (uint32_t)prev;
+}
+
+static inline void ppc_import_coreinit_OSTryWaitSemaphore(PpcContext *ctx) {
+    BrambleSemEntry *s = bramble_sem_get(ctx->r[3], 0);
+    int32_t prev;
+    pthread_mutex_lock(&s->lock);
+    prev = s->count;
+    if (prev > 0) s->count = prev - 1;
+    pthread_mutex_unlock(&s->lock);
+    ctx->r[3] = (uint32_t)prev;
+}
+
+static inline void ppc_import_coreinit_OSGetSemaphoreCount(PpcContext *ctx) {
+    BrambleSemEntry *s = bramble_sem_get(ctx->r[3], 0);
+    int32_t count;
+    pthread_mutex_lock(&s->lock);
+    count = s->count;
+    pthread_mutex_unlock(&s->lock);
+    ctx->r[3] = (uint32_t)count;
+}
 
 /*
  * OSGetSystemInfo/OSSleepTicks/OSTicksToCalendarTime: previously deferred
@@ -152,11 +462,6 @@ static inline void ppc_import_coreinit_OSGetSemaphoreCount(PpcContext *ctx) { ct
  * years-since-1900 vs. `OSCalendarTime`'s real full-AD-year convention
  * (+1900 to convert).
  */
-enum {
-    BRAMBLE_ESPRESSO_CORE_CLOCK = 1243125000,
-    BRAMBLE_ESPRESSO_BUS_CLOCK = 248625000,
-    BRAMBLE_ESPRESSO_TIMER_CLOCK = BRAMBLE_ESPRESSO_BUS_CLOCK / 4,
-};
 #define BRAMBLE_OSTIME_EPOCH_OFFSET_SECONDS 946684800LL /* 2000-01-01 minus 1970-01-01 */
 #define BRAMBLE_OSSYSTEMINFO_ADDR 0xE008u /* right after cafeos_coreinit_mem.h's 4-byte errno slot at 0xE000 */
 
