@@ -307,11 +307,36 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) {
      * framebuffer, and resets for the next frame. If nothing this frame
      * ever called something that acquires a framebuffer (e.g. a frame
      * with no GX2ClearColor/draw calls at all), this is a real, safe
-     * no-op -- there's nothing to present. */
+     * no-op -- there's nothing to present.
+     *
+     * Real bug fixed here, found via a real on-hardware test (not
+     * caught by compiling/linking, which is why this needed real
+     * hardware to find): the command buffer was never being reset
+     * between frames, so every frame's recorded commands kept
+     * accumulating in the same fixed BRAMBLE_GX2_CMD_MEM_SIZE (64KB)
+     * pool forever -- devkitPro's own official deko3d Example01 this
+     * project otherwise follows closely avoids this entirely by
+     * recording its rendering commands exactly *once* into static
+     * command lists at startup and replaying the same lists every
+     * frame, never re-recording; this shim's design instead re-records
+     * fresh commands every single frame (necessary here, since a real
+     * recompiled game's actual GX2 calls per frame aren't known ahead
+     * of time the way a fixed demo scene's are), which means it -- not
+     * the reference example -- is the one that actually needs to
+     * reclaim that memory each frame. `dkQueueWaitIdle` first is a
+     * real, deliberate simplification: waits for the GPU to fully
+     * finish the frame just presented before reusing its command
+     * memory, trading real pipelining/performance for straightforward
+     * correctness at this "does it work at all yet" stage -- a real,
+     * known place to come back to once double-buffered command memory
+     * (a separate real memory block per frame-in-flight) is worth the
+     * added complexity. */
     (void)ctx;
     if (g_bramble_gx2.acquired_slot < 0) return;
     dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
     dkQueuePresentImage(g_bramble_gx2.queue, g_bramble_gx2.swapchain, g_bramble_gx2.acquired_slot);
+    dkQueueWaitIdle(g_bramble_gx2.queue);
+    dkCmdBufClear(g_bramble_gx2.cmdbuf);
     g_bramble_gx2.acquired_slot = -1;
 }
 
