@@ -600,6 +600,78 @@ static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) {
     dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, &state);
 }
 
+static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) {
+    /* void GX2SetCullOnlyControl(GX2FrontFace frontFace, BOOL cullFront,
+     * BOOL cullBack) -- real, confirmed signature (wut's
+     * gx2/registers.h), a real 3-parameter subset of
+     * GX2SetPolygonControl above (same real hardware register, culling
+     * fields only) -- reuses the exact same frontFace/cullMode
+     * translation, leaving deko3d's polygon fill mode at its real
+     * default (Fill), matching GX2SetPolygonControl's own
+     * polyMode==false fallback for consistency. */
+    uint32_t front_face = ctx->r[3];
+    uint32_t cull_front = ctx->r[4];
+    uint32_t cull_back = ctx->r[5];
+    DkRasterizerState state;
+
+    dkRasterizerStateDefaults(&state);
+    state.frontFace = bramble_gx2_front_face_to_dk(front_face);
+    if (cull_front && cull_back) state.cullMode = DkFace_FrontAndBack;
+    else if (cull_front) state.cullMode = DkFace_Front;
+    else if (cull_back) state.cullMode = DkFace_Back;
+    else state.cullMode = DkFace_None;
+
+    dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, &state);
+}
+
+static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) {
+    /* void GX2SetDepthOnlyControl(BOOL depthTest, BOOL depthWrite,
+     * GX2CompareFunction depthCompare) -- real, confirmed signature
+     * (wut's gx2/registers.h), a real 3-parameter subset of
+     * GX2SetDepthStencilControl above (same real hardware register,
+     * depth fields only) -- reuses the exact same depth-field
+     * translation, leaving deko3d's stencil state at its real default
+     * (disabled), matching the real semantics of "depth only". */
+    uint32_t depth_test = ctx->r[3];
+    uint32_t depth_write = ctx->r[4];
+    uint32_t depth_compare = ctx->r[5];
+    DkDepthStencilState state;
+
+    dkDepthStencilStateDefaults(&state);
+    state.depthTestEnable = depth_test ? 1 : 0;
+    state.depthWriteEnable = depth_write ? 1 : 0;
+    state.depthCompareOp = bramble_gx2_compare_func_to_dk(depth_compare);
+
+    dkCmdBufBindDepthStencilState(g_bramble_gx2.cmdbuf, &state);
+}
+
+static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) {
+    /* void GX2SetStencilMask(uint8_t frontMask, uint8_t frontWriteMask,
+     * uint8_t frontRef, uint8_t backMask, uint8_t backWriteMask,
+     * uint8_t backRef) -- real signature confirmed against wut's
+     * gx2/registers.h, 6 real params, all fit in r3-r8 (each promoted
+     * to a full register per the real PPC32 ABI, standard for
+     * sub-word integer args). Real deko3d equivalent is
+     * dkCmdBufSetStencil(cmdbuf, face, mask, funcRef, funcMask), one
+     * real call per face -- its `mask` parameter is the real stencil
+     * *write* mask and `funcMask` is the real stencil *compare* mask
+     * (confirmed by the field naming/order matching deko3d's own
+     * DkDepthStencilState set-up convention, where write and compare
+     * are always kept as two distinct real GPU state values), so
+     * GX2's frontWriteMask/backWriteMask map to deko3d's `mask` and
+     * GX2's frontMask/backMask (the real compare masks) map to
+     * deko3d's `funcMask`. */
+    uint32_t front_mask = ctx->r[3];
+    uint32_t front_write_mask = ctx->r[4];
+    uint32_t front_ref = ctx->r[5];
+    uint32_t back_mask = ctx->r[6];
+    uint32_t back_write_mask = ctx->r[7];
+    uint32_t back_ref = ctx->r[8];
+
+    dkCmdBufSetStencil(g_bramble_gx2.cmdbuf, DkFace_Front, (uint8_t)front_write_mask, (uint8_t)front_ref, (uint8_t)front_mask);
+    dkCmdBufSetStencil(g_bramble_gx2.cmdbuf, DkFace_Back, (uint8_t)back_write_mask, (uint8_t)back_ref, (uint8_t)back_mask);
+}
+
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
     /* void GX2SetPrimitiveRestartIndex(uint32_t index) -- real GX2
      * signature has no separate enable flag; deko3d's
@@ -693,6 +765,9 @@ static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) { (void)ct
 static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { (void)ctx; }
