@@ -777,6 +777,49 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) {
     g_bramble_gx2.acquired_slot = -1;
 }
 
+static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) {
+    /* void GX2Flush(void) -- real behavior submits whatever's been
+     * recorded so far to the GPU without waiting for it to finish and
+     * without presenting (that's GX2SwapScanBuffers' job), so the CPU
+     * can keep recording the next batch of GX2 calls while the GPU
+     * works through this one. Maps directly onto
+     * dkCmdBufFinishList+dkQueueSubmitCommands -- the same real submit
+     * step GX2SwapScanBuffers already performs, just without the
+     * present/waitIdle/clear that make that one a full frame boundary.
+     * Real, deliberate simplification carried over from
+     * GX2SwapScanBuffers' own documented one: this project's command
+     * memory isn't double-buffered yet, so a flush here still shares
+     * the same persistent `cmdbuf`/`BRAMBLE_GX2_CMD_MEM_SIZE` pool --
+     * safe because deko3d's command allocator is append-only until an
+     * explicit `dkCmdBufClear` (only called on the real frame boundary
+     * in GX2SwapScanBuffers), not a ring buffer that could be
+     * overwritten mid-frame. Safe (and correct per deko3d's own
+     * multi-list-per-cmdbuf usage pattern) to call with nothing
+     * recorded yet -- submits an empty list. */
+    (void)ctx;
+    dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
+}
+
+static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) {
+    /* void GX2DrawDone(void) -- real behavior blocks the calling
+     * thread until the GPU has fully finished every command submitted
+     * so far. Maps directly onto dkQueueWaitIdle -- the same real call
+     * GX2SwapScanBuffers already uses for its own (documented,
+     * deliberately synchronous-for-now) end-of-frame wait, just
+     * invoked directly by the game rather than implied by a swap. Real
+     * per-real-usage note: since nothing here has been submitted to
+     * the GPU without also being recorded into the still-open
+     * `cmdbuf`, this doesn't first call GX2Flush -- if the game calls
+     * GX2DrawDone without an intervening GX2Flush/GX2SwapScanBuffers,
+     * whatever's only *recorded* but not yet *submitted* is still
+     * waiting in `cmdbuf`, not on the GPU, so there's nothing yet for
+     * dkQueueWaitIdle to wait on for that portion -- consistent with
+     * GX2Flush above being a separate, explicit real GX2 call the game
+     * is expected to make first if it wants that. */
+    (void)ctx;
+    dkQueueWaitIdle(g_bramble_gx2.queue);
+}
+
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
 
 static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { (void)ctx; }
@@ -798,6 +841,8 @@ static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) { (v
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) { (void)ctx; }
 
 #endif /* __SWITCH__ */
 
@@ -833,6 +878,57 @@ static inline void ppc_import_gx2_GX2SetSwapInterval(PpcContext *ctx) {
      * stored: GX2GetSwapInterval isn't in this game's real import list
      * (confirmed by recompiling the actual tfbGame_cafe.rpx), so
      * nothing here ever reads it back. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetTVEnable(PpcContext *ctx) {
+    /* void GX2SetTVEnable(BOOL enable) -- real Wii U hardware has two
+     * independent real scan-out targets (TV + GamePad/DRC); enabling/
+     * disabling either changes what actually gets sent to that
+     * display. This runtime has exactly one real display target (the
+     * Switch's own screen, driven by GX2SwapScanBuffers' swapchain --
+     * see that function's own "only one real display target" note),
+     * so there's no second real output to gate. Accepted, not stored:
+     * confirmed by recompiling the actual tfbGame_cafe.rpx that no
+     * `GX2Get*TVEnable`-shaped getter is in this game's real import
+     * list, so nothing here ever reads it back. Real, documented gap:
+     * if the game ever disables the TV and expects nothing to appear
+     * on-screen, this shim still presents every frame -- untested
+     * against real hardware behavior since there's no signal in this
+     * game's own calls that it relies on that. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetDRCEnable(PpcContext *ctx) {
+    /* void GX2SetDRCEnable(BOOL enable) -- same real GamePad/DRC scan
+     * target GX2SetTVEnable above gates, just the other one. Same
+     * reasoning applies: no second real display target exists on this
+     * runtime to enable/disable, and no real getter for it exists in
+     * this game's actual import list, so accepted and not stored. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetTVScale(PpcContext *ctx) {
+    /* void GX2SetTVScale(uint32_t x, uint32_t y) -- real hardware
+     * scales the TV scan buffer's real output resolution independently
+     * of its render resolution. This runtime's swapchain is a fixed
+     * `BRAMBLE_GX2_FB_WIDTH`x`BRAMBLE_GX2_FB_HEIGHT` (see the framebuffer
+     * setup above) with no real output-scaling stage of its own yet --
+     * accepted, not stored, same "no real getter in this game's actual
+     * import list to contradict it" reasoning as GX2SetSwapInterval
+     * above. Real, documented gap, not silently assumed harmless: a
+     * game relying on this to letterbox/scale non-native content would
+     * render at the wrong apparent size until this is wired up for
+     * real. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetDRCScale(PpcContext *ctx) {
+    /* void GX2SetDRCScale(uint32_t x, uint32_t y) -- same real
+     * per-scan-target output scaling GX2SetTVScale above is, just for
+     * the GamePad/DRC target this runtime also has no second real
+     * display for (see GX2SetDRCEnable above). Same reasoning: accepted,
+     * not stored, no real getter in this game's actual import list. */
     (void)ctx;
 }
 
