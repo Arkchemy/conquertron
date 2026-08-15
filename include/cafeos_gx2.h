@@ -340,6 +340,85 @@ static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) {
     if (target < 8) dkCmdBufBindBlendState(g_bramble_gx2.cmdbuf, target, &state);
 }
 
+static inline DkLogicOp bramble_gx2_logic_op_to_dk(uint32_t gx2_rop3) {
+    /* GX2LogicOp -> DkLogicOp. GX2's real values (confirmed against
+     * wut's gx2/enum.h) are a byte with the same nibble duplicated
+     * twice (0x00, 0x11, 0x22, ... 0xFF) -- i.e. value == index * 0x11,
+     * so `value >> 4` recovers a real 0-15 index in GX2's own
+     * declaration order. GX2's raw byte values are NOT the same
+     * encoding deko3d/OpenGL use (their `GX2_LOGIC_OP_NOR == 0x11`
+     * does not correspond to `DkLogicOp_Nor == 8` numerically), so this
+     * maps by real operation *name* -- CLEAR, NOR, AND, XOR, etc. are
+     * the same well-known, standard two-operand logic operations in
+     * both APIs, just assigned different raw enum encodings by each
+     * vendor. */
+    static const uint8_t table[16] = {
+        0,  /* CLEAR    -> Clear */
+        8,  /* NOR      -> Nor */
+        4,  /* INV_AND  -> AndInverted */
+        12, /* INV_COPY -> CopyInverted */
+        2,  /* REV_AND  -> AndReverse */
+        10, /* INV      -> Invert */
+        6,  /* XOR      -> Xor */
+        14, /* NOT_AND  -> Nand */
+        1,  /* AND      -> And */
+        9,  /* EQUIV    -> Equivalent */
+        5,  /* NOP      -> NoOp */
+        13, /* INV_OR   -> OrInverted */
+        3,  /* COPY     -> Copy */
+        11, /* REV_OR   -> OrReverse */
+        7,  /* OR       -> Or */
+        15, /* SET      -> Set */
+    };
+    uint32_t index = (gx2_rop3 >> 4) & 0xF;
+    return (DkLogicOp)table[index];
+}
+
+static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) {
+    /* void GX2SetColorControl(GX2LogicOp rop3, uint8_t targetBlendEnable,
+     * BOOL multiWriteEnable, BOOL colorWriteEnable) -- real signature
+     * confirmed against wut's gx2/registers.h. 4 integer/enum/BOOL
+     * params, all in r3-r6.
+     *
+     * rop3 -> DkColorState.logicOp via bramble_gx2_logic_op_to_dk.
+     * targetBlendEnable is a real per-render-target bitmask (bit i =
+     * blending enabled for target i) -- applied via
+     * dkColorStateSetBlendEnable per target, matching deko3d's own
+     * per-target model exactly. colorWriteEnable is a single real
+     * master on/off switch in GX2 with no matching single field in
+     * deko3d (deko3d's DkColorWriteState is a real per-target,
+     * per-channel RGBA mask instead) -- interpreted here as "all
+     * channels, all targets" when true and "nothing" when false, a
+     * reasonable, documented, unconfirmed simplification.
+     * multiWriteEnable (a real AMD-specific feature broadcasting
+     * render target 0's color to every bound target) has no deko3d
+     * equivalent found -- a real, honest, unimplemented gap, not
+     * silently dropped: the argument is read but intentionally
+     * unused. */
+    uint32_t rop3 = ctx->r[3];
+    uint32_t target_blend_enable = ctx->r[4];
+    uint32_t multi_write_enable = ctx->r[5];
+    uint32_t color_write_enable = ctx->r[6];
+    DkColorState color_state;
+    DkColorWriteState write_state;
+    uint32_t i;
+
+    (void)multi_write_enable; /* no deko3d equivalent -- see comment above */
+
+    dkColorStateDefaults(&color_state);
+    color_state.logicOp = bramble_gx2_logic_op_to_dk(rop3);
+    for (i = 0; i < 8; i++) {
+        dkColorStateSetBlendEnable(&color_state, i, (target_blend_enable >> i) & 1u);
+    }
+    dkCmdBufBindColorState(g_bramble_gx2.cmdbuf, &color_state);
+
+    dkColorWriteStateDefaults(&write_state);
+    for (i = 0; i < 8; i++) {
+        dkColorWriteStateSetMask(&write_state, i, color_write_enable ? DkColorMask_RGBA : 0u);
+    }
+    dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &write_state);
+}
+
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
     /* void GX2SetPrimitiveRestartIndex(uint32_t index) -- real GX2
      * signature has no separate enable flag; deko3d's
@@ -430,6 +509,7 @@ static inline void ppc_import_gx2_GX2SetPointSize(PpcContext *ctx) { (void)ctx; 
 static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { (void)ctx; }
