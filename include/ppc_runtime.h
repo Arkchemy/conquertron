@@ -407,4 +407,24 @@ static inline double ppc_frsqrte(double val) { return 1.0 / sqrt(val); }
  * a single-rounded result back into the (still 64-bit) FPR. */
 static inline double ppc_frsp(double val) { return (double)(float)val; }
 
+/*
+ * ppc_dispatch: recomp emits a real definition of this once per compiled
+ * program (see main.cpp) -- a switch over every recovered function's
+ * address, used to resolve mtctr/bctrl indirect calls at runtime since
+ * their target isn't known until then. Declared here (not defined --
+ * every real generated program provides the real definition) so CafeOS
+ * shim headers can reuse the exact same mechanism to call *into*
+ * recompiled code for real guest callback invocation (e.g. an FSAsyncData
+ * completion callback, or nsyshid's HIDCallback) -- setting up the
+ * callback's arguments in ctx->r[3..], calling this, then restoring
+ * ctx->r[3] to the shim's own actual return value afterward, exactly the
+ * same calling convention a real indirect call already uses. This is the
+ * one piece of shim-authored code that depends on something the
+ * recompiler itself emits rather than being fully self-contained --
+ * shims that use it are not yet exercised through the real recompile
+ * pipeline (see docs/phase1d_import_surface.md), only via a standalone
+ * test that supplies its own fake ppc_dispatch.
+ */
+void ppc_dispatch(PpcContext *ctx, uint32_t addr);
+
 #endif /* BRAMBLE_PPC_RUNTIME_H */

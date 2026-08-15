@@ -451,4 +451,113 @@ static inline void ppc_import_coreinit_FSRemove(PpcContext *ctx) {
     ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
 }
 
+/*
+ * FSReadFileWithPosAsync/FSWriteFileWithPosAsync: previously deferred --
+ * both take an `FSAsyncData *` whose real behavior is to invoke a guest
+ * callback function pointer on completion, which this shim couldn't do
+ * without a way to call *into* recompiled code. `ppc_runtime.h` now
+ * declares `ppc_dispatch` for exactly this (see its own comment) -- real
+ * generated programs already define it (built for mtctr/bctrl indirect
+ * calls), and a guest function pointer is a guest function pointer
+ * either way, so reusing it here isn't a new mechanism.
+ *
+ * FSStatus FSReadFileWithPosAsync(FSClient*, FSCmdBlock*, uint8_t *buffer,
+ *   uint32_t size, uint32_t count, uint32_t pos, FSFileHandle handle,
+ *   uint32_t unk1, FSErrorFlag errorMask, FSAsyncData *asyncData);
+ * 10 real parameters -- only 8 fit in r3-r10 (PPC32 SVR4 ABI), so
+ * errorMask/asyncData are the caller's 9th/10th args, stack-passed at
+ * r1+8/r1+12 -- this project's own manyargs.c test already confirmed
+ * this "just works" with the existing memory-access codegen, so reading
+ * them the same way here is consistent, not a new assumption. Only
+ * asyncData (r1+12) is actually read; errorMask (r1+8) is ignored, same
+ * as every other FS* function in this file (see the file's own "Known,
+ * deliberate gaps" note).
+ *
+ * real FSAsyncData layout (coreinit/filesystem.h, WUT_CHECK_OFFSET-
+ * confirmed): callback@0x0, param@0x4, ioMsgQueue@0x8 (size 0xC).
+ * FSAsyncCallback is `void (*)(FSClient*, FSCmdBlock*, FSStatus, uint32_t)`.
+ *
+ * This shim completes the read/write synchronously (no real async I/O
+ * queue exists), then invokes the guest callback immediately with the
+ * real result -- correct from real calling code's perspective as long as
+ * it only observes completion through the callback, which is the normal
+ * usage pattern. If `asyncData->ioMsgQueue` is used instead of `callback`
+ * (an alternative real completion style, message-queue-based rather than
+ * callback-based), this is a known, honestly-documented gap: no
+ * OSMessageQueue send machinery exists here, so that path silently never
+ * completes. The Async call's own synchronous return value is real
+ * `FS_STATUS_OK` ("successfully queued"), matching how real code
+ * typically ignores it and waits for the callback's own status instead.
+ */
+static inline void ppc_fs_invoke_async_callback(PpcContext *ctx, uint32_t async_data_addr, uint32_t client, uint32_t block, int32_t status) {
+    uint32_t callback_addr = ppc_load_u32(ctx, async_data_addr + 0x0);
+    uint32_t param = ppc_load_u32(ctx, async_data_addr + 0x4);
+    if (callback_addr == 0) return; /* ioMsgQueue-style completion -- known gap, see file comment */
+    ctx->r[3] = client;
+    ctx->r[4] = block;
+    ctx->r[5] = (uint32_t)status;
+    ctx->r[6] = param;
+    ppc_dispatch(ctx, callback_addr);
+}
+
+static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
+    uint32_t client = ctx->r[3], block = ctx->r[4];
+    uint32_t buffer_addr = ctx->r[5], size = ctx->r[6], count = ctx->r[7], pos = ctx->r[8], handle = ctx->r[9];
+    uint32_t async_data_addr = ppc_load_u32(ctx, ctx->r[1] + 12);
+    FILE *f = ppc_fs_get_handle(handle);
+    int32_t result;
+    if (!f) {
+        result = BRAMBLE_FS_STATUS_NOT_FOUND;
+    } else if (size == 0 || count == 0) {
+        result = 0;
+    } else {
+        fseek(f, (long)pos, SEEK_SET);
+        uint32_t elements_read = 0;
+        for (uint32_t e = 0; e < count; e++) {
+            uint32_t got_this_element = 0;
+            for (uint32_t b = 0; b < size; b++) {
+                int c = fgetc(f);
+                if (c == EOF) break;
+                ppc_store_u8(ctx, buffer_addr + e * size + b, (uint8_t)c);
+                got_this_element++;
+            }
+            if (got_this_element < size) break;
+            elements_read++;
+        }
+        result = (int32_t)elements_read;
+    }
+    ppc_fs_invoke_async_callback(ctx, async_data_addr, client, block, result);
+    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+}
+
+static inline void ppc_import_coreinit_FSWriteFileWithPosAsync(PpcContext *ctx) {
+    uint32_t client = ctx->r[3], block = ctx->r[4];
+    uint32_t buffer_addr = ctx->r[5], size = ctx->r[6], count = ctx->r[7], pos = ctx->r[8], handle = ctx->r[9];
+    uint32_t async_data_addr = ppc_load_u32(ctx, ctx->r[1] + 12);
+    FILE *f = ppc_fs_get_handle(handle);
+    int32_t result;
+    if (!f) {
+        result = BRAMBLE_FS_STATUS_NOT_FOUND;
+    } else if (size == 0 || count == 0) {
+        result = 0;
+    } else {
+        fseek(f, (long)pos, SEEK_SET);
+        uint32_t elements_written = 0;
+        for (uint32_t e = 0; e < count; e++) {
+            uint32_t wrote_this_element = 0;
+            for (uint32_t b = 0; b < size; b++) {
+                uint8_t byte = ppc_load_u8(ctx, buffer_addr + e * size + b);
+                if (fputc(byte, f) == EOF) break;
+                wrote_this_element++;
+            }
+            if (wrote_this_element < size) break;
+            elements_written++;
+        }
+        fflush(f);
+        result = (int32_t)elements_written;
+    }
+    ppc_fs_invoke_async_callback(ctx, async_data_addr, client, block, result);
+    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+}
+
 #endif /* BRAMBLE_CAFEOS_COREINIT_FS_H */

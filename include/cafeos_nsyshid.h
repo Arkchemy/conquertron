@@ -10,31 +10,52 @@
  * gameplay here, unlike the network functions this session found are
  * simply unused by this game.
  *
- * Only the client registration functions are implemented. HIDRead/
- * HIDSetIdle/HIDSetProtocol/HIDSetReport are real, confirmed-signature
- * functions (int32_t HIDRead(uint32_t handle, uint8_t *buffer, uint32_t
- * bufferLength, HIDCallback callback, void *userContext); -- verified
- * against devkitPro/wut's nsyshid/hid.h) but deliberately NOT attempted
- * yet, for a reason distinct from every other deferred function in this
- * shim so far: they're *asynchronous*, completing via a callback the
- * real HID stack invokes later. Correctly honoring that means the shim
- * itself calling back *into* recompiled PPC code (via the same
- * ppc_dispatch mechanism bctrl/indirect calls already use) -- every
- * other shim function so far only goes one direction (recompiled code
- * calls the shim). That's a new, higher-risk integration pattern this
- * session doesn't have enough confidence in HIDCallback's exact
- * signature to attempt safely, on top of there being no real Portal of
- * Power hardware to ever actually attach in the first place. A real
- * fix needs both a real USB/HID backend and that callback-invocation
- * mechanism -- tracked here as its own problem, not folded into "just
- * another shim function."
- *
- * HIDAddClient/HIDDelClient themselves are safe: they only register/
+ * HIDAddClient/HIDDelClient: safe, simple -- they only register/
  * unregister an attach-notification callback that (honestly) never
  * fires, since no device ever attaches -- no guest-callback-invocation
- * needed for these two specifically.
+ * needed for these two.
+ *
+ * HIDRead/HIDSetIdle/HIDSetProtocol/HIDSetReport were previously
+ * deferred for a real reason: they're *asynchronous*, real hardware
+ * completing them via a callback invoked later, and this shim had no
+ * way to call back *into* recompiled PPC code yet. `ppc_runtime.h` now
+ * declares `ppc_dispatch` for exactly that (see its own comment; also
+ * used by `cafeos_coreinit_fs.h`'s FS*Async functions).
+ *
+ * But reading Cemu's actual real HLE source for these functions
+ * (src/Cafe/OS/libs/nsyshid/nsyshid.cpp) resolved the callback question
+ * a simpler way: every one of these functions looks up the target
+ * device by handle *before* deciding sync-vs-async at all, and returns
+ * -1 immediately with **no callback invocation whatsoever** if no such
+ * device exists (`GetDeviceByHandle(...) == nullptr`). Since this
+ * runtime never has any real HID device attached at all (no backend, no
+ * Portal of Power hardware, `HIDAddClient`'s attach callback above never
+ * fires), every one of these calls always hits exactly that
+ * device-not-found path on real hardware's own logic -- so the
+ * ppc_dispatch machinery, while now available, isn't even needed here:
+ * an immediate, honest `-1`, matching Cemu's own verified behavior
+ * exactly rather than a guess, is correct.
+ *
+ * HIDDecodeError's real signature and behavior are also pulled directly
+ * from Cemu's HLE (not in wut's public headers at all): `void
+ * HIDDecodeError(uint32_t errorCode, uint32_t *ukn0, uint32_t *ukn1)` --
+ * Cemu's own implementation is itself an honest `// todo` writing two
+ * fixed placeholder values (`0x3FF`, `-0x7FFF`) and returning 0
+ * regardless of the input error code; reproducing that verbatim matches
+ * the best known real-world reference rather than guessing independently.
  */
 static inline void ppc_import_nsyshid_HIDAddClient(PpcContext *ctx) { ctx->r[3] = 0; }
 static inline void ppc_import_nsyshid_HIDDelClient(PpcContext *ctx) { ctx->r[3] = 0; }
+
+static inline void ppc_import_nsyshid_HIDRead(PpcContext *ctx) { ctx->r[3] = (uint32_t)-1; }
+static inline void ppc_import_nsyshid_HIDSetIdle(PpcContext *ctx) { ctx->r[3] = (uint32_t)-1; }
+static inline void ppc_import_nsyshid_HIDSetProtocol(PpcContext *ctx) { ctx->r[3] = (uint32_t)-1; }
+static inline void ppc_import_nsyshid_HIDSetReport(PpcContext *ctx) { ctx->r[3] = (uint32_t)-1; }
+
+static inline void ppc_import_nsyshid_HIDDecodeError(PpcContext *ctx) {
+    if (ctx->r[4] != 0) ppc_store_u32(ctx, ctx->r[4], 0x3FFu);
+    if (ctx->r[5] != 0) ppc_store_u32(ctx, ctx->r[5], (uint32_t)-0x7FFF);
+    ctx->r[3] = 0;
+}
 
 #endif /* BRAMBLE_CAFEOS_NSYSHID_H */
