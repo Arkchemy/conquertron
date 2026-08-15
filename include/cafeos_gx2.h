@@ -261,6 +261,85 @@ static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) {
     dkCmdBufSetBlendConst(g_bramble_gx2.cmdbuf, (float)ctx->f[1], (float)ctx->f[2], (float)ctx->f[3], (float)ctx->f[4]);
 }
 
+static inline DkBlendFactor bramble_gx2_blend_mode_to_dk(uint32_t gx2_mode) {
+    /* GX2BlendMode -> DkBlendFactor. Real GX2BlendMode has 21 values
+     * (0-20, confirmed against wut's gx2/enum.h), real DkBlendFactor
+     * values confirmed directly from deko3d.h. For indices 0-10 and
+     * 15-18 both enums enumerate the exact same real blend factors in
+     * the exact same real order, just offset by 1 (GX2 is 0-based,
+     * deko3d reserves 0). GX2_BLEND_MODE_BLEND_FACTOR/INV_BLEND_FACTOR
+     * (13/14) and CONSTANT_ALPHA/INV_CONSTANT_ALPHA (19/20) map to
+     * deko3d's real Const/InvConst factors (same blend-constant-color
+     * concept both APIs expose, via GX2SetBlendConstantColor /
+     * dkCmdBufSetBlendConst above). GX2_BLEND_MODE_BOTH_SRC_ALPHA/
+     * BOTH_INV_SRC_ALPHA (11/12) are real dual-source-blend modes with
+     * no deko3d equivalent found (deko3d's Src1Color/Src1Alpha factors
+     * are a different real feature, a second bound color, not both
+     * src and dst using src alpha); approximated here as plain
+     * SrcAlpha/InvSrcAlpha, a documented, unconfirmed simplification
+     * for a pair of blend modes not expected to be hit in practice. */
+    static const uint8_t table[21] = {
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, /* 0-10: direct +1 offset */
+        5, 6,                               /* 11-12: BOTH_SRC_ALPHA / BOTH_INV_SRC_ALPHA -- approximated, see above */
+        0x21, 0x22,                         /* 13-14: BLEND_FACTOR / INV_BLEND_FACTOR -> ConstColor / InvConstColor */
+        16, 17, 18, 19,                     /* 15-18: SRC1_* -- direct +1 offset resumes */
+        0x23, 0x24,                         /* 19-20: CONSTANT_ALPHA / INV_CONSTANT_ALPHA -> ConstAlpha / InvConstAlpha */
+    };
+    if (gx2_mode >= 21) return DkBlendFactor_One; /* defensive fallback for an out-of-range/unrecognized value */
+    return (DkBlendFactor)table[gx2_mode];
+}
+
+static inline DkBlendOp bramble_gx2_blend_combine_to_dk(uint32_t gx2_combine) {
+    /* GX2BlendCombineMode -> DkBlendOp. Real GX2 order (confirmed
+     * against wut's gx2/enum.h) is ADD=0, SUB=1, MIN=2, MAX=3,
+     * REV_SUB=4; real deko3d order (confirmed against deko3d.h) is
+     * Add=1, Sub=2, RevSub=3, Min=4, Max=5 -- same five real blend
+     * operations, different real ordering, so this needs an actual
+     * lookup table rather than an offset. */
+    static const uint8_t table[5] = {1, 2, 4, 5, 3};
+    if (gx2_combine >= 5) return DkBlendOp_Add; /* defensive fallback for an out-of-range/unrecognized value */
+    return (DkBlendOp)table[gx2_combine];
+}
+
+static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) {
+    /* void GX2SetBlendControl(GX2RenderTarget target,
+     * GX2BlendMode colorSrcBlend, GX2BlendMode colorDstBlend,
+     * GX2BlendCombineMode colorCombine, BOOL useAlphaBlend,
+     * GX2BlendMode alphaSrcBlend, GX2BlendMode alphaDstBlend,
+     * GX2BlendCombineMode alphaCombine) -- real signature confirmed
+     * against wut's gx2/registers.h. All 8 params are integers/enums/
+     * BOOL, so per the real PPC32 SVR4 ABI (integer args in r3-r10,
+     * independent of any float sequence) they land in r3-r10 directly,
+     * no stack-passed args.
+     *
+     * Real GX2 lets color and alpha blending use fully independent
+     * factors/combine ops, gated by useAlphaBlend; deko3d's DkBlendState
+     * always has separate color/alpha slots (dkBlendStateSetFactors/
+     * SetOps take both), so useAlphaBlend==false is handled here by
+     * mirroring the color blend settings into the alpha slots -- the
+     * real, documented interpretation of "don't use separate alpha
+     * blending" (not confirmed against real hardware/Cemu behavior for
+     * this exact corner case, but consistent with how every other GX2
+     * "combined color+alpha state" function in this file has been
+     * handled so far). */
+    uint32_t target = ctx->r[3];
+    uint32_t color_src = ctx->r[4], color_dst = ctx->r[5], color_combine = ctx->r[6];
+    uint32_t use_alpha_blend = ctx->r[7];
+    uint32_t alpha_src = ctx->r[8], alpha_dst = ctx->r[9], alpha_combine = ctx->r[10];
+    DkBlendState state;
+
+    dkBlendStateDefaults(&state);
+    dkBlendStateSetOps(&state,
+        bramble_gx2_blend_combine_to_dk(color_combine),
+        use_alpha_blend ? bramble_gx2_blend_combine_to_dk(alpha_combine) : bramble_gx2_blend_combine_to_dk(color_combine));
+    dkBlendStateSetFactors(&state,
+        bramble_gx2_blend_mode_to_dk(color_src), bramble_gx2_blend_mode_to_dk(color_dst),
+        use_alpha_blend ? bramble_gx2_blend_mode_to_dk(alpha_src) : bramble_gx2_blend_mode_to_dk(color_src),
+        use_alpha_blend ? bramble_gx2_blend_mode_to_dk(alpha_dst) : bramble_gx2_blend_mode_to_dk(color_dst));
+
+    if (target < 8) dkCmdBufBindBlendState(g_bramble_gx2.cmdbuf, target, &state);
+}
+
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
     /* void GX2SetPrimitiveRestartIndex(uint32_t index) -- real GX2
      * signature has no separate enable flag; deko3d's
@@ -350,6 +429,7 @@ static inline void ppc_import_gx2_GX2SetLineWidth(PpcContext *ctx) { (void)ctx; 
 static inline void ppc_import_gx2_GX2SetPointSize(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { (void)ctx; }
