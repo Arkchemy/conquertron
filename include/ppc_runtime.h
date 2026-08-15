@@ -67,7 +67,29 @@ typedef struct PpcContext {
      * real elapsed-time value. Anything relying on actual wall-clock
      * timing from this would be a known, narrow gap. */
     uint32_t tb;
-    uint8_t mem[65536];
+    /* Was 65536 (64KB) -- sized only for tiny test programs, and by this
+     * point genuinely too tight: cafeos_coreinit_mem.h's MEM1/MEM2 base
+     * heaps, cafeos_snd_core.h's AXVoice pool, and the small fixed slots
+     * for errno/OSSystemInfo already reserve a meaningful fraction of
+     * it, on top of whatever a real object's own .data/.bss/.rodata*
+     * needs (assign_global_addrs) and the stack (which starts at
+     * `sizeof(mem) - 256` and grows down). Grown 64x to 4MB -- still an
+     * arbitrary, generous placeholder, *not* a claim this now matches
+     * real Wii U game scale (unmeasured; the real binary's actual
+     * .data/.bss size hasn't been checked), so still a known, documented
+     * limitation, just a substantially less cramped one. Every existing
+     * fixed reservation (0x8000/0xB000/0xE000/0xE008/0xE100) stays
+     * valid unchanged -- they're small absolute offsets near the bottom
+     * of the address space, and the stack's `sizeof(mem)`-relative init
+     * point automatically gains all the new headroom for free.
+     *
+     * PpcContext is large enough that every existing consumer already
+     * uses `static` storage instead of a stack-local, not just now
+     * (tools/gen_harness*.c and switch/native/source/main.c both
+     * already did this before this change) -- new standalone shim tests
+     * should follow the same convention.
+     */
+    uint8_t mem[4 * 1024 * 1024];
 } PpcContext;
 
 static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {

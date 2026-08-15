@@ -372,8 +372,10 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
 
 void assign_global_addrs(ElfImage &img) {
     // Fixed, generous starting point in PpcContext::mem -- well clear of
-    // where these small test programs' stacks operate (mem is 65536 bytes;
-    // the stack starts near the top and grows down). Each section gets at
+    // where these small test programs' stacks operate (mem is 4MB as of
+    // this writing, grown from an original 65536 bytes -- see
+    // ppc_runtime.h's own PpcContext::mem comment for why; the stack
+    // starts near the top and grows down). Each section gets at
     // least 256 bytes of room, rounded up, which is plenty for this
     // milestone's scope but is a real, documented limitation: a genuinely
     // large .data/.bss (as real Wii U game code will have) would need a
