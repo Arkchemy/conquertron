@@ -211,10 +211,20 @@ static inline void ppc_import_snd_core_AXSetVoiceSrcRatio(PpcContext *ctx) {
     /* AXVoiceSrcRatioResult AXSetVoiceSrcRatio(AXVoice *voice, float ratio) --
      * real hardware validates the ratio and rejects <= 0; nothing to
      * store since the real ratio storage is internal-only (see file
-     * comment). */
-    uint32_t bits = ctx->r[4];
-    float ratio;
-    memcpy(&ratio, &bits, sizeof(ratio));
+     * comment).
+     *
+     * Real bug fix: this previously read `ratio` from ctx->r[4], as if
+     * float args shared the integer GPR sequence with the preceding
+     * pointer arg. Real PPC32 SVR4 ABI keeps GPRs and FPRs as
+     * completely independent argument-register sequences -- a
+     * (pointer, float) parameter list places the pointer in r3 and the
+     * float in f1, *not* r3/r4 -- confirmed empirically by compiling a
+     * real (void*, float) test function with this project's own
+     * zig-cc-based toolchain and reading recomp's real generated
+     * output (`stw r3` for the pointer, `stfs f1` for the float),
+     * not just asserted from a general ABI rule. r[4] held whatever
+     * the caller happened to leave there, not the real ratio. */
+    float ratio = (float)ctx->f[1];
     ctx->r[3] = (uint32_t)((ratio > 0.0f) ? 0 /* AX_VOICE_RATIO_RESULT_SUCCESS */ : (uint32_t)-1 /* _LESS_THAN_ZERO */);
 }
 
