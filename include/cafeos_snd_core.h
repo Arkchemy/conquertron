@@ -28,21 +28,48 @@
  * table: won't share correctly across more than one compiled `.c` file
  * in the same program.
  *
- * Deliberately NOT implemented here: the entire AXVoice-pointer family
- * (AXAcquireVoice/AXFreeVoice/AXVoiceBegin/AXVoiceEnd/AXIsVoiceRunning/
- * AXGetVoiceOffsets/AXSetVoice*, ~19 functions) -- real behavior hands
- * back a pointer into an OS-owned voice pool (AXVoice is exactly 0x58
- * bytes per wut's WUT_CHECK_SIZE, confirmed real, not caller-allocated
- * the way OSMutex/OSEvent are), and this runtime's `PpcContext::mem` is
- * a small fixed 64KB scratch region with no general allocator exposed
- * to shim code for handing out real backing storage per voice. Faking a
- * handle without real backing storage would silently break the moment
- * any real game code reads an AXVoice field directly instead of going
- * through an accessor (the struct layout is real and documented, so
- * that's not a hypothetical). Needs a real voice-pool allocation model,
- * tracked as its own follow-up, not guessed at here -- same standard as
- * nsyshid's HIDRead callback-invocation gap and coreinit's
- * OSCreateThread/OSThread-struct gap.
+ * The AXVoice-pointer family (AXAcquireVoice/AXFreeVoice/AXVoiceBegin/
+ * AXVoiceEnd/AXIsVoiceRunning/AXGetVoiceOffsets/AXSetVoice*, 19
+ * functions) is now implemented too, using the same fixed-region
+ * allocator approach `cafeos_coreinit_mem.h` introduced for MEM*: a
+ * dedicated fixed pool of real, dereferenceable 0x58-byte slots
+ * (AXVoice's real confirmed size per wut's WUT_CHECK_SIZE) reserved at
+ * 0xE100-0xEC00 in `PpcContext::mem` -- clear of both `cafeos_coreinit_
+ * mem.h`'s MEM1/MEM2/errno reservations and the stack-top region, same
+ * documented-placeholder trade-off as those. `AXAcquireVoice` hands
+ * back a real address into this pool; every setter that has a real,
+ * WUT-confirmed offset in the public `AXVoice` struct (state, the
+ * `AXVoiceOffsets` sub-struct, priority/callback/userContext) writes
+ * through to the real address for genuine round-trip correctness
+ * (`AXGetVoiceOffsets` reads back exactly what `AXSetVoiceOffsets`
+ * wrote). Setters whose real target data lives in Nintendo's *internal*
+ * mixer-only structures with no corresponding public `AXVoice` field at
+ * all (confirmed by reading Cemu's real HLE source, not guessed) --
+ * ADPCM data, source type/ratio storage, device mix, voice-effects
+ * volume -- are genuine accept-and-discard no-ops, since nothing in
+ * this shim (or real hardware, for that matter) ever reads them back
+ * through the public struct either. `AXSetVoiceSrcRatio` still does a
+ * real, meaningful check: real hardware's `AX_VOICE_RATIO_RESULT`
+ * enum rejects a non-positive ratio, so this validates and reports
+ * that correctly without needing to store anything.
+ *
+ * `AXIsVoiceRunning` always reports FALSE, which is honestly correct
+ * here rather than a shortcut: on real hardware this reflects whether
+ * the DSP mixer's *next processed frame* actually started the voice,
+ * confirmed via Cemu's HLE source to be tracked in a separate internal
+ * struct a real audio-frame callback updates -- since this runtime has
+ * no mixer and never processes an audio frame, a voice genuinely never
+ * "runs" here, the same honesty standard as vpad/padscore reporting
+ * "no real input source" rather than fabricating samples.
+ *
+ * `AXVoiceBegin`/`AXVoiceEnd` real behavior is a per-thread reentrancy
+ * *count* (Cemu's `__AXVoiceProtection`, keyed by which real OS thread
+ * currently holds the voice) -- simplified here to a flat
+ * acquire-returns-1/release-returns-0, since this runtime has no
+ * concept of "current thread" to key that count by in the first place
+ * (matches the no-real-concurrency reasoning used throughout this
+ * shim). A known, documented simplification of the real reentrancy
+ * semantics, not a guess at unconfirmed behavior.
  *
  * AXSetMaxVoices and AXRegisterExceedCallback: lower confidence than
  * everything else in this file. Both are real, confirmed exports (both
@@ -82,5 +109,124 @@ static inline void ppc_import_snd_core_AXSetDRCVSMode(PpcContext *ctx) { (void)c
 /* Lower confidence -- see file comment. */
 static inline void ppc_import_snd_core_AXSetMaxVoices(PpcContext *ctx) { (void)ctx; ctx->r[3] = 0; }
 static inline void ppc_import_snd_core_AXRegisterExceedCallback(PpcContext *ctx) { (void)ctx; ctx->r[3] = 0; /* no previous callback was ever set */ }
+
+/* --- AXVoice pool -- see file comment for the real-offset/no-op split. --- */
+
+#define BRAMBLE_AXVOICE_POOL_BASE 0xE100u
+#define BRAMBLE_AXVOICE_SLOT_SIZE 0x58u
+#define BRAMBLE_AXVOICE_MAX 32
+
+/* Real, WUT_CHECK_OFFSET-confirmed offsets within AXVoice. */
+#define BRAMBLE_AXVOICE_OFF_INDEX 0x00u
+#define BRAMBLE_AXVOICE_OFF_STATE 0x04u
+#define BRAMBLE_AXVOICE_OFF_PRIORITY 0x1Cu
+#define BRAMBLE_AXVOICE_OFF_CALLBACK 0x20u
+#define BRAMBLE_AXVOICE_OFF_USERCONTEXT 0x24u
+#define BRAMBLE_AXVOICE_OFF_OFFSETS 0x34u /* AXVoiceOffsets: dataType u16@+0, loopingEnabled u16@+2, loopOffset u32@+4, endOffset u32@+8, currentOffset u32@+c, data ptr@+0x10 */
+
+static int g_bramble_ax_voice_used[BRAMBLE_AXVOICE_MAX];
+
+static inline void ppc_import_snd_core_AXAcquireVoice(PpcContext *ctx) {
+    /* AXVoice *AXAcquireVoice(uint32_t priority, AXVoiceCallbackFn callback, void *userContext) */
+    uint32_t priority = ctx->r[3];
+    uint32_t callback = ctx->r[4];
+    uint32_t user_context = ctx->r[5];
+    int i;
+    for (i = 0; i < BRAMBLE_AXVOICE_MAX; i++) {
+        uint32_t addr, b;
+        if (g_bramble_ax_voice_used[i]) continue;
+        g_bramble_ax_voice_used[i] = 1;
+        addr = BRAMBLE_AXVOICE_POOL_BASE + (uint32_t)i * BRAMBLE_AXVOICE_SLOT_SIZE;
+        for (b = 0; b < BRAMBLE_AXVOICE_SLOT_SIZE; b++) ppc_store_u8(ctx, addr + b, 0);
+        ppc_store_u32(ctx, addr + BRAMBLE_AXVOICE_OFF_INDEX, (uint32_t)i);
+        ppc_store_u32(ctx, addr + BRAMBLE_AXVOICE_OFF_PRIORITY, priority);
+        ppc_store_u32(ctx, addr + BRAMBLE_AXVOICE_OFF_CALLBACK, callback);
+        ppc_store_u32(ctx, addr + BRAMBLE_AXVOICE_OFF_USERCONTEXT, user_context);
+        ctx->r[3] = addr;
+        return;
+    }
+    ctx->r[3] = 0; /* pool exhausted */
+}
+
+static inline void ppc_import_snd_core_AXFreeVoice(PpcContext *ctx) {
+    /* void AXFreeVoice(AXVoice *voice) */
+    uint32_t addr = ctx->r[3];
+    if (addr >= BRAMBLE_AXVOICE_POOL_BASE) {
+        uint32_t idx = (addr - BRAMBLE_AXVOICE_POOL_BASE) / BRAMBLE_AXVOICE_SLOT_SIZE;
+        if (idx < BRAMBLE_AXVOICE_MAX) g_bramble_ax_voice_used[idx] = 0;
+    }
+}
+
+static inline void ppc_import_snd_core_AXVoiceBegin(PpcContext *ctx) { (void)ctx; ctx->r[3] = 1; /* simplified reentrancy count -- see file comment */ }
+static inline void ppc_import_snd_core_AXVoiceEnd(PpcContext *ctx) { (void)ctx; ctx->r[3] = 0; }
+static inline void ppc_import_snd_core_AXIsVoiceRunning(PpcContext *ctx) { (void)ctx; ctx->r[3] = 0; /* no mixer ever processes a frame -- see file comment */ }
+
+static inline void ppc_import_snd_core_AXSetVoiceState(PpcContext *ctx) {
+    /* void AXSetVoiceState(AXVoice *voice, AXVoiceState state) */
+    ppc_store_u32(ctx, ctx->r[3] + BRAMBLE_AXVOICE_OFF_STATE, ctx->r[4]);
+}
+
+static inline void ppc_import_snd_core_AXSetVoiceOffsets(PpcContext *ctx) {
+    /* void AXSetVoiceOffsets(AXVoice *voice, AXVoiceOffsets *offsets) --
+     * copies the 5 scalar fields; `data` (the pointer at +0x10) is
+     * copied too for round-trip completeness even though nothing here
+     * dereferences it. */
+    uint32_t voice = ctx->r[3], src = ctx->r[4], dst = ctx->r[3] + BRAMBLE_AXVOICE_OFF_OFFSETS;
+    (void)voice;
+    ppc_store_u16(ctx, dst + 0x0, ppc_load_u16(ctx, src + 0x0));
+    ppc_store_u16(ctx, dst + 0x2, ppc_load_u16(ctx, src + 0x2));
+    ppc_store_u32(ctx, dst + 0x4, ppc_load_u32(ctx, src + 0x4));
+    ppc_store_u32(ctx, dst + 0x8, ppc_load_u32(ctx, src + 0x8));
+    ppc_store_u32(ctx, dst + 0xc, ppc_load_u32(ctx, src + 0xc));
+    ppc_store_u32(ctx, dst + 0x10, ppc_load_u32(ctx, src + 0x10));
+}
+
+static inline void ppc_import_snd_core_AXGetVoiceOffsets(PpcContext *ctx) {
+    /* void AXGetVoiceOffsets(AXVoice *voice, AXVoiceOffsets *offsets) -- inverse of Set above */
+    uint32_t src = ctx->r[3] + BRAMBLE_AXVOICE_OFF_OFFSETS, dst = ctx->r[4];
+    ppc_store_u16(ctx, dst + 0x0, ppc_load_u16(ctx, src + 0x0));
+    ppc_store_u16(ctx, dst + 0x2, ppc_load_u16(ctx, src + 0x2));
+    ppc_store_u32(ctx, dst + 0x4, ppc_load_u32(ctx, src + 0x4));
+    ppc_store_u32(ctx, dst + 0x8, ppc_load_u32(ctx, src + 0x8));
+    ppc_store_u32(ctx, dst + 0xc, ppc_load_u32(ctx, src + 0xc));
+    ppc_store_u32(ctx, dst + 0x10, ppc_load_u32(ctx, src + 0x10));
+}
+
+static inline void ppc_import_snd_core_AXSetVoiceCurrentOffset(PpcContext *ctx) {
+    /* void AXSetVoiceCurrentOffset(AXVoice *voice, uint32_t offset) */
+    ppc_store_u32(ctx, ctx->r[3] + BRAMBLE_AXVOICE_OFF_OFFSETS + 0xc, ctx->r[4]);
+}
+
+static inline void ppc_import_snd_core_AXSetVoiceEndOffset(PpcContext *ctx) {
+    /* void AXSetVoiceEndOffset(AXVoice *voice, uint32_t offset) */
+    ppc_store_u32(ctx, ctx->r[3] + BRAMBLE_AXVOICE_OFF_OFFSETS + 0x8, ctx->r[4]);
+}
+
+static inline void ppc_import_snd_core_AXSetVoiceLoop(PpcContext *ctx) {
+    /* void AXSetVoiceLoop(AXVoice *voice, AXVoiceLoop loop) */
+    ppc_store_u16(ctx, ctx->r[3] + BRAMBLE_AXVOICE_OFF_OFFSETS + 0x2, (uint16_t)ctx->r[4]);
+}
+
+static inline void ppc_import_snd_core_AXSetVoiceSrcRatio(PpcContext *ctx) {
+    /* AXVoiceSrcRatioResult AXSetVoiceSrcRatio(AXVoice *voice, float ratio) --
+     * real hardware validates the ratio and rejects <= 0; nothing to
+     * store since the real ratio storage is internal-only (see file
+     * comment). */
+    uint32_t bits = ctx->r[4];
+    float ratio;
+    memcpy(&ratio, &bits, sizeof(ratio));
+    ctx->r[3] = (uint32_t)((ratio > 0.0f) ? 0 /* AX_VOICE_RATIO_RESULT_SUCCESS */ : (uint32_t)-1 /* _LESS_THAN_ZERO */);
+}
+
+/* Internal-only on real hardware (confirmed via Cemu's HLE source) --
+ * no corresponding public AXVoice field exists to round-trip through,
+ * so these genuinely are accept-and-discard no-ops, not shortcuts. */
+static inline void ppc_import_snd_core_AXSetVoiceType(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_snd_core_AXSetVoiceSrcType(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_snd_core_AXSetVoiceSrc(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_snd_core_AXSetVoiceAdpcm(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_snd_core_AXSetVoiceAdpcmLoop(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_snd_core_AXSetVoiceVe(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_snd_core_AXSetVoiceDeviceMix(PpcContext *ctx) { (void)ctx; ctx->r[3] = 0; /* AX_RESULT_SUCCESS */ }
 
 #endif /* BRAMBLE_CAFEOS_SND_CORE_H */
