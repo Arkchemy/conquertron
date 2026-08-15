@@ -68,4 +68,30 @@ static inline void ppc_import_coreinit_OSGetTick(PpcContext *ctx) {
     ctx->r[3] = (uint32_t)ppc_coreinit_host_ticks();
 }
 
+/*
+ * OSSemaphore -- real signature confirmed against devkitPro/wut's
+ * coreinit/semaphore.h: `void OSInitSemaphore(OSSemaphore*, int32_t
+ * count)`, `int32_t OSSignalSemaphore(OSSemaphore*)`, `int32_t
+ * OSWaitSemaphore(OSSemaphore*)`, `int32_t OSTryWaitSemaphore(OSSemaphore*)`
+ * -- same "caller-allocated opaque struct" shape as OSMutex/OSEvent above,
+ * and the same single-PpcContext reasoning applies: with no second thread
+ * ever able to contend for it, a semaphore can't meaningfully block or
+ * need signaling. OSWaitSemaphore/OSTryWaitSemaphore both report success
+ * (the wait is immediately satisfied) rather than tracking a real count
+ * in guest memory -- consistent with OSTryLockMutex above, and for the
+ * same reason: this shim never allocates or writes through game-owned
+ * structs (see the __gh_errno_ptr/MEM* note in cafeos_coreinit.h for why
+ * that's a real, deliberate boundary, not an oversight). Real code that
+ * depends on an exact post-signal/wait *count* (rather than just
+ * treating the semaphore as a binary gate) isn't modeled correctly here
+ * -- a known limitation of this whole no-op-synchronization approach, not
+ * specific to semaphores.
+ */
+static inline void ppc_import_coreinit_OSInitSemaphore(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_coreinit_OSInitSemaphoreEx(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_coreinit_OSSignalSemaphore(PpcContext *ctx) { ctx->r[3] = 0; }
+static inline void ppc_import_coreinit_OSWaitSemaphore(PpcContext *ctx) { ctx->r[3] = 0; }
+static inline void ppc_import_coreinit_OSTryWaitSemaphore(PpcContext *ctx) { ctx->r[3] = 1; /* BOOL/int32_t true: always immediately available */ }
+static inline void ppc_import_coreinit_OSGetSemaphoreCount(PpcContext *ctx) { ctx->r[3] = 0; }
+
 #endif /* BRAMBLE_CAFEOS_COREINIT_SYNC_H */
