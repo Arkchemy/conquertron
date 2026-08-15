@@ -672,6 +672,32 @@ static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) {
     dkCmdBufSetStencil(g_bramble_gx2.cmdbuf, DkFace_Back, (uint8_t)back_write_mask, (uint8_t)back_ref, (uint8_t)back_mask);
 }
 
+static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) {
+    /* void GX2SetTargetChannelMasks(GX2ChannelMask mask0, mask1, ...,
+     * mask7) -- real signature confirmed against wut's
+     * gx2/registers.h: 8 real per-render-target params, one
+     * GX2ChannelMask each, all fitting exactly in r3-r10 (PPC32's
+     * entire integer argument register file -- a real "every register
+     * used" case, not the usual <8-arg function). GX2ChannelMask
+     * (confirmed against wut's gx2/enum.h: R=1, G=2, B=4, A=8, ORed
+     * together) uses the identical bit layout to deko3d's own
+     * DkColorMask (deko3d.h: R=1<<0, G=1<<1, B=1<<2, A=1<<3) -- a
+     * direct 1:1 passthrough into DkColorWriteState's per-target mask,
+     * no translation table needed, unlike most other GX2<->deko3d enum
+     * mappings in this file. */
+    uint32_t masks[8];
+    DkColorWriteState state;
+    uint32_t i;
+
+    for (i = 0; i < 8; i++) masks[i] = ctx->r[3 + i];
+
+    dkColorWriteStateDefaults(&state);
+    for (i = 0; i < 8; i++) {
+        dkColorWriteStateSetMask(&state, i, masks[i]);
+    }
+    dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &state);
+}
+
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
     /* void GX2SetPrimitiveRestartIndex(uint32_t index) -- real GX2
      * signature has no separate enable flag; deko3d's
@@ -768,6 +794,7 @@ static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) { (void)
 static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { (void)ctx; }
