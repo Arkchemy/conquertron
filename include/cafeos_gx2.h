@@ -513,6 +513,93 @@ static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) {
     dkCmdBufBindDepthStencilState(g_bramble_gx2.cmdbuf, &state);
 }
 
+static inline DkFrontFace bramble_gx2_front_face_to_dk(uint32_t gx2_front_face) {
+    /* GX2FrontFace -> DkFrontFace. Real GX2 order (CCW=0, CW=1,
+     * confirmed against wut's gx2/enum.h) is *inverted* relative to
+     * deko3d's real order (CW=0, CCW=1, confirmed against deko3d.h) --
+     * both APIs support the same two real winding conventions, just
+     * assign the opposite raw values, so this needs a real 2-entry
+     * lookup table, not an offset. */
+    static const uint8_t table[2] = {1, 0}; /* GX2 CCW(0)->Dk CCW(1), GX2 CW(1)->Dk CW(0) */
+    return (DkFrontFace)table[gx2_front_face & 1u];
+}
+
+static inline DkPolygonMode bramble_gx2_polygon_mode_to_dk(uint32_t gx2_mode) {
+    /* GX2PolygonMode -> DkPolygonMode. Real GX2 order (POINT=0, LINE=1,
+     * TRIANGLE=2, confirmed against wut's gx2/enum.h) is a direct match
+     * with deko3d's real order (Point=0, Line=1, Fill=2, confirmed
+     * against deko3d.h) -- GX2's "draw as filled triangles" and
+     * deko3d's "Fill" are the same real rasterization mode under
+     * different names, no offset or reordering needed. */
+    if (gx2_mode > 2) return DkPolygonMode_Fill; /* defensive fallback for an out-of-range/unrecognized value */
+    return (DkPolygonMode)gx2_mode;
+}
+
+static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) {
+    /* void GX2SetPolygonControl(GX2FrontFace frontFace, BOOL cullFront,
+     * BOOL cullBack, BOOL polyMode, GX2PolygonMode polyModeFront,
+     * GX2PolygonMode polyModeBack, BOOL polyOffsetFrontEnable,
+     * BOOL polyOffsetBackEnable, BOOL polyOffsetParaEnable) -- real
+     * signature confirmed against wut's gx2/registers.h, 9 real
+     * params. Only the first 8 fit in r3-r10; polyOffsetParaEnable
+     * (the 9th) is a real stack-passed arg at r1+8, same real
+     * convention already established by GX2SetDepthStencilControl
+     * above and FSReadFileWithPosAsync (cafeos_coreinit_fs.h).
+     *
+     * cullFront/cullBack (independent BOOLs) combine into deko3d's
+     * single DkFace cullMode (None/Front/Back/FrontAndBack) -- a
+     * direct, lossless real translation of the same two real culling
+     * switches into one field.
+     *
+     * polyMode (real AMD hardware "use polyModeFront/Back at all"
+     * master switch -- when false, real hardware always rasterizes as
+     * filled triangles regardless of polyModeFront/Back) has no
+     * separate on/off field in deko3d (DkRasterizerState's
+     * polygonModeFront/Back are always active); handled here by
+     * substituting Fill for both when polyMode is false, matching real
+     * hardware's actual behavior in that case rather than just
+     * ignoring the flag.
+     *
+     * polyOffsetFrontEnable/BackEnable/ParaEnable (real per-context
+     * depth-bias enable flags) have no deko3d equivalent -- deko3d's
+     * dkCmdBufSetDepthBias (used by GX2SetPolygonOffset above) has no
+     * separate enable/disable state of its own, consistent with how
+     * GX2SetPolygonOffset already documents always applying its bias
+     * unconditionally; these three flags are read but intentionally
+     * unused here, a known, honest gap rather than a silent drop. */
+    uint32_t front_face = ctx->r[3];
+    uint32_t cull_front = ctx->r[4];
+    uint32_t cull_back = ctx->r[5];
+    uint32_t poly_mode = ctx->r[6];
+    uint32_t poly_mode_front = ctx->r[7];
+    uint32_t poly_mode_back = ctx->r[8];
+    uint32_t poly_offset_front_enable = ctx->r[9];
+    uint32_t poly_offset_back_enable = ctx->r[10];
+    uint32_t poly_offset_para_enable = ppc_load_u32(ctx, ctx->r[1] + 8);
+    DkRasterizerState state;
+
+    (void)poly_offset_front_enable; /* no deko3d equivalent -- see comment above */
+    (void)poly_offset_back_enable;  /* no deko3d equivalent -- see comment above */
+    (void)poly_offset_para_enable;  /* no deko3d equivalent -- see comment above */
+
+    dkRasterizerStateDefaults(&state);
+    state.frontFace = bramble_gx2_front_face_to_dk(front_face);
+    if (cull_front && cull_back) state.cullMode = DkFace_FrontAndBack;
+    else if (cull_front) state.cullMode = DkFace_Front;
+    else if (cull_back) state.cullMode = DkFace_Back;
+    else state.cullMode = DkFace_None;
+
+    if (poly_mode) {
+        state.polygonModeFront = bramble_gx2_polygon_mode_to_dk(poly_mode_front);
+        state.polygonModeBack = bramble_gx2_polygon_mode_to_dk(poly_mode_back);
+    } else {
+        state.polygonModeFront = DkPolygonMode_Fill;
+        state.polygonModeBack = DkPolygonMode_Fill;
+    }
+
+    dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, &state);
+}
+
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
     /* void GX2SetPrimitiveRestartIndex(uint32_t index) -- real GX2
      * signature has no separate enable flag; deko3d's
@@ -605,6 +692,7 @@ static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) { (v
 static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { (void)ctx; }
