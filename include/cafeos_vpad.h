@@ -14,12 +14,23 @@
  * KPADRead's reasoning -- a 0-count return means no caller should read
  * from it.
  *
- * VPADGetTPCalibratedPoint (touch-panel calibration) is deliberately
- * NOT implemented here: it writes a real calibrated VPADTouchData based
- * on a real calibration transform this project hasn't verified, and
- * since no real touch events are ever generated in this runtime to
- * begin with, there's nothing to correctly calibrate -- tracked as a
- * gap rather than guessed at.
+ * VPADGetTPCalibratedPoint: real signature confirmed against
+ * vpad/input.h -- `void VPADGetTPCalibratedPoint(VPADChan chan,
+ * VPADTouchData *calibratedData, const VPADTouchData *uncalibratedData)`.
+ * The real transform (confirmed via Cemu's actual HLE source,
+ * src/Cafe/OS/libs/vpad/vpad.cpp) is
+ * `calibrated = raw - (calibrationParam.{x,y} * calibrationParam.scale_{x,y})`
+ * against a real, confirmed `VPADTouchCalibrationParam` this game never
+ * sets (`VPADSetTPCalibrationParam` isn't in this binary's real import
+ * list, confirmed by recompiling the actual `tfbGame_cafe.rpx`) -- so
+ * the calibration param this transform would use is real hardware's own
+ * zero-initialized default (matching Cemu's own default-constructed
+ * `VPADTPCalibrationParam{}`), which makes the formula an honest
+ * identity transform (`x - 0*0 == x`), not a guessed shortcut. Copies
+ * `x`/`y`/`touched`/`validity` straight through. No real touch events
+ * are ever generated in this runtime to begin with (matches `VPADRead`
+ * above), so this transform is never exercised against real user input
+ * either way, same as everywhere else in this file.
  */
 static inline void ppc_import_vpad_VPADRead(PpcContext *ctx) {
     /* int32_t VPADRead(chan, buffers, count, outError) -- r6 is
@@ -33,5 +44,13 @@ static inline void ppc_import_vpad_VPADRead(PpcContext *ctx) {
 static inline void ppc_import_vpad_VPADControlMotor(PpcContext *ctx) { ctx->r[3] = 0; }
 static inline void ppc_import_vpad_VPADStopMotor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_vpad_VPADSetAccParam(PpcContext *ctx) { (void)ctx; }
+
+static inline void ppc_import_vpad_VPADGetTPCalibratedPoint(PpcContext *ctx) {
+    uint32_t calibrated_addr = ctx->r[4], raw_addr = ctx->r[5];
+    ppc_store_u16(ctx, calibrated_addr + 0x0, ppc_load_u16(ctx, raw_addr + 0x0)); /* x */
+    ppc_store_u16(ctx, calibrated_addr + 0x2, ppc_load_u16(ctx, raw_addr + 0x2)); /* y */
+    ppc_store_u16(ctx, calibrated_addr + 0x4, ppc_load_u16(ctx, raw_addr + 0x4)); /* touched */
+    ppc_store_u16(ctx, calibrated_addr + 0x6, ppc_load_u16(ctx, raw_addr + 0x6)); /* validity */
+}
 
 #endif /* BRAMBLE_CAFEOS_VPAD_H */
