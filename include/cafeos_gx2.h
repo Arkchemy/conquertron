@@ -52,6 +52,7 @@
 
 #ifdef __SWITCH__
 #include <deko3d.h>
+#include <switch.h>
 
 /*
  * Real, host-side (not guest-memory) deko3d state -- this project's
@@ -69,17 +70,82 @@
  * sizing once real usage volume is known" trade-off already used
  * elsewhere in this project (assign_global_addrs, PpcContext::mem).
  */
+#define BRAMBLE_GX2_NUM_FRAMEBUFFERS 2u
+#define BRAMBLE_GX2_FB_WIDTH 1280u
+#define BRAMBLE_GX2_FB_HEIGHT 720u
+
 typedef struct {
     bool initialized;
     DkDevice device;
     DkMemBlock cmd_mem_block;
     DkCmdBuf cmdbuf;
     DkQueue queue;
+
+    /* Real swapchain/framebuffer state -- following devkitPro's own
+     * official deko3d Example01 (Simple Setup) structure directly, not
+     * improvised. Fixed 1280x720/2-framebuffer sizing is a real,
+     * documented placeholder (same "generous starting point, not a
+     * final answer" trade-off already used throughout this project),
+     * not read from any real GX2 surface description yet -- see
+     * GX2SetColorBuffer's own deferred status below. */
+    DkMemBlock fb_mem_block;
+    DkImage framebuffers[BRAMBLE_GX2_NUM_FRAMEBUFFERS];
+    DkSwapchain swapchain;
+    int acquired_slot; /* -1 if no framebuffer image is currently acquired this frame */
 } BrambleGx2State;
 
 static BrambleGx2State g_bramble_gx2;
 
 #define BRAMBLE_GX2_CMD_MEM_SIZE 0x10000u
+
+static inline void bramble_gx2_create_framebuffers(void) {
+    DkImageLayout layout;
+    DkImageLayoutMaker layout_maker;
+    DkImage const *fb_array[BRAMBLE_GX2_NUM_FRAMEBUFFERS];
+    uint64_t fb_size;
+    uint32_t fb_align, i;
+    DkMemBlockMaker fb_mem_maker;
+    DkSwapchainMaker swapchain_maker;
+
+    dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
+    layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_HwCompression;
+    layout_maker.format = DkImageFormat_RGBA8_Unorm;
+    layout_maker.dimensions[0] = BRAMBLE_GX2_FB_WIDTH;
+    layout_maker.dimensions[1] = BRAMBLE_GX2_FB_HEIGHT;
+    dkImageLayoutInitialize(&layout, &layout_maker);
+
+    fb_size = dkImageLayoutGetSize(&layout);
+    fb_align = dkImageLayoutGetAlignment(&layout);
+
+    dkMemBlockMakerDefaults(&fb_mem_maker, g_bramble_gx2.device,
+                             (uint32_t)((fb_size * BRAMBLE_GX2_NUM_FRAMEBUFFERS + fb_align - 1) & ~(uint64_t)(fb_align - 1)));
+    fb_mem_maker.flags = DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
+    g_bramble_gx2.fb_mem_block = dkMemBlockCreate(&fb_mem_maker);
+
+    for (i = 0; i < BRAMBLE_GX2_NUM_FRAMEBUFFERS; i++) {
+        dkImageInitialize(&g_bramble_gx2.framebuffers[i], &layout, g_bramble_gx2.fb_mem_block, (uint32_t)(i * fb_size));
+        fb_array[i] = &g_bramble_gx2.framebuffers[i];
+    }
+
+    dkSwapchainMakerDefaults(&swapchain_maker, g_bramble_gx2.device, nwindowGetDefault(), fb_array, BRAMBLE_GX2_NUM_FRAMEBUFFERS);
+    g_bramble_gx2.swapchain = dkSwapchainCreate(&swapchain_maker);
+
+    g_bramble_gx2.acquired_slot = -1;
+}
+
+/* Ensures a real swapchain framebuffer image is acquired and bound as
+ * the current render target before any clear/draw command that needs
+ * one -- lazy, so a frame with no clear/draw calls at all doesn't
+ * needlessly acquire+present an unused image. */
+static inline void bramble_gx2_ensure_frame_acquired(void) {
+    DkImageView color_target;
+    DkImageView const *targets[1];
+    if (g_bramble_gx2.acquired_slot >= 0) return;
+    g_bramble_gx2.acquired_slot = dkQueueAcquireImage(g_bramble_gx2.queue, g_bramble_gx2.swapchain);
+    dkImageViewDefaults(&color_target, &g_bramble_gx2.framebuffers[g_bramble_gx2.acquired_slot]);
+    targets[0] = &color_target;
+    dkCmdBufBindRenderTargets(g_bramble_gx2.cmdbuf, targets, 1, NULL);
+}
 
 static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) {
     /* void GX2Init(uint32_t *attributes) -- real attributes array
@@ -111,6 +177,8 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) {
     queue_maker.flags = DkQueueFlags_Graphics;
     g_bramble_gx2.queue = dkQueueCreate(&queue_maker);
 
+    bramble_gx2_create_framebuffers();
+
     g_bramble_gx2.initialized = true;
 }
 
@@ -118,6 +186,10 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) {
     (void)ctx;
     if (!g_bramble_gx2.initialized) return;
     dkQueueWaitIdle(g_bramble_gx2.queue);
+    dkCmdBufClear(g_bramble_gx2.cmdbuf); /* destroys any recorded cmdlists still referencing the framebuffers below */
+    dkSwapchainDestroy(g_bramble_gx2.swapchain);
+    /* DkImage itself needs no explicit per-image destroy call -- only its backing DkMemBlock does */
+    dkMemBlockDestroy(g_bramble_gx2.fb_mem_block);
     dkQueueDestroy(g_bramble_gx2.queue);
     dkCmdBufDestroy(g_bramble_gx2.cmdbuf);
     dkMemBlockDestroy(g_bramble_gx2.cmd_mem_block);
@@ -201,6 +273,48 @@ static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
     dkCmdBufSetPrimitiveRestart(g_bramble_gx2.cmdbuf, true, ctx->r[3]);
 }
 
+static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) {
+    /* void GX2ClearColor(GX2ColorBuffer *colorBuffer, float red, float
+     * green, float blue, float alpha) -- real args: r3=colorBuffer
+     * (ignored, see below), f1-f4=r,g,b,a.
+     *
+     * Real, honestly-documented simplification: the real `colorBuffer`
+     * argument (a full real `GX2ColorBuffer`/`GX2Surface` describing an
+     * arbitrary render target, possibly an off-screen texture) is not
+     * yet parsed -- there's no real surface/texture-to-deko3d-image
+     * binding path yet (that needs the still-unattempted AMD tiling
+     * math, or a documented simplification of its own, for real pixel
+     * data interpretation). This always clears whichever real Switch
+     * swapchain framebuffer is currently the active render target
+     * instead -- correct only for the common "clear the actual screen
+     * you're about to draw the frame to" case, not for clearing an
+     * arbitrary off-screen surface. Real, visible, testable progress
+     * for that common case; a known, documented gap for the other. */
+    (void)ctx;
+    bramble_gx2_ensure_frame_acquired();
+    dkCmdBufClearColorFloat(g_bramble_gx2.cmdbuf, 0, DkColorMask_RGBA,
+                            (float)ctx->f[1], (float)ctx->f[2], (float)ctx->f[3], (float)ctx->f[4]);
+}
+
+static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) {
+    /* void GX2SwapScanBuffers(void) -- real behavior presents the TV
+     * scan buffer (and, on real hardware, the separate GamePad/DRC scan
+     * buffer -- this runtime has only one real display target, the
+     * Switch's own screen, so there's no second buffer to swap here).
+     * Submits whatever was recorded into the persistent command buffer
+     * since the last swap (state changes, GX2ClearColor, and -- once
+     * implemented -- real draw calls), presents the acquired
+     * framebuffer, and resets for the next frame. If nothing this frame
+     * ever called something that acquires a framebuffer (e.g. a frame
+     * with no GX2ClearColor/draw calls at all), this is a real, safe
+     * no-op -- there's nothing to present. */
+    (void)ctx;
+    if (g_bramble_gx2.acquired_slot < 0) return;
+    dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
+    dkQueuePresentImage(g_bramble_gx2.queue, g_bramble_gx2.swapchain, g_bramble_gx2.acquired_slot);
+    g_bramble_gx2.acquired_slot = -1;
+}
+
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
 
 static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { (void)ctx; }
@@ -212,6 +326,8 @@ static inline void ppc_import_gx2_GX2SetPointSize(PpcContext *ctx) { (void)ctx; 
 static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { (void)ctx; }
 
 #endif /* __SWITCH__ */
 
