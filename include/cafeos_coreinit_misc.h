@@ -28,6 +28,24 @@
  *   consistent choice -- this runtime never models more than one
  *   execution context, so "which core" has no real meaning here beyond
  *   being a stable value real code can compare against.
+ * - OSGetConsoleType(void): real signature and real return value both
+ *   confirmed directly against Cemu's actual HLE implementation
+ *   (src/Cafe/OS/libs/coreinit/coreinit.cpp) -- `return 0x03000050;`,
+ *   a fixed hardware-identifying constant, not a guess. Since real
+ *   retail Wii U hardware always returns this same fixed value too
+ *   (it's not runtime-detected there either), reproducing it verbatim
+ *   is a real, correct implementation, not a stand-in.
+ * - OSSendAppSwitchRequest(...): requests switching to another
+ *   application (e.g. force-opening the HOME menu) -- lower confidence
+ *   than everything else in this file: it's a real confirmed export
+ *   (in wut's own `cafe/coreinit.def`), but no confirmed prototype
+ *   exists in either wut's public headers or Cemu's HLE (which doesn't
+ *   implement it at all). Since no HOME menu or other application
+ *   exists in this runtime to switch to, always reporting failure
+ *   (`BOOL` 0) is the correct real-world behavior regardless of the
+ *   exact unconfirmed argument list -- this shim never reads any
+ *   register beyond touching `r3`, so it's safe independent of how
+ *   many real arguments the function actually takes.
  */
 static inline void ppc_import_coreinit_OSEnableForegroundExit(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_coreinit_OSEnableHomeButtonMenu(PpcContext *ctx) { (void)ctx; }
@@ -39,6 +57,9 @@ static inline void ppc_import_coreinit_OSSavesDone_ReadyToRelease(PpcContext *ct
 static inline void ppc_import_coreinit_OSYieldThread(PpcContext *ctx) { (void)ctx; }
 
 static inline void ppc_import_coreinit_OSGetCoreId(PpcContext *ctx) { ctx->r[3] = 0; }
+
+static inline void ppc_import_coreinit_OSGetConsoleType(PpcContext *ctx) { ctx->r[3] = 0x03000050u; }
+static inline void ppc_import_coreinit_OSSendAppSwitchRequest(PpcContext *ctx) { ctx->r[3] = 0; /* BOOL FALSE -- no app to switch to */ }
 
 /*
  * UCOpen/UCClose/UCReadSysConfig (Wii U system config, e.g. region and
