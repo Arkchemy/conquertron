@@ -40,4 +40,26 @@ static inline void ppc_import_coreinit_OSYieldThread(PpcContext *ctx) { (void)ct
 
 static inline void ppc_import_coreinit_OSGetCoreId(PpcContext *ctx) { ctx->r[3] = 0; }
 
+/*
+ * UCOpen/UCClose/UCReadSysConfig (Wii U system config, e.g. region and
+ * parental-control settings): real signatures confirmed against
+ * `coreinit/userconfig.h` -- `UCHandle UCOpen()`, `UCError
+ * UCClose(UCHandle)`, `UCError UCReadSysConfig(UCHandle, uint32_t count,
+ * UCSysConfig *settings)`. `UC_ERROR_OK` (0) is real success,
+ * `UC_ERROR_KEY_NOT_FOUND` (-0x200009) is real "no such config key."
+ *
+ * No real Wii U system config store exists here. `UCOpen` hands back a
+ * fixed valid-looking handle (1) since there's nothing that needs real
+ * per-open state; `UCClose` always succeeds. `UCReadSysConfig`
+ * deliberately reports every requested key as not-found rather than
+ * guessing at `UCSysConfig`'s real per-entry layout (name/dataType/data
+ * pointer) to fabricate a plausible-looking value -- real code asking
+ * about config it can't get is expected to have a sane default/fallback
+ * for exactly this "not found" case already, so this is an honest
+ * negative answer, not a guess.
+ */
+static inline void ppc_import_coreinit_UCOpen(PpcContext *ctx) { ctx->r[3] = 1; }
+static inline void ppc_import_coreinit_UCClose(PpcContext *ctx) { ctx->r[3] = 0; }
+static inline void ppc_import_coreinit_UCReadSysConfig(PpcContext *ctx) { ctx->r[3] = (uint32_t)-0x200009; }
+
 #endif /* BRAMBLE_CAFEOS_COREINIT_MISC_H */
