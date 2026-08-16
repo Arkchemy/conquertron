@@ -3211,4 +3211,88 @@ static inline void ppc_import_gx2_GX2SetContextState(PpcContext *ctx) {
     (void)ctx;
 }
 
+static inline void ppc_import_gx2_GX2CopySurface(PpcContext *ctx) {
+    /* void GX2CopySurface(const GX2Surface *src, uint32_t srcLevel,
+     * uint32_t srcSlice, GX2Surface *dst, uint32_t dstLevel,
+     * uint32_t dstSlice) -- real signature confirmed against wut's
+     * gx2/surface.h; real PPC32 ABI: r3=src, r4=srcLevel, r5=srcSlice,
+     * r6=dst, r7=dstLevel, r8=dstSlice.
+     *
+     * Real reference behavior (decaf-emu's actual `gx2_surface.cpp`):
+     * the general case is a real AMD GPU 2D-copy-engine command
+     * (arbitrary tile-mode/format conversion, real, substantial, and
+     * out of this project's current bounded scope, same reasoning as
+     * `GX2CalcSurfaceSizeAndAlignment`'s own macro/micro-tile gap) --
+     * but real hardware's own actual special case, confirmed directly
+     * in that same real source (`if (src->tileMode ==
+     * GX2TileMode::LinearSpecial || dst->tileMode ==
+     * GX2TileMode::LinearSpecial) { ... a real, plain CPU-side copy,
+     * not the GPU 2D engine ... }`), is exactly this project's own
+     * already-supported linear-tile-mode scope. This function ports
+     * *that* real case: both `src`/`dst` already-resolved-linear
+     * (`TM_LINEAR_ALIGNED`(1)/`TM_LINEAR_SPECIAL`(16), matching every
+     * other bounded function in this file), mip level 0 only, and
+     * (a real, additional, honestly-documented restriction beyond
+     * what real hardware itself requires, since format conversion is
+     * real AMD pixel-format-shuffle math this project hasn't ported)
+     * `src`/`dst` sharing the same real `UNORM_R8_G8_B8_A8` (0x1a)
+     * format already used throughout this file. Any other real input
+     * combination is a real, honest, documented gap: nothing is
+     * copied, matching this file's established "don't guess" pattern.
+     * Pure guest-memory-to-guest-memory copy (each surface's own real
+     * `image`/`pitch` fields, respected independently on each side,
+     * same real bytes-per-pixel-times-pitch row-stride math already
+     * used by `GX2SetColorBuffer`/`GX2SetDepthBuffer` above) -- no
+     * deko3d call at all, works identically on host and Switch,
+     * regardless of whether either surface happens to currently be
+     * bound as a live render target (this function only ever touches
+     * their own guest bytes, independent of that). */
+    uint32_t src_addr = ctx->r[3];
+    uint32_t src_level = ctx->r[4];
+    uint32_t dst_addr = ctx->r[6];
+    uint32_t dst_level = ctx->r[7];
+    uint32_t bytes_per_pixel = 4u; /* RGBA8_UNORM only, see this function's own comment */
+    uint32_t src_dim, src_width, src_height, src_format, src_tile_mode, src_pitch, src_image;
+    uint32_t dst_dim, dst_width, dst_height, dst_format, dst_tile_mode, dst_pitch, dst_image;
+    uint32_t copy_width, copy_height, copy_bytes, row;
+
+    if (src_level != 0u || dst_level != 0u) return; /* real scope: mip level 0 only */
+
+    src_dim = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
+    src_width = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
+    src_height = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
+    src_format = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
+    src_tile_mode = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
+    src_pitch = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
+    src_image = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+
+    dst_dim = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
+    dst_width = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
+    dst_height = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
+    dst_format = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
+    dst_tile_mode = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
+    dst_pitch = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
+    dst_image = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+
+    if (src_dim != 1u || dst_dim != 1u) return;                                       /* real scope: DIM_2D only */
+    if (src_tile_mode != 1u && src_tile_mode != 16u) return;                          /* real scope: already-resolved-linear only */
+    if (dst_tile_mode != 1u && dst_tile_mode != 16u) return;
+    if (src_format != 0x1au || dst_format != 0x1au) return;                           /* real scope: same-format RGBA8_UNORM only */
+    if (src_width == 0u || src_height == 0u || src_pitch == 0u) return;
+    if (dst_width == 0u || dst_height == 0u || dst_pitch == 0u) return;
+
+    copy_width = (src_width < dst_width) ? src_width : dst_width;
+    copy_height = (src_height < dst_height) ? src_height : dst_height;
+    copy_bytes = bytes_per_pixel * copy_width;
+
+    for (row = 0; row < copy_height; row++) {
+        uint32_t src_off = src_image + row * src_pitch * bytes_per_pixel;
+        uint32_t dst_off = dst_image + row * dst_pitch * bytes_per_pixel;
+        uint32_t i;
+        for (i = 0; i < copy_bytes; i++) {
+            ppc_store_u8(ctx, dst_off + i, ppc_load_u8(ctx, src_off + i));
+        }
+    }
+}
+
 #endif /* BRAMBLE_CAFEOS_GX2_H */
