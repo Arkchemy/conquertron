@@ -2856,6 +2856,36 @@ static inline void ppc_import_gx2_GX2SetClearDepthStencil(PpcContext *ctx) {
     ppc_store_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET, stencil);
 }
 
+static inline void ppc_import_gx2_GX2ClearDepthStencilEx(PpcContext *ctx) {
+    /* void GX2ClearDepthStencilEx(GX2DepthBuffer *depthBuffer,
+     * float depth, uint8_t stencil, GX2ClearFlags clearMode) -- real
+     * signature confirmed against wut's gx2/clear.h; real PPC32 SVR4
+     * ABI: r3=depthBuffer, r4=stencil, r5=clearMode (integer sequence),
+     * f1=depth (independent float sequence) -- same pattern as
+     * GX2SetClearDepthStencil above. `GX2_CLEAR_FLAGS_DEPTH`(1)/
+     * `_STENCIL`(2)/`_BOTH`(3) confirmed against wut's gx2/enum.h.
+     *
+     * Real, honestly-documented gap, same shape as GX2ClearColor's own
+     * (see its comment above): unlike GX2SetClearDepthStencil (a pure
+     * guest-memory field write, already implemented, no deko3d call
+     * needed), this function's real job is to *immediately* clear a
+     * real GPU depth/stencil surface using the values passed here
+     * directly -- but this project's swapchain render pass doesn't
+     * bind a depth attachment at all yet
+     * (`bramble_gx2_ensure_frame_acquired`'s own
+     * `dkCmdBufBindRenderTargets` call passes `NULL` for it), so
+     * there's no real, live depth target for `dkCmdBufClearDepthStencil`
+     * to act on -- wiring one in is the same real, deliberately
+     * deferred scope as GX2SetColorBuffer's off-swapchain binding (see
+     * its own comment), not attempted here to avoid risking the one
+     * render path this project has confirmed working on real hardware.
+     * A real, callable no-op for now, same reasoning as
+     * GX2InitColorBufferRegs and friends above: exists so real game
+     * code calling this compiles/links, not a claim of a real clear
+     * happening. */
+    (void)ctx;
+}
+
 /* ---- GX2Sampler init family ------------------------------------------
  *
  * GX2Sampler is a real, tiny opaque struct: `uint32_t regs[3]` (12 bytes,
