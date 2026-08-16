@@ -1830,22 +1830,17 @@ static inline void ppc_import_gx2_GX2GetDisplayListWriteStatus(PpcContext *ctx) 
     ctx->r[3] = 0; /* FALSE */
 }
 
-static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) {
-    /* uint32_t GX2GetSurfaceFormatBits(GX2SurfaceFormat format) -- real
-     * formula and table confirmed directly against Cemu's HLE
-     * (Latte::GetFormatBits + Latte::IsCompressedFormat in
-     * src/Cafe/HW/Latte/ISA/LatteReg.h): mask the format to its low 6
-     * bits (the real hardware format index, GX2's own surface-format
-     * encoding already reserves the upper bits for sign/int/float/sRGB
-     * modifiers that don't change bit width), look up a fixed 64-entry
-     * bits-per-pixel table, then for the real hardware's BC1-BC5
-     * compressed-format range (0x31-0x35) divide by 16 (a compressed
-     * "pixel" entry in this table is really a 4x4 block). Cross-checked
-     * by hand against wut's own confirmed GX2SurfaceFormat values: e.g.
-     * UNORM_R8_G8_B8_A8 (0x1a) -> 32 bits (4x8bpp, correct), UNORM_R8
-     * (0x01) -> 8 bits (correct), UNORM_BC1 (0x31) -> 64/16 = 4 bits
-     * (BC1's real, well-known 4-bits-per-pixel compression ratio,
-     * correct) -- not just copied blind. */
+/* Real, table-driven bits-per-pixel lookup shared by
+ * GX2GetSurfaceFormatBits and GX2CalcSurfaceSizeAndAlignment below --
+ * confirmed directly against Cemu's HLE (Latte::GetFormatBits in
+ * src/Cafe/HW/Latte/ISA/LatteReg.h). Returns the real *undivided* value
+ * (64/128 for the real BC1-BC5 compressed range, 0x31-0x35) -- GX2's
+ * own real AddrLib tiling math (GetBitsPerPixel in LatteAddrLib.cpp)
+ * always uses this undivided form directly, since real tiling
+ * operates on a whole compressed 4x4 block as one addressable unit;
+ * only GX2GetSurfaceFormatBits' own real, public "bits per reported
+ * pixel" meaning divides by 16 on top, as its own separate step. */
+static inline uint32_t bramble_gx2_hw_format_bits_raw(uint32_t hw_format) {
     static const uint8_t bits_table[64] = {
         0x00, 0x08, 0x08, 0x00, 0x00, 0x10, 0x10, 0x10,
         0x10, 0x10, 0x10, 0x10, 0x10, 0x20, 0x20, 0x20,
@@ -1856,9 +1851,28 @@ static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) {
         0x60, 0x40, 0x80, 0x80, 0x40, 0x80, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     };
+    return bits_table[hw_format & 0x3Fu];
+}
+
+static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) {
+    /* uint32_t GX2GetSurfaceFormatBits(GX2SurfaceFormat format) -- real
+     * formula confirmed directly against Cemu's HLE
+     * (Latte::GetFormatBits + Latte::IsCompressedFormat in
+     * src/Cafe/HW/Latte/ISA/LatteReg.h): mask the format to its low 6
+     * bits (the real hardware format index, GX2's own surface-format
+     * encoding already reserves the upper bits for sign/int/float/sRGB
+     * modifiers that don't change bit width), look up
+     * bramble_gx2_hw_format_bits_raw's real, shared table, then for the
+     * real hardware's BC1-BC5 compressed-format range (0x31-0x35)
+     * divide by 16 (a compressed "pixel" entry in this table is really
+     * a 4x4 block). Cross-checked by hand against wut's own confirmed
+     * GX2SurfaceFormat values: e.g. UNORM_R8_G8_B8_A8 (0x1a) -> 32 bits
+     * (4x8bpp, correct), UNORM_R8 (0x01) -> 8 bits (correct), UNORM_BC1
+     * (0x31) -> 64/16 = 4 bits (BC1's real, well-known 4-bits-per-pixel
+     * compression ratio, correct) -- not just copied blind. */
     uint32_t format = ctx->r[3];
     uint32_t hw_format = format & 0x3Fu;
-    uint32_t bpp = bits_table[hw_format];
+    uint32_t bpp = bramble_gx2_hw_format_bits_raw(hw_format);
     if (hw_format >= 0x31u && hw_format <= 0x35u) { /* real BC1-BC5 compressed range */
         bpp /= 16u;
     }
@@ -1894,6 +1908,243 @@ static inline void ppc_import_gx2_GX2CalcColorBufferAuxInfo(PpcContext *ctx) {
     uint32_t out_align_addr = ctx->r[5];
     ppc_store_u32(ctx, out_size_addr, 0x1000u);
     ppc_store_u32(ctx, out_align_addr, 0x100u);
+}
+
+/* ---- GX2CalcSurfaceSizeAndAlignment ------------------------------------
+ *
+ * Real, faithful port of a real, bounded subset of Cemu's actual
+ * LatteAddrLib (src/Cafe/HW/Latte/LatteAddrLib/LatteAddrLib.cpp,
+ * itself a reimplementation of AMD's real "AddrLib" GPU
+ * tiling/addressing library) -- ported by reading Cemu's real source
+ * directly, not derived or guessed. Real, deliberately bounded scope:
+ * mip level 0 only (no mip-chain support), and only the real tile
+ * modes that stay genuinely *linear* (no macro/micro tiling, no
+ * bank/pipe swizzle math -- a real, separate, much larger AMD hardware
+ * subsystem this project has not attempted). Real, important finding
+ * from reading the actual algorithm: `GX2_TILE_MODE_DEFAULT`/
+ * `TM_LINEAR_GENERAL` (tileMode==0) is NOT a request to stay linear on
+ * real hardware -- real `GX2CalcSurfaceSizeAndAlignment`
+ * (`GX2_Surface.cpp`) auto-*upgrades* it to real macro tiling
+ * (`TM_2D_TILED_THIN1`/`TM_2D_TILED_THICK`) for any surface that isn't
+ * specifically 1D, so the common real "just use the default tiling"
+ * case for 2D textures/render targets is genuinely NOT covered by this
+ * implementation -- an honest, real, documented gap, not a mistake.
+ * Real tile modes this *does* correctly compute, faithfully matching
+ * Cemu's own real formulas field-for-field:
+ *   - `GX2_TILE_MODE_LINEAR_SPECIAL` (16): a real, entirely
+ *     self-contained formula (the first branch of
+ *     `LatteAddrLib::GX2CalculateSurfaceInfo`) that bypasses all
+ *     tiling/mip-level machinery.
+ *   - `GX2_TILE_MODE_LINEAR_ALIGNED` (1), explicitly requested: real
+ *     `_ComputeSurfaceInfoLinear`/`_ComputeSurfaceAlignmentsLinear`
+ *     math (pipe-interleave-based pitch alignment).
+ *   - `GX2_TILE_MODE_DEFAULT` (0) on a real 1D surface specifically:
+ *     real hardware upgrades this to `LINEAR_ALIGNED` too (confirmed
+ *     in the same real source), so this is handled the same way,
+ *     including writing the real upgraded tileMode back to the guest
+ *     struct, matching real behavior.
+ * Every other real input (any explicitly-tiled mode, `TM_32_SPECIAL`,
+ * or `TM_LINEAR_GENERAL`/`DEFAULT` on a non-1D surface, or
+ * `mipLevels > 1`) is a real, honest, documented gap: the guest
+ * surface's `imageSize`/`pitch`/`alignment`/`tileMode`/`swizzle`
+ * fields are left completely untouched rather than guessed at -- a
+ * real caller relying on this function for one of those cases won't
+ * get silently-wrong data, just stale/whatever-was-there-before data,
+ * the same "don't guess, leave it honestly incomplete" choice this
+ * project already makes elsewhere (e.g. `GX2SetPixelSampler`'s
+ * out-of-range index no-op). */
+
+#define BRAMBLE_GX2_SURFACE_DIM_OFFSET 0x00u
+#define BRAMBLE_GX2_SURFACE_WIDTH_OFFSET 0x04u
+#define BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET 0x08u
+#define BRAMBLE_GX2_SURFACE_DEPTH_OFFSET 0x0Cu
+#define BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET 0x10u
+#define BRAMBLE_GX2_SURFACE_FORMAT_OFFSET 0x14u
+#define BRAMBLE_GX2_SURFACE_AA_OFFSET 0x18u
+#define BRAMBLE_GX2_SURFACE_IMAGE_SIZE_OFFSET 0x20u
+#define BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET 0x30u
+#define BRAMBLE_GX2_SURFACE_SWIZZLE_OFFSET 0x34u
+#define BRAMBLE_GX2_SURFACE_ALIGNMENT_OFFSET 0x38u
+#define BRAMBLE_GX2_SURFACE_PITCH_OFFSET 0x3Cu
+#define BRAMBLE_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET 0x40u
+
+/* Real dim-dependent height/depth resolution for the TM_LINEAR_SPECIAL
+ * path, confirmed against LatteAddrLib.cpp's own real switch (the one
+ * inside GX2CalculateSurfaceInfo's TM_LINEAR_SPECIAL branch) -- height
+ * gets a real, additional block-size rounding step afterward, done by
+ * the caller, not here. */
+static inline void bramble_gx2_calc_dim_linear_special(uint32_t dim, uint32_t height_in, uint32_t depth_in,
+                                                         uint32_t *height_out, uint32_t *depth_out, int *supported) {
+    *supported = 1;
+    switch (dim) {
+        case 0: *height_out = 1; *depth_out = 1; break;                                        /* DIM_1D */
+        case 1: *height_out = height_in ? height_in : 1u; *depth_out = 1; break;                /* DIM_2D */
+        case 2: *height_out = height_in ? height_in : 1u; *depth_out = depth_in ? depth_in : 1u; break; /* DIM_3D */
+        case 3: *height_out = height_in ? height_in : 1u; *depth_out = depth_in > 6u ? depth_in : 6u; break; /* DIM_CUBE */
+        case 4: *height_out = 1; *depth_out = depth_in; break;                                  /* DIM_1D_ARRAY */
+        case 5: *height_out = height_in ? height_in : 1u; *depth_out = depth_in; break;          /* DIM_2D_ARRAY */
+        default: *supported = 0; break; /* DIM_2D_MSAA/DIM_2D_ARRAY_MSAA -- not in the real source's own switch either */
+    }
+}
+
+/* Real dim-dependent height/numSlices resolution for the "outer"
+ * (non-LINEAR_SPECIAL) real path, confirmed against
+ * LatteAddrLib::GX2CalculateSurfaceInfo's own real switch -- a real,
+ * distinct set of rules from the LINEAR_SPECIAL case above (no
+ * block-size rounding here at all; that's LINEAR_SPECIAL-only real
+ * behavior). */
+static inline void bramble_gx2_calc_dim_outer(uint32_t dim, uint32_t height_in, uint32_t depth_in,
+                                               uint32_t *height_out, uint32_t *slices_out, int *supported) {
+    *supported = 1;
+    switch (dim) {
+        case 0: *height_out = 1; *slices_out = 1; break;                                        /* DIM_1D */
+        case 1: *height_out = height_in ? height_in : 1u; *slices_out = 1; break;                /* DIM_2D */
+        case 2: *height_out = height_in ? height_in : 1u; *slices_out = depth_in ? depth_in : 1u; break; /* DIM_3D */
+        case 3: *height_out = height_in ? height_in : 1u; *slices_out = depth_in > 6u ? depth_in : 6u; break; /* DIM_CUBE */
+        case 4: *height_out = 1; *slices_out = depth_in; break;                                  /* DIM_1D_ARRAY */
+        case 5: *height_out = height_in ? height_in : 1u; *slices_out = depth_in; break;          /* DIM_2D_ARRAY */
+        case 6: *height_out = height_in ? height_in : 1u; *slices_out = 1; break;                 /* DIM_2D_MSAA */
+        case 7: *height_out = height_in ? height_in : 1u; *slices_out = depth_in; break;          /* DIM_2D_ARRAY_MSAA */
+        default: *supported = 0; break;
+    }
+}
+
+static inline uint32_t bramble_gx2_pow2_align(uint32_t x, uint32_t align) {
+    return (x + align - 1u) & ~(align - 1u);
+}
+
+static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx) {
+    /* void GX2CalcSurfaceSizeAndAlignment(GX2Surface *surface) -- real
+     * signature confirmed against wut's gx2/surface.h; single pointer
+     * arg, r3. Real field offsets (WUT_CHECK_OFFSET-confirmed) defined
+     * above. See this whole section's own file comment for the real,
+     * bounded scope. */
+    uint32_t surface_addr = ctx->r[3];
+    uint32_t dim = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
+    uint32_t width = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
+    uint32_t height = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
+    uint32_t depth = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_DEPTH_OFFSET);
+    uint32_t mip_levels = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET);
+    uint32_t format = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
+    uint32_t aa = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_AA_OFFSET);
+    uint32_t tile_mode = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
+    uint32_t hw_format = format & 0x3Fu;
+    uint32_t bpp = bramble_gx2_hw_format_bits_raw(hw_format);
+    int is_bc = (hw_format >= 0x31u && hw_format <= 0x35u);
+    uint32_t num_samples = 1u << aa;
+
+    /* Real workaround check (Cemu's own
+     * _GX2CalcSurfaceSizeAndAlignmentWorkaround): confirmed real,
+     * defensive behavior against a real, known issue in some actual
+     * retail games (Cemu's own comment names Sonic Lost World and
+     * Super Mario 3D World) passing an uninitialized GX2Surface --
+     * not something this project encountered independently, ported
+     * because it's cheap, real, and protects against the same class
+     * of real garbage-input crash either way. Resets to a small, safe,
+     * real 2D placeholder rather than proceeding with nonsensical
+     * values. Only the fields this shim actually uses/produces are
+     * reset (this project doesn't yet model imagePtr's real tiling-
+     * aperture placement, so that real field is left alone). */
+    if (dim >= 50u || aa >= 0x100u || width >= 0x01000000u || height >= 0x01000000u || depth >= 0x01000000u ||
+        format >= 0x10000u) {
+        dim = 1u;   /* DIM_2D */
+        width = 8u;
+        height = 8u;
+        depth = 1u;
+        tile_mode = 4u; /* TM_2D_TILED_THIN1 -- not itself supported below, so this real case still ends up a no-op past this point, matching real hardware's own actual (macro-tiled) outcome for a corrected surface */
+        aa = 0u;
+        format = 0x1au; /* UNORM_R8_G8_B8_A8 */
+        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET, dim);
+        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET, width);
+        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET, height);
+        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_DEPTH_OFFSET, depth);
+        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET, tile_mode);
+        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_AA_OFFSET, aa);
+        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET, format);
+        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_ALIGNMENT_OFFSET, 0x400u);
+        return; /* real behavior stops here too -- the corrected surface still needs a real, separate real call to actually size it */
+    }
+
+    if (mip_levels > 1u) return; /* real, honest, documented gap -- mip-chain support not implemented */
+
+    if (tile_mode == 16u) {
+        /* TM_LINEAR_SPECIAL -- real, self-contained formula. */
+        uint32_t block_size = is_bc ? 4u : 1u;
+        uint32_t width_px = (width + block_size - 1u) & ~(block_size - 1u);
+        uint32_t out_height, out_depth;
+        int supported;
+        bramble_gx2_calc_dim_linear_special(dim, height, depth, &out_height, &out_depth, &supported);
+        if (!supported) return;
+        out_height = ((~(block_size - 1u)) & (out_height + block_size - 1u)) / block_size;
+        if (out_height == 0u) out_height = 1u;
+        {
+            uint32_t pitch = width_px / block_size;
+            if (pitch == 0u) pitch = 1u;
+            uint64_t surf_size = ((uint64_t)bpp * num_samples * out_depth * out_height * pitch) >> 3;
+            ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_IMAGE_SIZE_OFFSET, (uint32_t)surf_size);
+            ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_ALIGNMENT_OFFSET, 1u);
+            ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET, pitch);
+            ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET, 0u);
+        }
+        return;
+    }
+
+    if (tile_mode == 1u || (tile_mode == 0u && dim == 0u)) {
+        /* TM_LINEAR_ALIGNED, either explicit or real-upgraded from
+         * TM_LINEAR_GENERAL/DEFAULT on a real 1D surface (see this
+         * section's own file comment). */
+        uint32_t out_height, out_slices;
+        int supported;
+        bramble_gx2_calc_dim_outer(dim, height, depth, &out_height, &out_slices, &supported);
+        if (!supported) return;
+        {
+            /* _ComputeSurfaceAlignmentsLinear's real TM_LINEAR_ALIGNED
+             * case (m_pipeInterleaveBytes = 256, a real, confirmed
+             * LatteAddrLib constant). optimizeForScanBuffer's real
+             * pitch-alignment bump (_AdjustPitchAlignment) is a real,
+             * documented, unimplemented simplification here --
+             * requires resolving GX2Surface's real `use` bitmask,
+             * not attempted. */
+            uint32_t base_align = 256u;
+            uint32_t pixels_per_pipe_interleave = (8u * 256u) / bpp;
+            uint32_t pitch_align = pixels_per_pipe_interleave > 64u ? pixels_per_pipe_interleave : 64u;
+            uint32_t height_align = 1u;
+            uint32_t exp_pitch = width ? width : 1u;
+            uint32_t exp_height = out_height;
+            uint32_t exp_slices = out_slices;
+            /* PadDimensions' real logic, thickness=1 (LINEAR_ALIGNED is
+             * never "thick"), padDims defaults to 3 (mipLevel==0,
+             * dim!=CUBE in the common case this project reaches --
+             * DIM_CUBE's own real NextPow2(slices) rounding is applied
+             * below too, matching real behavior for that case). */
+            exp_pitch = bramble_gx2_pow2_align(exp_pitch, pitch_align);
+            exp_height = bramble_gx2_pow2_align(exp_height, height_align);
+            if (dim == 3u) { /* DIM_CUBE */
+                exp_slices = 1u;
+                while (exp_slices < out_slices) exp_slices <<= 1;
+            }
+            {
+                uint32_t slices = exp_slices * num_samples; /* microTileThickness=1, matching the real formula's own division by it */
+                uint64_t surf_size = ((uint64_t)exp_height * exp_pitch * slices * bpp * num_samples) >> 3;
+                if (tile_mode == 0u) {
+                    ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET, 1u); /* real upgrade to LINEAR_ALIGNED, written back */
+                }
+                ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_SWIZZLE_OFFSET,
+                              ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_SWIZZLE_OFFSET) & 0xFF00FFFFu);
+                ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_IMAGE_SIZE_OFFSET, (uint32_t)surf_size);
+                ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_ALIGNMENT_OFFSET, base_align);
+                ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET, exp_pitch);
+                ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET, 0u);
+            }
+        }
+        return;
+    }
+
+    /* Every other real tile mode (explicitly tiled, TM_32_SPECIAL, or
+     * TM_LINEAR_GENERAL/DEFAULT on a non-1D surface -- real hardware's
+     * own macro-tiling auto-upgrade case) -- real, honest, documented
+     * gap, see this section's own file comment. Leaves every guest
+     * field untouched. */
 }
 
 /* ---- GX2DepthBuffer clear-value setters --------------------------------
