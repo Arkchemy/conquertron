@@ -140,6 +140,21 @@ static inline uint32_t bramble_gx2_pow2_align(uint32_t x, uint32_t align) {
  * above. */
 #define BRAMBLE_GX2_SAMPLER_DESCRIPTOR_MEM_SIZE 0x1000u
 
+/* Real DkImageDescriptor is the same fixed, confirmed 32-byte opaque
+ * type as DkSamplerDescriptor (DK_DECL_OPAQUE(ImageDescriptor, 4, 32)
+ * in deko3d.h, and devkitPro's own official CDescriptorSet.h even
+ * static_asserts the two sizes match) -- so this real image descriptor
+ * pool reuses the exact same slot layout/count/sizing reasoning as the
+ * sampler pool above (see BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE/
+ * BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS), on purpose: real GX2/AMD
+ * hardware pairs pixel/vertex texture unit N with sampler unit N in
+ * the shader (a real TFETCH instruction takes both a resource id and a
+ * sampler id), so keeping identical pixel/vertex index ranges for both
+ * pools means the same real unit index already used for
+ * GX2SetPixelSampler/GX2SetVertexSampler can be reused directly as the
+ * texture slot too (see bramble_gx2_set_texture below). */
+#define BRAMBLE_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE 0x1000u
+
 /* Real GX2RenderTarget slot count (confirmed against wut's
  * gx2/enum.h: GX2_RENDER_TARGET_0 through _6). */
 #define BRAMBLE_GX2_NUM_RENDER_TARGETS 7u
@@ -286,6 +301,32 @@ typedef struct {
     DkMemBlock depth_target_mem_block;
     DkMemBlock depth_target_staging_mem_block;
     bool depth_target_bound;
+
+    /* Real deko3d image descriptor pool (see
+     * BRAMBLE_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE's own comment and
+     * GX2SetPixelTexture/GX2SetVertexTexture's own comment for the
+     * full real design) -- one shared, persistent, GPU-visible memory
+     * block, same real devkitPro CDescriptorSet-pattern reasoning as
+     * `sampler_descriptor_mem_block` above. */
+    DkMemBlock texture_descriptor_mem_block;
+    DkGpuAddr texture_descriptor_gpu_addr;
+
+    /* Real, independent, per-slot bound texture images (one real
+     * DkImage + backing DkMemBlock + staging DkMemBlock per real
+     * pixel/vertex texture unit, same BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS-
+     * sized slot range as the sampler pool -- see
+     * BRAMBLE_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE's own comment for why).
+     * Uses the same real block-linear-image-plus-staging-buffer bridge
+     * as GX2SetDepthBuffer (not GX2SetColorBuffer's pitch-linear
+     * direct-copy design), since a real sampled texture, unlike a
+     * render target, gets no benefit from pitch-linear layout and this
+     * project already has a real, hardware-proven staging-buffer path
+     * to reuse instead of re-deriving PitchLinear's real constraints
+     * for the texture case from scratch. */
+    DkImage texture_image[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
+    DkMemBlock texture_mem_block[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
+    DkMemBlock texture_staging_mem_block[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
+    bool texture_bound[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
 } BrambleGx2State;
 
 /* GX2EventType's real enumerator count (confirmed against wut's
@@ -434,6 +475,17 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) {
         g_bramble_gx2.sampler_descriptor_gpu_addr = dkMemBlockGetGpuAddr(g_bramble_gx2.sampler_descriptor_mem_block);
     }
 
+    /* Real image descriptor pool -- see GX2SetPixelTexture/
+     * GX2SetVertexTexture's own comment and BrambleGx2State's field
+     * comment for the full real design. */
+    {
+        DkMemBlockMaker texture_mem_maker;
+        dkMemBlockMakerDefaults(&texture_mem_maker, g_bramble_gx2.device, BRAMBLE_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE);
+        texture_mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+        g_bramble_gx2.texture_descriptor_mem_block = dkMemBlockCreate(&texture_mem_maker);
+        g_bramble_gx2.texture_descriptor_gpu_addr = dkMemBlockGetGpuAddr(g_bramble_gx2.texture_descriptor_mem_block);
+    }
+
     g_bramble_gx2.initialized = true;
 }
 
@@ -463,6 +515,19 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) {
         dkMemBlockDestroy(g_bramble_gx2.depth_target_mem_block);
         dkMemBlockDestroy(g_bramble_gx2.depth_target_staging_mem_block);
         g_bramble_gx2.depth_target_bound = false;
+    }
+    dkMemBlockDestroy(g_bramble_gx2.texture_descriptor_mem_block);
+    {
+        /* Real cleanup for any bound textures (see
+         * GX2SetPixelTexture/GX2SetVertexTexture's own comment). */
+        uint32_t i;
+        for (i = 0; i < BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS; i++) {
+            if (g_bramble_gx2.texture_bound[i]) {
+                dkMemBlockDestroy(g_bramble_gx2.texture_mem_block[i]);
+                dkMemBlockDestroy(g_bramble_gx2.texture_staging_mem_block[i]);
+                g_bramble_gx2.texture_bound[i] = false;
+            }
+        }
     }
     dkQueueDestroy(g_bramble_gx2.queue);
     dkCmdBufDestroy(g_bramble_gx2.cmdbuf);
@@ -1679,26 +1744,34 @@ static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx
  * format (also this project's own swapchain format, already real- and
  * hardware-confirmed), not an attempt at exhaustive real format
  * coverage. Any other real input is a real, honest, documented gap:
- * nothing is bound, and no image/no crash results, matching this
- * file's established "don't guess" pattern.
+ * nothing is bound, matching this file's established "don't guess"
+ * pattern.
  *
  * Real, confirmed-against-deko3d's-actual-source design for bridging
  * real guest memory (plain host RAM, not real GPU-visible memory) into
- * a real deko3d image: a real `DkImageFlags_PitchLinear` image needs
- * no `DkMemBlockFlags_Image` on its backing memory at all (confirmed
- * directly in deko3d's own real source, dk_memblock.cpp: the
- * Image-flag requirement is only checked for non-pitch-linear/
- * "block-linear" images) -- so this uses a real, ordinary
- * `DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached` memory
- * block (the same real flags already used for
- * `sampler_descriptor_mem_block` above), giving genuine, direct CPU
- * read/write access via `dkMemBlockGetCpuAddr` to copy real guest
- * pixel bytes into, no separate staging step needed. Real destination
- * row stride confirmed against deko3d's own real internal formula
- * (dk_image.cpp, the `DkImageFlags_UsageRender` pitch-linear case):
- * `(bytesPerBlock * width + 127) & ~127` -- replicated here exactly
- * rather than guessed, since there's no public API to query it back
- * after image creation. */
+ * a real deko3d image: the memory block backing a real
+ * `DkImageFlags_PitchLinear` image uses `DkMemBlockFlags_CpuUncached |
+ * DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image`. The `Image` flag
+ * was NOT in the first version of this code -- deko3d's own validation
+ * doesn't require it for a pitch-linear image, so it looked
+ * unnecessary. It turned out to be required anyway: a real on-hardware
+ * crash (see `switch/test-results/`) traced into deko3d's actual
+ * `dk_memblock.cpp` showed `MemBlock::getGpuAddrForImage` only takes
+ * its simple, always-valid `m_gpuAddrPitch` path when the image's
+ * memory-kind field equals one specific real value (`NvKind_Pitch`,
+ * which this project has no public header access to and can't confirm
+ * numerically); any other value -- including what a freshly zeroed
+ * `DkImageLayout` produces -- falls through to a path needing
+ * `m_gpuAddrCompressed`, which is only initialized when
+ * `DkMemBlockFlags_Image` is set. So the flag is kept, confirmed by
+ * reading the real source rather than by guessing. This still gives
+ * genuine, direct CPU read/write access via `dkMemBlockGetCpuAddr` to
+ * copy real guest pixel bytes into, no separate staging step needed.
+ * Real destination row stride confirmed against deko3d's own real
+ * internal formula (dk_image.cpp, the `DkImageFlags_UsageRender`
+ * pitch-linear case): `(bytesPerBlock * width + 127) & ~127` --
+ * replicated here exactly rather than guessed, since there's no public
+ * API to query it back after image creation. */
 static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
     uint32_t color_buffer_addr = ctx->r[3];
     uint32_t target = ctx->r[4];
@@ -1955,6 +2028,147 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) {
     dkCmdBufCopyBufferToImage(g_bramble_gx2.cmdbuf, &src_buf, &dst_view, &dst_rect, 0);
 }
 
+/* Real, shared implementation for GX2SetPixelTexture/GX2SetVertexTexture
+ * -- builds a real, GPU-visible deko3d image from a real guest
+ * GX2Texture and binds it to this stage's real texture unit, mirroring
+ * `bramble_gx2_set_sampler`'s own real "rebind on every call" pattern
+ * (see that function's own comment for the reasoning).
+ *
+ * Same real, deliberately bounded scope as GX2SetColorBuffer/
+ * GX2SetDepthBuffer: `dim` must be `DIM_2D` (1), `tileMode` must
+ * already be `TM_LINEAR_ALIGNED`/`TM_LINEAR_SPECIAL`, `mipLevels <=
+ * 1`, `format` must be `UNORM_R8_G8_B8_A8` (0x1a) -- the same real
+ * format GX2SetColorBuffer targets, and by far the single most common
+ * real texture format for this kind of game. Any other real input is a
+ * real, honest, documented gap: nothing is bound.
+ *
+ * Real guest-memory-to-GPU-image bridge: reuses GX2SetDepthBuffer's
+ * real design (a tightly-packed linear staging `DkMemBlock`, real
+ * guest pixel bytes copied in via the CPU, then a real, recorded
+ * `dkCmdBufCopyBufferToImage` GPU blit into a proper block-linear
+ * `DkImage`) rather than GX2SetColorBuffer's pitch-linear direct-copy
+ * design -- see BrambleGx2State's own `texture_image` field comment
+ * for why. The real image descriptor itself
+ * (`dkImageDescriptorInitialize`) and the real combined texture handle
+ * (`dkMakeTextureHandle`, pairing this real image slot with the
+ * *same-numbered* real sampler slot -- see
+ * BRAMBLE_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE's own comment) are both
+ * confirmed against devkitPro's own real official example,
+ * `deko_console/source/gpu_console.c`. */
+static inline void bramble_gx2_set_texture(PpcContext *ctx, uint32_t texture_addr, DkStage stage, uint32_t base_index, uint32_t index) {
+    uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
+    uint32_t bytes_per_pixel = 4u; /* RGBA8_UNORM only, see this function's own comment */
+    uint32_t staging_size, image_size, row, copy_bytes, slot;
+    uint8_t *staging_cpu;
+    DkImageLayoutMaker layout_maker;
+    DkImageLayout layout;
+    DkMemBlockMaker mem_maker;
+    DkMemBlockMaker staging_maker;
+    DkImageView dst_view;
+    DkImageRect dst_rect;
+    DkCopyBuf src_buf;
+    DkImageDescriptor descriptor;
+    DkResHandle handle;
+
+    if (index >= BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE) return; /* real, bounded pool -- out-of-range index is a no-op, not a crash */
+    slot = base_index + index;
+
+    memset(&layout, 0, sizeof(layout)); /* defensive, same reasoning as every other real image build in this file */
+
+    dim = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
+    width = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
+    height = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
+    mip_levels = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET);
+    format = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
+    tile_mode = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
+    pitch = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
+    image_addr = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+
+    if (dim != 1u) return;
+    if (tile_mode != 1u && tile_mode != 16u) return;
+    if (mip_levels > 1u) return;
+    if (format != 0x1au) return;
+    if (width == 0u || height == 0u || pitch == 0u) return;
+
+    dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
+    layout_maker.format = DkImageFormat_RGBA8_Unorm;
+    layout_maker.dimensions[0] = width;
+    layout_maker.dimensions[1] = height;
+    layout_maker.dimensions[2] = 1;
+    layout_maker.mipLevels = 1;
+    dkImageLayoutInitialize(&layout, &layout_maker);
+
+    image_size = (uint32_t)dkImageLayoutGetSize(&layout);
+    dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device,
+                             bramble_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
+    mem_maker.flags = DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
+
+    staging_size = bytes_per_pixel * width * height;
+    dkMemBlockMakerDefaults(&staging_maker, g_bramble_gx2.device,
+                             bramble_gx2_pow2_align(staging_size, DK_MEMBLOCK_ALIGNMENT));
+    staging_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+
+    if (g_bramble_gx2.texture_bound[slot]) {
+        /* Real resource lifecycle: replace, don't leak, a previous real binding at this slot. */
+        dkMemBlockDestroy(g_bramble_gx2.texture_mem_block[slot]);
+        dkMemBlockDestroy(g_bramble_gx2.texture_staging_mem_block[slot]);
+        g_bramble_gx2.texture_bound[slot] = false;
+    }
+    g_bramble_gx2.texture_mem_block[slot] = dkMemBlockCreate(&mem_maker);
+    dkImageInitialize(&g_bramble_gx2.texture_image[slot], &layout, g_bramble_gx2.texture_mem_block[slot], 0);
+    g_bramble_gx2.texture_staging_mem_block[slot] = dkMemBlockCreate(&staging_maker);
+    g_bramble_gx2.texture_bound[slot] = true;
+
+    staging_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.texture_staging_mem_block[slot]);
+    copy_bytes = bytes_per_pixel * width;
+    if (copy_bytes > pitch * bytes_per_pixel) copy_bytes = pitch * bytes_per_pixel;
+    for (row = 0; row < height; row++) {
+        uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
+        uint32_t dst_off = row * bytes_per_pixel * width;
+        uint32_t i;
+        for (i = 0; i < copy_bytes; i++) {
+            staging_cpu[dst_off + i] = ppc_load_u8(ctx, src_off + i);
+        }
+    }
+
+    dkImageViewDefaults(&dst_view, &g_bramble_gx2.texture_image[slot]);
+    dst_rect.x = 0; dst_rect.y = 0; dst_rect.z = 0;
+    dst_rect.width = width; dst_rect.height = height; dst_rect.depth = 1;
+    src_buf.addr = dkMemBlockGetGpuAddr(g_bramble_gx2.texture_staging_mem_block[slot]);
+    src_buf.rowLength = 0;
+    src_buf.imageHeight = 0;
+    dkCmdBufCopyBufferToImage(g_bramble_gx2.cmdbuf, &src_buf, &dst_view, &dst_rect, 0);
+
+    dkImageDescriptorInitialize(&descriptor, &dst_view, false, false);
+    dkCmdBufPushData(g_bramble_gx2.cmdbuf, g_bramble_gx2.texture_descriptor_gpu_addr + (uint64_t)slot * sizeof(DkImageDescriptor),
+                      &descriptor, sizeof(DkImageDescriptor));
+    dkCmdBufBindImageDescriptorSet(g_bramble_gx2.cmdbuf, g_bramble_gx2.texture_descriptor_gpu_addr, BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS);
+
+    handle = dkMakeTextureHandle(slot, slot); /* real, same-numbered image/sampler slot pairing -- see this function's own comment */
+    dkCmdBufBindTextures(g_bramble_gx2.cmdbuf, stage, index, &handle, 1);
+}
+
+static inline void ppc_import_gx2_GX2SetPixelTexture(PpcContext *ctx) {
+    /* void GX2SetPixelTexture(const GX2Texture *texture, uint32_t
+     * unit) -- real signature confirmed against wut's gx2/texture.h.
+     * `GX2Texture`'s own `surface` member is a plain `GX2Surface` at
+     * offset 0 (confirmed against the same header), so this reuses
+     * the exact same `BRAMBLE_GX2_SURFACE_*_OFFSET` constants
+     * GX2SetColorBuffer/GX2SetDepthBuffer already use. */
+    uint32_t texture_addr = ctx->r[3];
+    uint32_t unit = ctx->r[4];
+    bramble_gx2_set_texture(ctx, texture_addr, DkStage_Fragment, BRAMBLE_GX2_SAMPLER_PIXEL_BASE, unit);
+}
+
+static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) {
+    /* void GX2SetVertexTexture(const GX2Texture *texture, uint32_t
+     * unit) -- real signature confirmed against wut's gx2/texture.h.
+     * See GX2SetPixelTexture's own comment. */
+    uint32_t texture_addr = ctx->r[3];
+    uint32_t unit = ctx->r[4];
+    bramble_gx2_set_texture(ctx, texture_addr, DkStage_Vertex, BRAMBLE_GX2_SAMPLER_VERTEX_BASE, unit);
+}
+
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
 
 static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { (void)ctx; }
@@ -1993,6 +2207,8 @@ static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx)
 static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPixelTexture(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) { (void)ctx; }
 
 #endif /* __SWITCH__ */
 
