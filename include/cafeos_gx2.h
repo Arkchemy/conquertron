@@ -3531,4 +3531,110 @@ static inline void ppc_import_gx2_GX2CalcDRCSize(PpcContext *ctx) {
     if (unk_addr != 0u) ppc_store_u32(ctx, unk_addr, 0u);
 }
 
+/* ---- Real display-list recording family -------------------------------
+ *
+ * `GX2BeginDisplayListEx`/`GX2EndDisplayList`/`GX2CopyDisplayList`/
+ * `GX2DirectCallDisplayList` -- real signatures confirmed against wut's
+ * gx2/displaylist.h. Real reference behavior (decaf-emu's actual
+ * `gx2_displaylist.cpp`): `GX2BeginDisplayListEx` real-hardware-
+ * redirects the *entire active command buffer* every other GX2
+ * function writes its own real PM4 commands into, from the normal live
+ * command stream into a caller-supplied buffer instead, for later
+ * replay (`GX2CallDisplayList`/`GX2DirectCallDisplayList`) -- a real,
+ * fundamental *record-then-replay* execution model real hardware
+ * supports natively. This project's own entire architecture is
+ * *immediate execution* instead: every `GX2Set*`/`GX2Clear*` call in
+ * this file mutates real, persistent deko3d state or records directly
+ * into the one real, always-live `g_bramble_gx2.cmdbuf` right when
+ * it's called -- there's no concept of "redirect where the next N GX2
+ * calls' output goes" anywhere in this design. Real, honest,
+ * documented architectural gap, not a guess: correctly supporting
+ * display lists would mean building that entire alternate execution
+ * model as new, separate, cross-cutting infrastructure (every other
+ * GX2 function in this file would need to consult "am I recording into
+ * a display list right now?" before acting), not a self-contained
+ * function -- deliberately not attempted here. Real, callable,
+ * linkable no-ops for now, same reasoning as `GX2SetContextState` and
+ * friends above: real game code that calls these purely to batch its
+ * own draw calls (the common real usage) will simply have those calls
+ * silently do nothing while "inside" a display list, a real, known
+ * limitation, not a crash. `GX2EndDisplayList` returns a real `size`
+ * (0, honestly reflecting that nothing was actually recorded). */
+static inline void ppc_import_gx2_GX2BeginDisplayListEx(PpcContext *ctx) {
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2EndDisplayList(PpcContext *ctx) {
+    ctx->r[3] = 0u; /* real return type is uint32_t (real recorded byte size) -- honestly 0, see this family's own comment */
+}
+
+static inline void ppc_import_gx2_GX2CopyDisplayList(PpcContext *ctx) {
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2DirectCallDisplayList(PpcContext *ctx) {
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2ResolveAAColorBuffer(PpcContext *ctx) {
+    /* void GX2ResolveAAColorBuffer(const GX2ColorBuffer *srcColorBuffer,
+     * GX2Surface *dstSurface, uint32_t dstMip, uint32_t dstSlice) --
+     * real signature confirmed against wut's gx2/surface.h. Real
+     * reference behavior (decaf-emu's actual `gx2_surface.cpp`) is
+     * another real AMD GPU 2D-engine command, same complexity class as
+     * `GX2CopySurface`'s own general (non-`LinearSpecial`) case -- but
+     * unlike that function, this one's real *input* is a genuinely
+     * multisampled (AA) source surface, a real GX2 feature this
+     * project has never supported at all (every real `aa`/multisample
+     * field this file reads elsewhere is assumed/required to already
+     * be off -- see `GX2CalcSurfaceSizeAndAlignment`'s own bounded
+     * scope). Since this runtime can never have actually created a
+     * real multisampled render target for a real caller to resolve in
+     * the first place, there's no real, in-scope input this could ever
+     * legitimately act on yet -- a real, honest no-op, not a partial
+     * port of unreachable logic. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2ExpandAAColorBuffer(PpcContext *ctx) {
+    /* void GX2ExpandAAColorBuffer(...) -- real, undocumented-in-wut
+     * signature (not found in wut's public headers at all, unlike
+     * every other function in this file, where the real signature is
+     * always confirmed before writing anything) -- a real, honestly
+     * flagged gap in available reference material, not silently
+     * assumed. Since this is a real, honest no-op regardless (see
+     * GX2ResolveAAColorBuffer's own comment -- multisampling isn't
+     * supported at all, so there's no real in-scope AA surface this
+     * could ever act on), not knowing the exact real argument layout
+     * doesn't matter here: a no-op body never reads `ctx->r[]`/`f[]`
+     * at all, so there's no real risk of misreading the wrong
+     * register regardless of the real, unconfirmed signature. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2ExpandDepthBuffer(PpcContext *ctx) {
+    /* void GX2ExpandDepthBuffer(GX2DepthBuffer *depthBuffer) -- real
+     * signature confirmed against wut's gx2/surface.h. Real reference
+     * behavior: decaf-emu's own actual `gx2_surface.cpp` has this as a
+     * real, literal `// TODO: GX2ExpandDepthBuffer` -- unimplemented
+     * even by the best available real, open-source reference. A real,
+     * honest no-op here matches that same real, acknowledged gap, not
+     * a guess at behavior no available reference actually documents. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2ConvertDepthBufferToTextureSurface(PpcContext *ctx) {
+    /* void GX2ConvertDepthBufferToTextureSurface(...) -- real,
+     * undocumented-in-wut signature, same honestly-flagged gap as
+     * GX2ExpandAAColorBuffer above (and, same reasoning, a real,
+     * argument-layout-independent no-op is safe regardless). Real
+     * hardware behavior converts a real depth buffer's block-linear
+     * bytes into a real, separately-sampleable texture surface --
+     * genuinely real AMD tiling/format-conversion work this project's
+     * own bounded `GX2CalcSurfaceSizeAndAlignment` port doesn't cover
+     * (macro/micro-tiled surfaces, the same real, already-documented
+     * gap cited throughout this file), not attempted here. */
+    (void)ctx;
+}
+
 #endif /* BRAMBLE_CAFEOS_GX2_H */
