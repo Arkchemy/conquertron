@@ -3,6 +3,7 @@
 
 #include "ppc_runtime.h"
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -1750,28 +1751,43 @@ static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx
  * Real, confirmed-against-deko3d's-actual-source design for bridging
  * real guest memory (plain host RAM, not real GPU-visible memory) into
  * a real deko3d image: the memory block backing a real
- * `DkImageFlags_PitchLinear` image uses `DkMemBlockFlags_CpuUncached |
- * DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image`. The `Image` flag
- * was NOT in the first version of this code -- deko3d's own validation
- * doesn't require it for a pitch-linear image, so it looked
- * unnecessary. It turned out to be required anyway: a real on-hardware
- * crash (see `switch/test-results/`) traced into deko3d's actual
- * `dk_memblock.cpp` showed `MemBlock::getGpuAddrForImage` only takes
- * its simple, always-valid `m_gpuAddrPitch` path when the image's
- * memory-kind field equals one specific real value (`NvKind_Pitch`,
- * which this project has no public header access to and can't confirm
- * numerically); any other value -- including what a freshly zeroed
- * `DkImageLayout` produces -- falls through to a path needing
- * `m_gpuAddrCompressed`, which is only initialized when
- * `DkMemBlockFlags_Image` is set. So the flag is kept, confirmed by
- * reading the real source rather than by guessing. This still gives
- * genuine, direct CPU read/write access via `dkMemBlockGetCpuAddr` to
- * copy real guest pixel bytes into, no separate staging step needed.
- * Real destination row stride confirmed against deko3d's own real
- * internal formula (dk_image.cpp, the `DkImageFlags_UsageRender`
- * pitch-linear case): `(bytesPerBlock * width + 127) & ~127` --
- * replicated here exactly rather than guessed, since there's no public
- * API to query it back after image creation. */
+ * `DkImageFlags_PitchLinear` image uses a plain
+ * `DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached`, no
+ * `DkMemBlockFlags_Image`. This went back and forth twice before
+ * landing here, both times chasing the exact same real on-hardware
+ * crash (see `switch/test-results/`) -- worth recording precisely so
+ * it doesn't happen a third time. Round 1 zero-initialized the
+ * previously-uninitialized `DkImageLayout` local (`layout`, see the
+ * `memset` above), a real, necessary fix on its own. Round 2 *added*
+ * `DkMemBlockFlags_Image`, reasoning that deko3d's real `NvKind_Pitch`
+ * value couldn't be confirmed and so `MemBlock::getGpuAddrForImage`
+ * (`dk_memblock.cpp`) might not take its safe `m_gpuAddrPitch` path --
+ * but that crashed too, because the reasoning was wrong: `NvKind_Pitch`
+ * is real, public, and confirmed as `0x0`
+ * (libnx's own `switch/nvidia/types.h`), and
+ * `dkImageLayoutInitialize`'s pitch-linear branch (`dk_image.cpp`)
+ * returns *before* ever touching `m_memKind` at all -- so after the
+ * round-1 zero-init, `layout.m_memKind` genuinely *is* `NvKind_Pitch`,
+ * provably, and `getGpuAddrForImage` always takes the safe path
+ * regardless of the `Image` flag. Worse, that flag actively caused
+ * failures: `MemBlock::initialize` maps two *additional* real GPU
+ * address ranges (`NvKind_Generic_16BX2`/`NvKind_C32_2CRA`, meant for
+ * block-linear/compressed images) whenever it's set -- a real
+ * operation this plain, small, pitch-linear-sized block isn't laid out
+ * for, and `dkMemBlockCreate` calls deko3d's own real `RaiseError`
+ * (`[[noreturn]]`) on any such failure, a real, fatal, immediate crash
+ * matching this exact symptom. Removing the flag is the real,
+ * source-confirmed correct answer (`GX2SetDepthBuffer`/
+ * `GX2SetPixelTexture`/`GX2SetVertexTexture` still correctly need it,
+ * since their images are genuinely block-linear and truly do need the
+ * `m_gpuAddrCompressed` path it enables). This still gives genuine,
+ * direct CPU read/write access via `dkMemBlockGetCpuAddr` to copy real
+ * guest pixel bytes into, no separate staging step needed. Real
+ * destination row stride confirmed against deko3d's own real internal
+ * formula (dk_image.cpp, the `DkImageFlags_UsageRender` pitch-linear
+ * case): `(bytesPerBlock * width + 127) & ~127` -- replicated here
+ * exactly rather than guessed, since there's no public API to query it
+ * back after image creation. */
 static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
     uint32_t color_buffer_addr = ctx->r[3];
     uint32_t target = ctx->r[4];
@@ -1816,6 +1832,35 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
     if (format != 0x1au) return;                        /* real scope: UNORM_R8_G8_B8_A8 only */
     if (width == 0u || height == 0u || pitch == 0u) return;
 
+    /* Real bug, found and fixed via real on-hardware diagnostics (a
+     * temporary deko3d debug-callback + explicit pre/post-layout size
+     * logging, since deko3d's own release-build error text gives no
+     * detail beyond "initialization failure"): this function used to
+     * pass `layout_maker.pitchStride = 0`, reasoning (from reading
+     * deko3d's current GitHub `master` source) that 0 means "let
+     * deko3d auto-compute a correctly-aligned stride". That's true of
+     * `master`, but **not of deko3d v0.5.0, the actual version this
+     * project links against** (confirmed via `pacman -Q deko3d` and by
+     * downloading the exact `v0.5.0` GitHub tag and diffing its real
+     * `dk_image.cpp` against `master`): v0.5.0's pitch-linear branch
+     * does `obj->m_stride = maker->pitchStride;` unconditionally, no
+     * auto-compute fallback at all. Passing 0 there really does mean a
+     * real stride of 0, so `m_storageSize` (and everything computed
+     * from it) genuinely comes out to a real, unmasked 0 -- confirmed
+     * directly on real hardware via the diagnostic logging above,
+     * which showed `raw_size=0` despite correct, non-zero dimensions.
+     * A 0-sized `dkMemBlockMaker` then fails real, actual validation
+     * inside libnx's own `nvMapCreate` (`if (!size) return BadInput;`,
+     * confirmed in libnx's real `nvidia/map.c`), which is the real
+     * `DkResult_Fail` this function's `dkMemBlockCreate` call was
+     * aborting on. Real fix: compute the correctly-aligned stride
+     * ourselves and pass it explicitly, using the exact same formula
+     * v0.5.0's own `DkImageFlags_UsageRender` pitch-linear case uses
+     * internally for the 128-byte alignment it already applies (this
+     * project's own real destination-copy stride, `dest_stride` below,
+     * already independently used this identical formula -- now the
+     * `pitchStride` fed into deko3d matches it exactly, instead of
+     * silently diverging). */
     dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
     layout_maker.flags = DkImageFlags_PitchLinear | DkImageFlags_UsageRender;
     layout_maker.format = DkImageFormat_RGBA8_Unorm;
@@ -1823,32 +1868,47 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
     layout_maker.dimensions[1] = height;
     layout_maker.dimensions[2] = 1;
     layout_maker.mipLevels = 1;
-    layout_maker.pitchStride = 0; /* let deko3d compute its own real, correctly-aligned stride */
+    layout_maker.pitchStride = bramble_gx2_pow2_align(bytes_per_pixel * width, 128u);
     dkImageLayoutInitialize(&layout, &layout_maker);
 
     image_size = (uint32_t)dkImageLayoutGetSize(&layout);
+
     dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device,
                              bramble_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
-    /* Real, second bug found and fixed via the same real on-hardware
-     * crash as the `layout` zero-init above (that fix alone wasn't
-     * enough -- confirmed by an unchanged crash point on a second real
-     * run): deko3d's own real `MemBlock::getGpuAddrForImage`
-     * (`dk_memblock.cpp`) only takes its plain, always-available
-     * `m_gpuAddrPitch` path when the image's real memory-kind field is
-     * *exactly* `NvKind_Pitch` -- a real, specific enum value this
-     * project has no public header access to and can't safely assume
-     * equals the zero this file's own `layout` zero-init produces.
-     * Every other real memory-kind value falls through to a *different*
-     * real path using `m_gpuAddrCompressed`, a second GPU address-space
-     * mapping that's only actually created when the memory block itself
-     * has `DkMemBlockFlags_Image` set (confirmed in the same real
-     * source) -- without it, that fallback path uses a genuinely
-     * uninitialized real GPU address handle, a real crash, not a
-     * validation-catchable error. Adding `DkMemBlockFlags_Image` here
-     * makes both of deko3d's real address-mapping paths valid
-     * regardless of the exact real memory-kind value, removing the
-     * dependency on knowing/matching `NvKind_Pitch` exactly. */
-    mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
+    /* Real correction to a previous, now-reverted "fix": an earlier
+     * version of this function added `DkMemBlockFlags_Image` here,
+     * reasoning that deko3d's real `NvKind_Pitch` value couldn't be
+     * confirmed and so the safe `m_gpuAddrPitch` address path in
+     * `MemBlock::getGpuAddrForImage` (`dk_memblock.cpp`) might not
+     * actually be taken. That reasoning turned out to be wrong, found
+     * only after that "fix" itself caused the *same* real crash to
+     * persist on real hardware: `NvKind_Pitch` is real, public, and
+     * confirmed as `0x0` (libnx's own
+     * `switch/nvidia/types.h`), and `dkImageLayoutInitialize`'s
+     * pitch-linear branch (`dk_image.cpp`) returns *before* ever
+     * touching `m_memKind` at all -- so after this function's own
+     * `memset(&layout, 0, ...)` above, `layout.m_memKind` genuinely
+     * *is* `NvKind_Pitch`, provably, not just hoped. `getGpuAddrForImage`
+     * therefore always takes the safe, always-available `m_gpuAddrPitch`
+     * path here regardless of `DkMemBlockFlags_Image`.
+     *
+     * Worse, that flag was actively harmful: `MemBlock::initialize`
+     * (`dk_memblock.cpp`) maps two *additional* real GPU address
+     * ranges (`NvKind_Generic_16BX2`, `NvKind_C32_2CRA`) whenever
+     * `DkMemBlockFlags_Image` is set, meant for block-linear/compressed
+     * images -- a real, additional real-hardware operation this plain,
+     * small, pitch-linear-sized memory block isn't laid out for, which
+     * can make that mapping call fail. `dkMemBlockCreate` calls deko3d's
+     * own real `RaiseError` (declared `[[noreturn]]`) on any such
+     * failure -- a real, fatal, immediate crash, matching this exact
+     * symptom exactly. Removing the flag (this function's own original,
+     * pre-"fix" design) is the real, source-confirmed correct answer;
+     * `GX2SetDepthBuffer`/`GX2SetPixelTexture`/`GX2SetVertexTexture`
+     * still correctly need it, since their images are genuinely
+     * block-linear (`pickImageMemoryKind` gives them a real memory kind
+     * that is *not* `NvKind_Pitch`, so they truly do need the
+     * `m_gpuAddrCompressed` path `DkMemBlockFlags_Image` enables). */
+    mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
 
     if (g_bramble_gx2.color_target_bound[target]) {
         /* Real resource lifecycle: replace, don't leak, a previous
