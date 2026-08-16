@@ -3166,4 +3166,49 @@ static inline void ppc_import_gx2_GX2InitTextureRegs(PpcContext *ctx) {
     }
 }
 
+/* GX2SetupContextStateEx/GX2SetContextState -- real signatures confirmed
+ * against wut's gx2/context.h: `GX2SetupContextStateEx(GX2ContextState
+ * *state, BOOL unk1)`, `GX2SetContextState(GX2ContextState *state)`.
+ * `GX2ContextState` is a real, large (0xa100 bytes, WUT_CHECK_SIZE-
+ * confirmed) opaque struct, almost entirely a raw dump of AMD "Latte"
+ * GPU shadow registers (`GX2ShadowState`: config/context/alu-const/
+ * loop-const/resource/sampler ranges, 0x9800 bytes alone) plus an
+ * internal recorded display list -- confirmed against decaf-emu's real,
+ * open-source `gx2_contextstate.cpp`: real `GX2SetupContextStateEx`
+ * builds an actual PM4 display list that reloads every one of those
+ * real register ranges, and real `GX2SetContextState` either replays
+ * that display list or reloads the ranges directly, a real *save/
+ * restore/switch-between-multiple-named-GPU-pipeline-configurations*
+ * mechanism -- letting one game frame interleave, say, a 3D-world draw
+ * pass and a UI draw pass each with their own independently-tracked
+ * full render state, then switch back and forth between them.
+ *
+ * Real, honest, deliberate architectural gap, not a guess dressed up as
+ * a real implementation: this project's own render-state model (see
+ * `BrambleGx2State`'s `rasterizer_state`/`depth_stencil_state`/
+ * `color_state`/`multisample_state` shadow copies) is a single, global,
+ * persistent set -- every `GX2Set*Control`-style call in this file
+ * mutates the *one* shared state and immediately rebinds it (see
+ * `bramble_gx2_rebind_color_write_state` and friends), with no concept
+ * of multiple independently-switchable contexts at all. Real game code
+ * that calls `GX2SetContextState` purely as one-time setup boilerplate
+ * (the overwhelmingly common real usage: one context, set up once,
+ * never switched) works correctly under this project's own model
+ * without any of this real machinery, since there's only ever the one
+ * real state anyway. Real game code that actually *switches* between
+ * multiple distinct `GX2ContextState`s mid-frame to interleave separate
+ * render configurations is a real, known, honestly-documented
+ * correctness gap this no-op can't cover -- a real, separate,
+ * substantially larger feature (multiple named state contexts,
+ * switchable) that isn't attempted here. Real, callable, linkable
+ * no-ops for now, same "don't guess, don't fake, but let real code
+ * compile" reasoning as `GX2InitColorBufferRegs` and friends above. */
+static inline void ppc_import_gx2_GX2SetupContextStateEx(PpcContext *ctx) {
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetContextState(PpcContext *ctx) {
+    (void)ctx;
+}
+
 #endif /* BRAMBLE_CAFEOS_GX2_H */
