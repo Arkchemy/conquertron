@@ -861,6 +861,27 @@ static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) {
     ctx->r[3] = 1; /* TRUE */
 }
 
+static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) {
+    /* void GX2WaitForVsync(void) -- real signature confirmed against
+     * wut's gx2/event.h. Real hardware blocks the calling thread until
+     * the next real vertical blank. This runtime has no real vsync
+     * signal distinct from "the GPU has fully retired the last
+     * submitted work" (same reasoning already used for
+     * GX2GetSwapStatus's `lastVsync` above -- dkQueuePresentImage +
+     * the unconditional dkQueueWaitIdle already used throughout this
+     * file effectively synchronize to the display's actual present
+     * cadence), so this maps onto the same real dkQueueWaitIdle used
+     * by GX2DrawDone/GX2SwapScanBuffers, stamping `retired_timestamp`
+     * caught up to `submitted_timestamp` the same way. Real, honest
+     * simplification: a dedicated hardware vblank interrupt is not
+     * modeled separately from GPU-idle, consistent with this whole
+     * file's synchronous-for-now design (see GX2SwapScanBuffers'
+     * own `dkQueueWaitIdle` comment). */
+    (void)ctx;
+    dkQueueWaitIdle(g_bramble_gx2.queue);
+    g_bramble_gx2.retired_timestamp = g_bramble_gx2.submitted_timestamp;
+}
+
 static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) {
     /* OSTime GX2GetLastSubmittedTimeStamp(void) -- real 64-bit OSTime
      * return, split across r3(high)/r4(low) per the real PPC32 ABI's
@@ -965,6 +986,7 @@ static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) { (void)ctx; }
