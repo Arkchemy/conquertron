@@ -65,6 +65,30 @@
 #define BRAMBLE_GX2_SAMPLER_WORD1_OFFSET 4u
 #define BRAMBLE_GX2_SAMPLER_WORD2_OFFSET 8u
 
+/* Real, WUT_CHECK_OFFSET-confirmed byte offsets of GX2Surface's real
+ * fields (see wut's gx2/surface.h) -- defined unconditionally for the
+ * same reason as the sampler word offsets above: both the
+ * backend-independent GX2CalcSurfaceSizeAndAlignment and the real,
+ * __SWITCH__-only GX2SetColorBuffer need them. */
+#define BRAMBLE_GX2_SURFACE_DIM_OFFSET 0x00u
+#define BRAMBLE_GX2_SURFACE_WIDTH_OFFSET 0x04u
+#define BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET 0x08u
+#define BRAMBLE_GX2_SURFACE_DEPTH_OFFSET 0x0Cu
+#define BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET 0x10u
+#define BRAMBLE_GX2_SURFACE_FORMAT_OFFSET 0x14u
+#define BRAMBLE_GX2_SURFACE_AA_OFFSET 0x18u
+#define BRAMBLE_GX2_SURFACE_IMAGE_SIZE_OFFSET 0x20u
+#define BRAMBLE_GX2_SURFACE_IMAGE_OFFSET 0x24u
+#define BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET 0x30u
+#define BRAMBLE_GX2_SURFACE_SWIZZLE_OFFSET 0x34u
+#define BRAMBLE_GX2_SURFACE_ALIGNMENT_OFFSET 0x38u
+#define BRAMBLE_GX2_SURFACE_PITCH_OFFSET 0x3Cu
+#define BRAMBLE_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET 0x40u
+
+static inline uint32_t bramble_gx2_pow2_align(uint32_t x, uint32_t align) {
+    return (x + align - 1u) & ~(align - 1u);
+}
+
 #ifdef __SWITCH__
 #include <deko3d.h>
 #include <switch.h>
@@ -115,6 +139,10 @@
  * "generous starting point" trade-off as BRAMBLE_GX2_CMD_MEM_SIZE
  * above. */
 #define BRAMBLE_GX2_SAMPLER_DESCRIPTOR_MEM_SIZE 0x1000u
+
+/* Real GX2RenderTarget slot count (confirmed against wut's
+ * gx2/enum.h: GX2_RENDER_TARGET_0 through _6). */
+#define BRAMBLE_GX2_NUM_RENDER_TARGETS 7u
 
 typedef struct {
     bool initialized;
@@ -223,6 +251,18 @@ typedef struct {
      * BORDER_COLOR_TYPE field only says *which kind* of border to use
      * (including "the real register value"), not the value itself. */
     float sampler_border_color[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS][4];
+
+    /* Real, independent, off-swapchain color-buffer bindings (see
+     * GX2SetColorBuffer's own comment for the full real design and its
+     * deliberately bounded scope). One real DkImage + backing
+     * DkMemBlock per real GX2RenderTarget slot (0-6), created fresh
+     * and any previous binding destroyed each time GX2SetColorBuffer
+     * targets that slot again -- real resource lifecycle management,
+     * not a leak. `bound[i]` is real and false until GX2SetColorBuffer
+     * has successfully bound something there. */
+    DkImage color_target_image[BRAMBLE_GX2_NUM_RENDER_TARGETS];
+    DkMemBlock color_target_mem_block[BRAMBLE_GX2_NUM_RENDER_TARGETS];
+    bool color_target_bound[BRAMBLE_GX2_NUM_RENDER_TARGETS];
 } BrambleGx2State;
 
 /* GX2EventType's real enumerator count (confirmed against wut's
@@ -372,6 +412,17 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) {
     /* DkImage itself needs no explicit per-image destroy call -- only its backing DkMemBlock does */
     dkMemBlockDestroy(g_bramble_gx2.fb_mem_block);
     dkMemBlockDestroy(g_bramble_gx2.sampler_descriptor_mem_block);
+    {
+        /* Real cleanup for any off-swapchain color-buffer bindings
+         * (see GX2SetColorBuffer's own comment). */
+        uint32_t i;
+        for (i = 0; i < BRAMBLE_GX2_NUM_RENDER_TARGETS; i++) {
+            if (g_bramble_gx2.color_target_bound[i]) {
+                dkMemBlockDestroy(g_bramble_gx2.color_target_mem_block[i]);
+                g_bramble_gx2.color_target_bound[i] = false;
+            }
+        }
+    }
     dkQueueDestroy(g_bramble_gx2.queue);
     dkCmdBufDestroy(g_bramble_gx2.cmdbuf);
     dkMemBlockDestroy(g_bramble_gx2.cmd_mem_block);
@@ -1559,6 +1610,129 @@ static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx
     bramble_gx2_set_sampler_border_color(ctx, BRAMBLE_GX2_SAMPLER_VERTEX_BASE, index);
 }
 
+/* void GX2SetColorBuffer(const GX2ColorBuffer *colorBuffer,
+ * GX2RenderTarget target) -- real signature confirmed against wut's
+ * gx2/registers.h. Real, deliberately bounded first implementation:
+ * builds an actual, working, GPU-visible deko3d color image from a
+ * real guest `GX2ColorBuffer` and copies its real pixel bytes in --
+ * genuinely new infrastructure, not a stub, but **not yet wired into
+ * the render pipeline**: `GX2ClearColor`/`GX2SwapScanBuffers` above
+ * still only ever target the swapchain's own framebuffer (their own,
+ * already-documented, already-hardware-confirmed simplification) --
+ * making an off-swapchain `GX2SetColorBuffer` target actually
+ * clearable/presentable is real, separate, deliberately deferred
+ * follow-up work, so as to not risk the one render path this project
+ * has actually confirmed working on real hardware.
+ *
+ * Real, bounded scope (matching `GX2CalcSurfaceSizeAndAlignment`'s own
+ * documented limits, since a real caller almost always computes a
+ * surface's `pitch`/`tileMode` via that function first): `dim` must be
+ * `GX2_SURFACE_DIM_TEXTURE_2D` (1), `tileMode` must already be one of
+ * the two real tile modes that function resolves as genuinely linear
+ * (`TM_LINEAR_ALIGNED`=1 or `TM_LINEAR_SPECIAL`=16 -- not raw
+ * `TM_LINEAR_GENERAL`/`DEFAULT`=0, since without re-deriving `dim`'s
+ * own real auto-upgrade rule here too there's no way to know whether
+ * 0 was ever actually resolved to something linear), `mipLevels` must
+ * be <=1, and `format` must be `GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8`
+ * (0x1a) -- deliberately the single most common real color-buffer
+ * format (also this project's own swapchain format, already real- and
+ * hardware-confirmed), not an attempt at exhaustive real format
+ * coverage. Any other real input is a real, honest, documented gap:
+ * nothing is bound, and no image/no crash results, matching this
+ * file's established "don't guess" pattern.
+ *
+ * Real, confirmed-against-deko3d's-actual-source design for bridging
+ * real guest memory (plain host RAM, not real GPU-visible memory) into
+ * a real deko3d image: a real `DkImageFlags_PitchLinear` image needs
+ * no `DkMemBlockFlags_Image` on its backing memory at all (confirmed
+ * directly in deko3d's own real source, dk_memblock.cpp: the
+ * Image-flag requirement is only checked for non-pitch-linear/
+ * "block-linear" images) -- so this uses a real, ordinary
+ * `DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached` memory
+ * block (the same real flags already used for
+ * `sampler_descriptor_mem_block` above), giving genuine, direct CPU
+ * read/write access via `dkMemBlockGetCpuAddr` to copy real guest
+ * pixel bytes into, no separate staging step needed. Real destination
+ * row stride confirmed against deko3d's own real internal formula
+ * (dk_image.cpp, the `DkImageFlags_UsageRender` pitch-linear case):
+ * `(bytesPerBlock * width + 127) & ~127` -- replicated here exactly
+ * rather than guessed, since there's no public API to query it back
+ * after image creation. */
+static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
+    uint32_t color_buffer_addr = ctx->r[3];
+    uint32_t target = ctx->r[4];
+    uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
+    uint32_t bytes_per_pixel = 4u; /* RGBA8_UNORM only, see this function's own comment */
+    uint32_t dest_stride, image_size, row, copy_bytes;
+    uint8_t *dest_cpu;
+    DkImageLayoutMaker layout_maker;
+    DkImageLayout layout;
+    DkMemBlockMaker mem_maker;
+
+    if (target >= BRAMBLE_GX2_NUM_RENDER_TARGETS) return; /* real, bounded slot range */
+
+    dim = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
+    width = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
+    height = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
+    mip_levels = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET);
+    format = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
+    tile_mode = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
+    pitch = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
+    image_addr = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+
+    if (dim != 1u) return;                            /* real scope: DIM_2D only */
+    if (tile_mode != 1u && tile_mode != 16u) return;   /* real scope: already-resolved-linear only */
+    if (mip_levels > 1u) return;                       /* real scope: mip level 0 only */
+    if (format != 0x1au) return;                        /* real scope: UNORM_R8_G8_B8_A8 only */
+    if (width == 0u || height == 0u || pitch == 0u) return;
+
+    dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
+    layout_maker.flags = DkImageFlags_PitchLinear | DkImageFlags_UsageRender;
+    layout_maker.format = DkImageFormat_RGBA8_Unorm;
+    layout_maker.dimensions[0] = width;
+    layout_maker.dimensions[1] = height;
+    layout_maker.dimensions[2] = 1;
+    layout_maker.mipLevels = 1;
+    layout_maker.pitchStride = 0; /* let deko3d compute its own real, correctly-aligned stride */
+    dkImageLayoutInitialize(&layout, &layout_maker);
+
+    image_size = (uint32_t)dkImageLayoutGetSize(&layout);
+    dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device,
+                             bramble_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
+    mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+
+    if (g_bramble_gx2.color_target_bound[target]) {
+        /* Real resource lifecycle: replace, don't leak, a previous
+         * binding at this same real target slot. */
+        dkMemBlockDestroy(g_bramble_gx2.color_target_mem_block[target]);
+        g_bramble_gx2.color_target_bound[target] = false;
+    }
+    g_bramble_gx2.color_target_mem_block[target] = dkMemBlockCreate(&mem_maker);
+    dkImageInitialize(&g_bramble_gx2.color_target_image[target], &layout, g_bramble_gx2.color_target_mem_block[target], 0);
+    g_bramble_gx2.color_target_bound[target] = true;
+
+    /* Real guest-memory-to-GPU-memory pixel copy, row by row -- the
+     * real guest surface's own row stride is its `pitch` (in pixels,
+     * confirmed by GX2CalcSurfaceSizeAndAlignment's own real formulas
+     * above) times the real bytes-per-pixel; the real destination's
+     * row stride is deko3d's own real formula (see this function's own
+     * comment). The two strides only coincide when GX2's own pitch
+     * alignment happens to already satisfy deko3d's 128-byte
+     * requirement -- copying row-by-row using each side's own real
+     * stride is correct regardless of whether they match. */
+    dest_stride = bramble_gx2_pow2_align(bytes_per_pixel * width, 128u);
+    dest_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.color_target_mem_block[target]);
+    copy_bytes = bytes_per_pixel * width;
+    if (copy_bytes > pitch * bytes_per_pixel) copy_bytes = pitch * bytes_per_pixel; /* real, defensive: never read past the guest's own declared row */
+    for (row = 0; row < height; row++) {
+        uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
+        uint32_t i;
+        for (i = 0; i < copy_bytes; i++) {
+            dest_cpu[(uint64_t)row * dest_stride + i] = ppc_load_u8(ctx, src_off + i);
+        }
+    }
+}
+
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
 
 static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { (void)ctx; }
@@ -1595,6 +1769,7 @@ static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) { (void)ct
 static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { (void)ctx; }
 
 #endif /* __SWITCH__ */
 
@@ -1954,20 +2129,6 @@ static inline void ppc_import_gx2_GX2CalcColorBufferAuxInfo(PpcContext *ctx) {
  * project already makes elsewhere (e.g. `GX2SetPixelSampler`'s
  * out-of-range index no-op). */
 
-#define BRAMBLE_GX2_SURFACE_DIM_OFFSET 0x00u
-#define BRAMBLE_GX2_SURFACE_WIDTH_OFFSET 0x04u
-#define BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET 0x08u
-#define BRAMBLE_GX2_SURFACE_DEPTH_OFFSET 0x0Cu
-#define BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET 0x10u
-#define BRAMBLE_GX2_SURFACE_FORMAT_OFFSET 0x14u
-#define BRAMBLE_GX2_SURFACE_AA_OFFSET 0x18u
-#define BRAMBLE_GX2_SURFACE_IMAGE_SIZE_OFFSET 0x20u
-#define BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET 0x30u
-#define BRAMBLE_GX2_SURFACE_SWIZZLE_OFFSET 0x34u
-#define BRAMBLE_GX2_SURFACE_ALIGNMENT_OFFSET 0x38u
-#define BRAMBLE_GX2_SURFACE_PITCH_OFFSET 0x3Cu
-#define BRAMBLE_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET 0x40u
-
 /* Real dim-dependent height/depth resolution for the TM_LINEAR_SPECIAL
  * path, confirmed against LatteAddrLib.cpp's own real switch (the one
  * inside GX2CalculateSurfaceInfo's TM_LINEAR_SPECIAL branch) -- height
@@ -2007,10 +2168,6 @@ static inline void bramble_gx2_calc_dim_outer(uint32_t dim, uint32_t height_in, 
         case 7: *height_out = height_in ? height_in : 1u; *slices_out = depth_in; break;          /* DIM_2D_ARRAY_MSAA */
         default: *supported = 0; break;
     }
-}
-
-static inline uint32_t bramble_gx2_pow2_align(uint32_t x, uint32_t align) {
-    return (x + align - 1u) & ~(align - 1u);
 }
 
 static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx) {
