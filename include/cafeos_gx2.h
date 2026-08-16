@@ -3295,4 +3295,105 @@ static inline void ppc_import_gx2_GX2CopySurface(PpcContext *ctx) {
     }
 }
 
+/* Real, small bytes-per-pixel lookup shared by GX2CalcTVSize/
+ * GX2CalcDRCSize below -- deliberately bounded to the one real
+ * `GX2SurfaceFormat` this file already verifies/uses everywhere else
+ * (`UNORM_R8_G8_B8_A8`, 0x1a, 4 bytes -- also this project's own real
+ * swapchain format), not an attempt at a full real format-size table.
+ * Returns 0 for any other real format -- a real, honest, documented
+ * gap, not a guessed value. */
+static inline uint32_t bramble_gx2_surface_format_bpp(uint32_t format) {
+    if (format == 0x1au) return 4u;
+    return 0u;
+}
+
+static inline void ppc_import_gx2_GX2CalcTVSize(PpcContext *ctx) {
+    /* void GX2CalcTVSize(GX2TVRenderMode tvRenderMode, GX2SurfaceFormat
+     * surfaceFormat, GX2BufferingMode bufferingMode, uint32_t *size,
+     * uint32_t *unkOut) -- real signature confirmed against wut's
+     * gx2/display.h; real PPC32 ABI, all-integer args: r3=tvRenderMode,
+     * r4=surfaceFormat, r5=bufferingMode, r6=size, r7=unkOut.
+     *
+     * Real reference behavior (decaf-emu's actual `gx2_display.cpp`):
+     * `*size = width * height * bytesPerPixel * numBuffers` where
+     * width/height come from a real, fixed per-`GX2TVRenderMode` table
+     * and numBuffers from a real per-`GX2BufferingMode` table -- both
+     * reproduced here directly from that same real source, not
+     * guessed. `*unkOut` is real, confirmed always `0` in that same
+     * real implementation (an internal/reserved field, not actually
+     * mysterious in *value*, just undocumented in *meaning* -- wut
+     * itself calls the parameter `unkOut`). Real `GX2_TV_RENDER_MODE_*`
+     * values confirmed against wut's gx2/enum.h; the real switch also
+     * handles value 4 (an undocumented mode between `WIDE_720P`=3 and
+     * `WIDE_1080P`=5, real in decaf-emu's own source as `Unk720p`,
+     * mapped to the same 1280x720 as `WIDE_720P`) even though wut's
+     * own public enum has no name for it -- reproduced here too, since
+     * it's a real, confirmed behavior, not a guess. */
+    uint32_t tv_render_mode = ctx->r[3];
+    uint32_t surface_format = ctx->r[4];
+    uint32_t buffering_mode = ctx->r[5];
+    uint32_t size_addr = ctx->r[6];
+    uint32_t unk_addr = ctx->r[7];
+    uint32_t width, height, bpp, num_buffers;
+
+    switch (tv_render_mode) {
+        case 1u: width = 640u;  height = 480u;  break; /* STANDARD_480P */
+        case 2u: width = 854u;  height = 480u;  break; /* WIDE_480P */
+        case 3u: width = 1280u; height = 720u;  break; /* WIDE_720P */
+        case 4u: width = 1280u; height = 720u;  break; /* real, undocumented "Unk720p" -- see this function's own comment */
+        case 5u: width = 1920u; height = 1080u; break; /* WIDE_1080P */
+        default: return; /* real scope: DISABLED(0) and any other real value is a real, honest, documented gap */
+    }
+
+    bpp = bramble_gx2_surface_format_bpp(surface_format);
+    if (bpp == 0u) return;
+
+    switch (buffering_mode) {
+        case 1u: num_buffers = 1u; break; /* SINGLE */
+        case 2u: num_buffers = 2u; break; /* DOUBLE */
+        case 3u: num_buffers = 3u; break; /* TRIPLE */
+        default: return;
+    }
+
+    if (size_addr != 0u) ppc_store_u32(ctx, size_addr, width * height * bpp * num_buffers);
+    if (unk_addr != 0u) ppc_store_u32(ctx, unk_addr, 0u);
+}
+
+static inline void ppc_import_gx2_GX2CalcDRCSize(PpcContext *ctx) {
+    /* void GX2CalcDRCSize(GX2DrcRenderMode drcRenderMode,
+     * GX2SurfaceFormat surfaceFormat, GX2BufferingMode bufferingMode,
+     * uint32_t *size, uint32_t *unkOut) -- real signature confirmed
+     * against wut's gx2/display.h; same real ABI/reasoning as
+     * GX2CalcTVSize above. Real reference behavior (decaf-emu): the
+     * real GamePad/DRC output is a real, fixed 864x480 resolution
+     * regardless of `drcRenderMode` (unlike TV, which has multiple
+     * real resolutions) -- `*size = 864 * 480 * bytesPerPixel *
+     * numBuffers`, `*unkOut = 0`, reproduced directly from that real
+     * source. This runtime has no second real display target at all
+     * (see GX2SwapScanBuffers' own comment -- the Switch has one real
+     * screen), so this is real, informational buffer-sizing math only,
+     * not a claim that a real DRC output exists to size a buffer for. */
+    uint32_t drc_render_mode = ctx->r[3];
+    uint32_t surface_format = ctx->r[4];
+    uint32_t buffering_mode = ctx->r[5];
+    uint32_t size_addr = ctx->r[6];
+    uint32_t unk_addr = ctx->r[7];
+    uint32_t bpp, num_buffers;
+
+    if (drc_render_mode != 1u && drc_render_mode != 2u) return; /* real scope: SINGLE(1)/DOUBLE(2) only -- DISABLED(0) and any other real value is a real, honest, documented gap */
+
+    bpp = bramble_gx2_surface_format_bpp(surface_format);
+    if (bpp == 0u) return;
+
+    switch (buffering_mode) {
+        case 1u: num_buffers = 1u; break;
+        case 2u: num_buffers = 2u; break;
+        case 3u: num_buffers = 3u; break;
+        default: return;
+    }
+
+    if (size_addr != 0u) ppc_store_u32(ctx, size_addr, 864u * 480u * bpp * num_buffers);
+    if (unk_addr != 0u) ppc_store_u32(ctx, unk_addr, 0u);
+}
+
 #endif /* BRAMBLE_CAFEOS_GX2_H */
