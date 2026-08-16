@@ -328,6 +328,17 @@ typedef struct {
     DkMemBlock texture_mem_block[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
     DkMemBlock texture_staging_mem_block[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
     bool texture_bound[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
+
+    /* Real, one-shot temporary source image for
+     * GX2CopyColorBufferToScanBuffer (see its own comment for the full
+     * real design) -- a real, recorded `dkCmdBufCopyImage` reads from
+     * this after the call returns, not during it (same real deferred-
+     * execution timing as `depth_target_staging_mem_block` above), so
+     * it's kept alive as real, persistent state here too, replaced (not
+     * freed right after recording) on the next real call. */
+    DkImage scan_copy_temp_image;
+    DkMemBlock scan_copy_temp_mem_block;
+    bool scan_copy_temp_bound;
 } BrambleGx2State;
 
 /* GX2EventType's real enumerator count (confirmed against wut's
@@ -529,6 +540,12 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) {
                 g_bramble_gx2.texture_bound[i] = false;
             }
         }
+    }
+    if (g_bramble_gx2.scan_copy_temp_bound) {
+        /* Real cleanup for GX2CopyColorBufferToScanBuffer's temp
+         * source image (see its own comment). */
+        dkMemBlockDestroy(g_bramble_gx2.scan_copy_temp_mem_block);
+        g_bramble_gx2.scan_copy_temp_bound = false;
     }
     dkQueueDestroy(g_bramble_gx2.queue);
     dkCmdBufDestroy(g_bramble_gx2.cmdbuf);
@@ -2229,6 +2246,123 @@ static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) {
     bramble_gx2_set_texture(ctx, texture_addr, DkStage_Vertex, BRAMBLE_GX2_SAMPLER_VERTEX_BASE, unit);
 }
 
+static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx) {
+    /* void GX2CopyColorBufferToScanBuffer(const GX2ColorBuffer
+     * *colorBuffer, GX2ScanTarget scanTarget) -- real signature
+     * confirmed against wut's gx2/display.h. Real PPC ABI: r3=
+     * colorBuffer, r4=scanTarget (`GX2_SCAN_TARGET_TV`/`_DRC` --
+     * ignored here, same real, already-documented simplification as
+     * GX2ClearColor's own: this runtime has one real display target,
+     * the Switch's own screen, not a separate TV/DRC pair).
+     *
+     * Real reference behavior (decaf-emu's actual `gx2_display.cpp`):
+     * copies an arbitrary off-screen `GX2ColorBuffer` into the real TV/
+     * DRC scan buffer via a real (decaf-emu-internal, not literal AMD
+     * hardware) PM4 command. This project's own swapchain framebuffer
+     * *is* the presented scan buffer (no separate scan-buffer object
+     * exists), so the real, honest equivalent here is a real GPU
+     * image-to-image blit (`dkCmdBufCopyImage`) from a real deko3d
+     * image built from `colorBuffer`'s own surface fields straight into
+     * the currently-acquired swapchain framebuffer -- reusing
+     * `GX2SetColorBuffer`'s exact same bounded real design (pitch-
+     * linear image, `DkImageFlags_PitchLinear | UsageRender`, the
+     * explicit `pitchStride` computation this project's own real
+     * on-hardware bug hunt found necessary for the actual installed
+     * deko3d v0.5.0 -- see that function's own comment), same real
+     * scope limits (`dim`=DIM_2D, already-resolved-linear tile modes
+     * only, mip 0, `UNORM_R8_G8_B8_A8` only). Any other real input is a
+     * real, honest, documented gap: nothing is copied.
+     *
+     * Real, deferred-execution timing, same reasoning as
+     * `GX2SetDepthBuffer`'s staging buffer: the real `dkCmdBufCopyImage`
+     * command is only *recorded* here, actually executed whenever the
+     * next real `GX2Flush`/`GX2SwapScanBuffers` submits the shared
+     * cmdbuf -- so the temp source image's backing memory block must
+     * stay alive past this function returning, kept as real, persistent
+     * state (`scan_copy_temp_mem_block`) and only replaced (not freed
+     * immediately) on this function's next real call, same real
+     * lifetime rule already established for `depth_target_staging_mem_block`
+     * above. Copies the top-left `min(colorBuffer width/height, real
+     * swapchain framebuffer width/height)` region -- this project's
+     * own real swapchain framebuffers are a fixed
+     * `BRAMBLE_GX2_FB_WIDTH`x`BRAMBLE_GX2_FB_HEIGHT` (1280x720, see
+     * `bramble_gx2_create_framebuffers`' own comment), not necessarily
+     * matching `colorBuffer`'s own real dimensions. */
+    uint32_t color_buffer_addr = ctx->r[3];
+    uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
+    uint32_t bytes_per_pixel = 4u; /* RGBA8_UNORM only, see this function's own comment */
+    uint32_t image_size, copy_width, copy_height, row;
+    uint8_t *dest_cpu;
+    DkImageLayoutMaker layout_maker;
+    DkImageLayout layout;
+    DkMemBlockMaker mem_maker;
+    DkImageView src_view, dst_view;
+    DkImageRect src_rect, dst_rect;
+
+    memset(&layout, 0, sizeof(layout)); /* defensive, same reasoning as GX2SetColorBuffer's own comment */
+
+    dim = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
+    width = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
+    height = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
+    mip_levels = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET);
+    format = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
+    tile_mode = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
+    pitch = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
+    image_addr = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+
+    if (dim != 1u) return;
+    if (tile_mode != 1u && tile_mode != 16u) return;
+    if (mip_levels > 1u) return;
+    if (format != 0x1au) return;
+    if (width == 0u || height == 0u || pitch == 0u) return;
+
+    dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
+    layout_maker.flags = DkImageFlags_PitchLinear | DkImageFlags_UsageRender;
+    layout_maker.format = DkImageFormat_RGBA8_Unorm;
+    layout_maker.dimensions[0] = width;
+    layout_maker.dimensions[1] = height;
+    layout_maker.dimensions[2] = 1;
+    layout_maker.mipLevels = 1;
+    layout_maker.pitchStride = bramble_gx2_pow2_align(bytes_per_pixel * width, 128u);
+    dkImageLayoutInitialize(&layout, &layout_maker);
+
+    image_size = (uint32_t)dkImageLayoutGetSize(&layout);
+    dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device,
+                             bramble_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
+    mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+
+    if (g_bramble_gx2.scan_copy_temp_bound) {
+        dkMemBlockDestroy(g_bramble_gx2.scan_copy_temp_mem_block);
+        g_bramble_gx2.scan_copy_temp_bound = false;
+    }
+    g_bramble_gx2.scan_copy_temp_mem_block = dkMemBlockCreate(&mem_maker);
+    dkImageInitialize(&g_bramble_gx2.scan_copy_temp_image, &layout, g_bramble_gx2.scan_copy_temp_mem_block, 0);
+    g_bramble_gx2.scan_copy_temp_bound = true;
+
+    dest_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.scan_copy_temp_mem_block);
+    for (row = 0; row < height; row++) {
+        uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
+        uint32_t dst_off = row * layout_maker.pitchStride;
+        uint32_t i;
+        for (i = 0; i < bytes_per_pixel * width; i++) {
+            dest_cpu[dst_off + i] = ppc_load_u8(ctx, src_off + i);
+        }
+    }
+
+    bramble_gx2_ensure_frame_acquired();
+
+    copy_width = (width < BRAMBLE_GX2_FB_WIDTH) ? width : BRAMBLE_GX2_FB_WIDTH;
+    copy_height = (height < BRAMBLE_GX2_FB_HEIGHT) ? height : BRAMBLE_GX2_FB_HEIGHT;
+
+    dkImageViewDefaults(&src_view, &g_bramble_gx2.scan_copy_temp_image);
+    dkImageViewDefaults(&dst_view, &g_bramble_gx2.framebuffers[g_bramble_gx2.acquired_slot]);
+    src_rect.x = 0; src_rect.y = 0; src_rect.z = 0;
+    src_rect.width = copy_width; src_rect.height = copy_height; src_rect.depth = 1;
+    dst_rect.x = 0; dst_rect.y = 0; dst_rect.z = 0;
+    dst_rect.width = copy_width; dst_rect.height = copy_height; dst_rect.depth = 1;
+    dkCmdBufCopyImage(g_bramble_gx2.cmdbuf, &src_view, &src_rect, &dst_view, &dst_rect, 0);
+}
+
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
 
 static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { (void)ctx; }
@@ -2269,6 +2403,7 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { (void)ctx
 static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPixelTexture(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx) { (void)ctx; }
 
 #endif /* __SWITCH__ */
 
