@@ -270,6 +270,40 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         // functions, hence the name-prefix allowlist rather than accepting
         // every STT_NOTYPE symbol in .text.
         if (type != STT_FUNC && !is_savres_helper) continue;
+
+        // GHS emits real, genuine STT_FUNC symbols purely for source-level
+        // debug info -- begin-of-file/end-of-file markers (raw names shaped
+        // like "..bof.C.3A.5CDev..." / "..eof...", sanitized above to
+        // "__bof_.../__eof_...", plus a "..bof.trg..."/"..eof.trg..."
+        // variant and a shorter "..b../..e.." form, all confirmed present
+        // in the real Skylanders: Spyro's Adventure binary) that always
+        // share the exact same start address as the real function whose
+        // source line they're marking -- confirmed by hand: e.g. a real
+        // `__bof_..hkFixedSizeAllocator..` symbol and the real, correctly
+        // STT_FUNC-sized `blockAlloc__20hkFixedSizeAllocatorFi` both start
+        // at 0x254a57c, and a real `__b___..gfdInterface..` symbol and
+        // `_GFDGetHeaderVersions` both start at 0x2579a0c. These debug
+        // markers carry st_size=0 (they own no real code of their own),
+        // which used to trigger scan_forward_for_blr_size's fallback --
+        // designed for the different, real _savegpr_*-style shared-tail
+        // case above, where the blr genuinely belongs to the symbol being
+        // sized. Here it doesn't: the scan finds whatever blr comes first
+        // in the *real* function's body (or a neighboring one) and gives
+        // this debug marker a bogus, truncated size covering only part of
+        // that real function -- producing a second, broken "function" that
+        // duplicates the real one's early instructions and then hits a
+        // conditional branch whose target lands outside its own
+        // (wrongly-truncated) range, emitting an "unresolved conditional
+        // tail call" #error. Confirmed as the real cause of the large
+        // majority (167 of ~200) of such errors when recompiling the real
+        // game binary; skipped here rather than sized, since they never
+        // own real, independently-callable code to begin with.
+        bool is_debug_marker = all_sym_names[i].rfind("__bof_", 0) == 0 ||
+                                all_sym_names[i].rfind("__eof_", 0) == 0 ||
+                                all_sym_names[i].rfind("__b___", 0) == 0 ||
+                                all_sym_names[i].rfind("__e___", 0) == 0;
+        if (is_debug_marker) continue;
+
         uint32_t size = st_size;
         if (size == 0) {
             // See scan_forward_for_blr_size's comment -- these are real,
