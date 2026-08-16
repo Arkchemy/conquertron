@@ -1077,6 +1077,25 @@ static inline void ppc_import_gx2_GX2Invalidate(PpcContext *ctx) {
     (void)ctx;
 }
 
+static inline void ppc_import_gx2_GX2GetDisplayListWriteStatus(PpcContext *ctx) {
+    /* BOOL GX2GetDisplayListWriteStatus(void) -- real signature
+     * confirmed against wut's gx2/displaylist.h: reports whether the
+     * GPU is currently recording into a display list opened by
+     * GX2BeginDisplayListEx (real hardware toggles an internal flag
+     * across that Begin/EndDisplayList pair). This shim has no real
+     * display-list recording of its own yet (GX2BeginDisplayListEx/
+     * GX2EndDisplayList/GX2CallDisplayList/GX2CopyDisplayList are all
+     * still on docs/phase1d_import_surface.md's remaining list) -- so
+     * a display list can genuinely never be open here, making FALSE
+     * the real, honest current answer rather than a guess: there's no
+     * invented "recording" state being reported on, just the true
+     * absence of the feature. Documented as a real gap to revisit once
+     * display-list recording exists, same as every other
+     * not-yet-attempted GX2 feature in this file. */
+    (void)ctx;
+    ctx->r[3] = 0; /* FALSE */
+}
+
 static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) {
     /* uint32_t GX2GetSurfaceFormatBits(GX2SurfaceFormat format) -- real
      * formula and table confirmed directly against Cemu's HLE
