@@ -111,6 +111,27 @@ typedef struct {
     uint64_t retired_timestamp;
     uint32_t swap_count;
     uint32_t flip_count;
+
+    /* Real, persistent host-side shadow copies of deko3d's own combined
+     * state objects. Real GX2, like real deko3d, groups several
+     * logically-separate settings into one hardware register/one bind
+     * call each (e.g. deko3d's single DkColorState carries blend-enable
+     * mask, logic-op, *and* alpha-test compare op together) -- multiple
+     * *different* real GX2 calls (GX2SetColorControl, GX2SetAlphaTest)
+     * can each touch only part of the *same* underlying deko3d state
+     * object. Binding a freshly-defaulted local struct per call (this
+     * file's original approach, before GX2SetAlphaTest below needed to
+     * touch DkColorState too) would silently reset whichever fields the
+     * *other* real GX2 call had set -- these shadow copies exist so
+     * each GX2Set* function can read-modify-write just its own real
+     * field(s) and rebind the whole combined object, matching real
+     * hardware's actual "these are independent settings that happen to
+     * share one register" semantics. */
+    DkRasterizerState rasterizer_state;
+    DkDepthStencilState depth_stencil_state;
+    DkColorState color_state;
+    DkColorWriteState color_write_state;
+    DkMultisampleState multisample_state;
 } BrambleGx2State;
 
 static BrambleGx2State g_bramble_gx2;
@@ -209,6 +230,12 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) {
     g_bramble_gx2.queue = dkQueueCreate(&queue_maker);
 
     bramble_gx2_create_framebuffers();
+
+    dkRasterizerStateDefaults(&g_bramble_gx2.rasterizer_state);
+    dkDepthStencilStateDefaults(&g_bramble_gx2.depth_stencil_state);
+    dkColorStateDefaults(&g_bramble_gx2.color_state);
+    dkColorWriteStateDefaults(&g_bramble_gx2.color_write_state);
+    dkMultisampleStateDefaults(&g_bramble_gx2.multisample_state);
 
     g_bramble_gx2.initialized = true;
 }
@@ -425,29 +452,35 @@ static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) {
      * render target 0's color to every bound target) has no deko3d
      * equivalent found -- a real, honest, unimplemented gap, not
      * silently dropped: the argument is read but intentionally
-     * unused. */
+     * unused.
+     *
+     * Reads/writes the persistent `g_bramble_gx2.color_state`/
+     * `color_write_state` shadow copies (see their field comment on
+     * BrambleGx2State) rather than binding fresh, freshly-defaulted
+     * local structs -- GX2SetAlphaTest below touches
+     * `color_state.alphaCompareOp`, and GX2SetTargetChannelMasks
+     * touches `color_write_state` per-target, both real, independent
+     * GX2 calls that share deko3d's same two combined state objects;
+     * rebinding a local default here would silently erase whichever of
+     * those the other already set. */
     uint32_t rop3 = ctx->r[3];
     uint32_t target_blend_enable = ctx->r[4];
     uint32_t multi_write_enable = ctx->r[5];
     uint32_t color_write_enable = ctx->r[6];
-    DkColorState color_state;
-    DkColorWriteState write_state;
     uint32_t i;
 
     (void)multi_write_enable; /* no deko3d equivalent -- see comment above */
 
-    dkColorStateDefaults(&color_state);
-    color_state.logicOp = bramble_gx2_logic_op_to_dk(rop3);
+    g_bramble_gx2.color_state.logicOp = bramble_gx2_logic_op_to_dk(rop3);
     for (i = 0; i < 8; i++) {
-        dkColorStateSetBlendEnable(&color_state, i, (target_blend_enable >> i) & 1u);
+        dkColorStateSetBlendEnable(&g_bramble_gx2.color_state, i, (target_blend_enable >> i) & 1u);
     }
-    dkCmdBufBindColorState(g_bramble_gx2.cmdbuf, &color_state);
+    dkCmdBufBindColorState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.color_state);
 
-    dkColorWriteStateDefaults(&write_state);
     for (i = 0; i < 8; i++) {
-        dkColorWriteStateSetMask(&write_state, i, color_write_enable ? DkColorMask_RGBA : 0u);
+        dkColorWriteStateSetMask(&g_bramble_gx2.color_write_state, i, color_write_enable ? DkColorMask_RGBA : 0u);
     }
-    dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &write_state);
+    dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.color_write_state);
 }
 
 static inline DkCompareOp bramble_gx2_compare_func_to_dk(uint32_t gx2_func) {
@@ -472,6 +505,60 @@ static inline DkStencilOp bramble_gx2_stencil_func_to_dk(uint32_t gx2_func) {
      * stencil operations in the exact same order. */
     if (gx2_func >= 8) return DkStencilOp_Keep; /* defensive fallback for an out-of-range/unrecognized value */
     return (DkStencilOp)(gx2_func + 1);
+}
+
+static inline void ppc_import_gx2_GX2SetAlphaTest(PpcContext *ctx) {
+    /* void GX2SetAlphaTest(BOOL alphaTest, GX2CompareFunction func,
+     * float ref) -- real signature confirmed against wut's
+     * gx2/registers.h, 2 integer/BOOL params (r3-r4) + 1 real float
+     * param (f1, per this project's established convention of floats
+     * arriving in the FPR file, not the GPR file, regardless of GPR
+     * argument position -- see e.g. GX2ClearColor above).
+     *
+     * Real deko3d equivalent lives inside the *same* combined
+     * DkColorState object GX2SetColorControl above already binds
+     * (`alphaCompareOp`, confirmed against deko3d.h sitting alongside
+     * `logicOp`/`blendEnableMask` in that one struct) plus a separate
+     * real `dkCmdBufSetAlphaRef(cmdbuf, ref)` call for the reference
+     * value -- real hardware's alpha test has no separate on/off bit in
+     * either API, "disabled" is expressed as "always passes"
+     * (DkCompareOp_Always), so alphaTest==false maps to that rather
+     * than leaving the previous compare op in place. Reads/writes the
+     * persistent shadow copy, same reasoning as GX2SetColorControl
+     * above -- rebinding a fresh local DkColorState here would silently
+     * erase whatever logicOp/blendEnableMask GX2SetColorControl already
+     * set. */
+    uint32_t alpha_test = ctx->r[3];
+    uint32_t func = ctx->r[4];
+    float ref = (float)ctx->f[1];
+
+    g_bramble_gx2.color_state.alphaCompareOp = alpha_test ? bramble_gx2_compare_func_to_dk(func) : DkCompareOp_Always;
+    dkCmdBufBindColorState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.color_state);
+    dkCmdBufSetAlphaRef(g_bramble_gx2.cmdbuf, ref);
+}
+
+static inline void ppc_import_gx2_GX2SetAlphaToMask(PpcContext *ctx) {
+    /* void GX2SetAlphaToMask(BOOL alphaToMask, GX2AlphaToMaskMode mode)
+     * -- real signature confirmed against wut's gx2/registers.h.
+     * GX2AlphaToMaskMode (confirmed against wut's gx2/enum.h:
+     * NON_DITHERED=0, DITHER_0/90/180/270=1-4) real values encode both
+     * whether dithering is used *and* one of four real dither pattern
+     * phase offsets; deko3d's DkMultisampleState only has a plain
+     * on/off `alphaToCoverageDither` bit (no phase-offset control) --
+     * mapped here as mode==0 (non-dithered) -> dither off, any of the
+     * four real DITHER_* variants -> dither on, with the specific real
+     * phase offset a documented, honest gap (no deko3d field to put it
+     * in). Reads/writes the persistent shadow copy, same
+     * read-modify-write reasoning as the other combined-state GX2Set*
+     * functions in this file -- DkMultisampleState also carries real
+     * MSAA mode fields nothing here sets yet, which a fresh local
+     * default would silently reset once those exist. */
+    uint32_t alpha_to_mask = ctx->r[3];
+    uint32_t mode = ctx->r[4];
+
+    g_bramble_gx2.multisample_state.alphaToCoverageEnable = alpha_to_mask ? 1 : 0;
+    g_bramble_gx2.multisample_state.alphaToCoverageDither = (mode != 0) ? 1 : 0;
+    dkCmdBufBindMultisampleState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.multisample_state);
 }
 
 static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) {
@@ -516,32 +603,34 @@ static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) {
     uint32_t back_stencil_zpass = ppc_load_u32(ctx, ctx->r[1] + 16);
     uint32_t back_stencil_zfail = ppc_load_u32(ctx, ctx->r[1] + 20);
     uint32_t back_stencil_fail = ppc_load_u32(ctx, ctx->r[1] + 24);
-    DkDepthStencilState state;
+    DkDepthStencilState *state = &g_bramble_gx2.depth_stencil_state;
 
-    dkDepthStencilStateDefaults(&state);
-    state.depthTestEnable = depth_test ? 1 : 0;
-    state.depthWriteEnable = depth_write ? 1 : 0;
-    state.depthCompareOp = bramble_gx2_compare_func_to_dk(depth_compare);
-    state.stencilTestEnable = stencil_test ? 1 : 0;
+    /* Reads/writes the persistent shadow copy (see BrambleGx2State's
+     * field comment) -- GX2SetDepthOnlyControl below is a real subset
+     * of this same hardware register and shares this same object. */
+    state->depthTestEnable = depth_test ? 1 : 0;
+    state->depthWriteEnable = depth_write ? 1 : 0;
+    state->depthCompareOp = bramble_gx2_compare_func_to_dk(depth_compare);
+    state->stencilTestEnable = stencil_test ? 1 : 0;
 
-    state.stencilFrontCompareOp = bramble_gx2_compare_func_to_dk(front_stencil_func);
-    state.stencilFrontPassOp = bramble_gx2_stencil_func_to_dk(front_stencil_zpass);
-    state.stencilFrontDepthFailOp = bramble_gx2_stencil_func_to_dk(front_stencil_zfail);
-    state.stencilFrontFailOp = bramble_gx2_stencil_func_to_dk(front_stencil_fail);
+    state->stencilFrontCompareOp = bramble_gx2_compare_func_to_dk(front_stencil_func);
+    state->stencilFrontPassOp = bramble_gx2_stencil_func_to_dk(front_stencil_zpass);
+    state->stencilFrontDepthFailOp = bramble_gx2_stencil_func_to_dk(front_stencil_zfail);
+    state->stencilFrontFailOp = bramble_gx2_stencil_func_to_dk(front_stencil_fail);
 
     if (backface_stencil) {
-        state.stencilBackCompareOp = bramble_gx2_compare_func_to_dk(back_stencil_func);
-        state.stencilBackPassOp = bramble_gx2_stencil_func_to_dk(back_stencil_zpass);
-        state.stencilBackDepthFailOp = bramble_gx2_stencil_func_to_dk(back_stencil_zfail);
-        state.stencilBackFailOp = bramble_gx2_stencil_func_to_dk(back_stencil_fail);
+        state->stencilBackCompareOp = bramble_gx2_compare_func_to_dk(back_stencil_func);
+        state->stencilBackPassOp = bramble_gx2_stencil_func_to_dk(back_stencil_zpass);
+        state->stencilBackDepthFailOp = bramble_gx2_stencil_func_to_dk(back_stencil_zfail);
+        state->stencilBackFailOp = bramble_gx2_stencil_func_to_dk(back_stencil_fail);
     } else {
-        state.stencilBackCompareOp = state.stencilFrontCompareOp;
-        state.stencilBackPassOp = state.stencilFrontPassOp;
-        state.stencilBackDepthFailOp = state.stencilFrontDepthFailOp;
-        state.stencilBackFailOp = state.stencilFrontFailOp;
+        state->stencilBackCompareOp = state->stencilFrontCompareOp;
+        state->stencilBackPassOp = state->stencilFrontPassOp;
+        state->stencilBackDepthFailOp = state->stencilFrontDepthFailOp;
+        state->stencilBackFailOp = state->stencilFrontFailOp;
     }
 
-    dkCmdBufBindDepthStencilState(g_bramble_gx2.cmdbuf, &state);
+    dkCmdBufBindDepthStencilState(g_bramble_gx2.cmdbuf, state);
 }
 
 static inline DkFrontFace bramble_gx2_front_face_to_dk(uint32_t gx2_front_face) {
@@ -607,28 +696,32 @@ static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) {
     uint32_t poly_offset_front_enable = ctx->r[9];
     uint32_t poly_offset_back_enable = ctx->r[10];
     uint32_t poly_offset_para_enable = ppc_load_u32(ctx, ctx->r[1] + 8);
-    DkRasterizerState state;
+    DkRasterizerState *state = &g_bramble_gx2.rasterizer_state;
 
     (void)poly_offset_front_enable; /* no deko3d equivalent -- see comment above */
     (void)poly_offset_back_enable;  /* no deko3d equivalent -- see comment above */
     (void)poly_offset_para_enable;  /* no deko3d equivalent -- see comment above */
 
-    dkRasterizerStateDefaults(&state);
-    state.frontFace = bramble_gx2_front_face_to_dk(front_face);
-    if (cull_front && cull_back) state.cullMode = DkFace_FrontAndBack;
-    else if (cull_front) state.cullMode = DkFace_Front;
-    else if (cull_back) state.cullMode = DkFace_Back;
-    else state.cullMode = DkFace_None;
+    /* Reads/writes the persistent shadow copy (see BrambleGx2State's
+     * field comment) -- GX2SetCullOnlyControl below and
+     * GX2SetRasterizerClipControl further down are real subsets/
+     * neighbors of this same hardware register and share this same
+     * object. */
+    state->frontFace = bramble_gx2_front_face_to_dk(front_face);
+    if (cull_front && cull_back) state->cullMode = DkFace_FrontAndBack;
+    else if (cull_front) state->cullMode = DkFace_Front;
+    else if (cull_back) state->cullMode = DkFace_Back;
+    else state->cullMode = DkFace_None;
 
     if (poly_mode) {
-        state.polygonModeFront = bramble_gx2_polygon_mode_to_dk(poly_mode_front);
-        state.polygonModeBack = bramble_gx2_polygon_mode_to_dk(poly_mode_back);
+        state->polygonModeFront = bramble_gx2_polygon_mode_to_dk(poly_mode_front);
+        state->polygonModeBack = bramble_gx2_polygon_mode_to_dk(poly_mode_back);
     } else {
-        state.polygonModeFront = DkPolygonMode_Fill;
-        state.polygonModeBack = DkPolygonMode_Fill;
+        state->polygonModeFront = DkPolygonMode_Fill;
+        state->polygonModeBack = DkPolygonMode_Fill;
     }
 
-    dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, &state);
+    dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, state);
 }
 
 static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) {
@@ -637,22 +730,50 @@ static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) {
      * gx2/registers.h), a real 3-parameter subset of
      * GX2SetPolygonControl above (same real hardware register, culling
      * fields only) -- reuses the exact same frontFace/cullMode
-     * translation, leaving deko3d's polygon fill mode at its real
-     * default (Fill), matching GX2SetPolygonControl's own
-     * polyMode==false fallback for consistency. */
+     * translation, leaving the shadow rasterizer state's polygon fill
+     * mode/depth-clip fields untouched (unlike a local default, which
+     * would silently reset whatever GX2SetPolygonControl/
+     * GX2SetRasterizerClipControl already set there). */
     uint32_t front_face = ctx->r[3];
     uint32_t cull_front = ctx->r[4];
     uint32_t cull_back = ctx->r[5];
-    DkRasterizerState state;
+    DkRasterizerState *state = &g_bramble_gx2.rasterizer_state;
 
-    dkRasterizerStateDefaults(&state);
-    state.frontFace = bramble_gx2_front_face_to_dk(front_face);
-    if (cull_front && cull_back) state.cullMode = DkFace_FrontAndBack;
-    else if (cull_front) state.cullMode = DkFace_Front;
-    else if (cull_back) state.cullMode = DkFace_Back;
-    else state.cullMode = DkFace_None;
+    state->frontFace = bramble_gx2_front_face_to_dk(front_face);
+    if (cull_front && cull_back) state->cullMode = DkFace_FrontAndBack;
+    else if (cull_front) state->cullMode = DkFace_Front;
+    else if (cull_back) state->cullMode = DkFace_Back;
+    else state->cullMode = DkFace_None;
 
-    dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, &state);
+    dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, state);
+}
+
+static inline void ppc_import_gx2_GX2SetRasterizerClipControl(PpcContext *ctx) {
+    /* void GX2SetRasterizerClipControl(BOOL rasterizer, BOOL
+     * zclipEnable) -- real signature confirmed against wut's
+     * gx2/registers.h. `rasterizer` is real hardware's rasterizer-stage
+     * on/off switch (disabling it real-mode-skips rasterization
+     * entirely, used for e.g. transform-feedback-only passes) -- maps
+     * directly onto deko3d's `DkRasterizerState.rasterizerEnable`,
+     * confirmed as the same real concept by name and by deko3d.h's own
+     * default (enabled). `zclipEnable` (real hardware "clip primitives
+     * against the near/far depth planes") is the real *inverse* of
+     * deko3d's `depthClampEnable` (depth-clamp *disables* depth
+     * clipping in favor of clamping depth values to [0,1] instead) --
+     * confirmed by deko3d.h's own default (depthClampEnable=0, i.e.
+     * clipping-on, matching GX2's own real default of zclipEnable=TRUE)
+     * -- so zclipEnable maps to `!depthClampEnable`, not a direct
+     * passthrough. Reads/writes the persistent shadow copy, same
+     * reasoning as GX2SetPolygonControl/GX2SetCullOnlyControl above,
+     * which share this same combined object. */
+    uint32_t rasterizer = ctx->r[3];
+    uint32_t zclip_enable = ctx->r[4];
+    DkRasterizerState *state = &g_bramble_gx2.rasterizer_state;
+
+    state->rasterizerEnable = rasterizer ? 1 : 0;
+    state->depthClampEnable = zclip_enable ? 0 : 1;
+
+    dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, state);
 }
 
 static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) {
@@ -661,19 +782,20 @@ static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) {
      * (wut's gx2/registers.h), a real 3-parameter subset of
      * GX2SetDepthStencilControl above (same real hardware register,
      * depth fields only) -- reuses the exact same depth-field
-     * translation, leaving deko3d's stencil state at its real default
-     * (disabled), matching the real semantics of "depth only". */
+     * translation, leaving the shadow depth-stencil state's stencil
+     * fields untouched (unlike a local default, which would silently
+     * reset whatever GX2SetDepthStencilControl already set there),
+     * matching the real semantics of "depth only". */
     uint32_t depth_test = ctx->r[3];
     uint32_t depth_write = ctx->r[4];
     uint32_t depth_compare = ctx->r[5];
-    DkDepthStencilState state;
+    DkDepthStencilState *state = &g_bramble_gx2.depth_stencil_state;
 
-    dkDepthStencilStateDefaults(&state);
-    state.depthTestEnable = depth_test ? 1 : 0;
-    state.depthWriteEnable = depth_write ? 1 : 0;
-    state.depthCompareOp = bramble_gx2_compare_func_to_dk(depth_compare);
+    state->depthTestEnable = depth_test ? 1 : 0;
+    state->depthWriteEnable = depth_write ? 1 : 0;
+    state->depthCompareOp = bramble_gx2_compare_func_to_dk(depth_compare);
 
-    dkCmdBufBindDepthStencilState(g_bramble_gx2.cmdbuf, &state);
+    dkCmdBufBindDepthStencilState(g_bramble_gx2.cmdbuf, state);
 }
 
 static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) {
@@ -715,18 +837,24 @@ static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) {
      * DkColorMask (deko3d.h: R=1<<0, G=1<<1, B=1<<2, A=1<<3) -- a
      * direct 1:1 passthrough into DkColorWriteState's per-target mask,
      * no translation table needed, unlike most other GX2<->deko3d enum
-     * mappings in this file. */
+     * mappings in this file.
+     *
+     * Reads/writes the persistent `g_bramble_gx2.color_write_state`
+     * shadow copy -- GX2SetColorControl above's `colorWriteEnable` also
+     * writes every target's mask in this same combined deko3d object,
+     * so whichever of the two real GX2 calls runs last wins (a real,
+     * documented "last write wins" simplification for now, since which
+     * of the two real hardware registers actually takes precedence when
+     * both are set isn't confirmed here). */
     uint32_t masks[8];
-    DkColorWriteState state;
     uint32_t i;
 
     for (i = 0; i < 8; i++) masks[i] = ctx->r[3 + i];
 
-    dkColorWriteStateDefaults(&state);
     for (i = 0; i < 8; i++) {
-        dkColorWriteStateSetMask(&state, i, masks[i]);
+        dkColorWriteStateSetMask(&g_bramble_gx2.color_write_state, i, masks[i]);
     }
-    dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &state);
+    dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.color_write_state);
 }
 
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
@@ -975,9 +1103,12 @@ static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) { (void)c
 static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetAlphaTest(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetAlphaToMask(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetRasterizerClipControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) { (void)ctx; }
@@ -1096,6 +1227,65 @@ static inline void ppc_import_gx2_GX2Invalidate(PpcContext *ctx) {
      * real for this to do yet, not a shortcut around something that
      * matters. Backend-independent (works identically whether or not
      * deko3d is available), unlike most of this file's GX2* functions. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetPointLimits(PpcContext *ctx) {
+    /* void GX2SetPointLimits(float min, float max) -- real signature
+     * confirmed against wut's gx2/registers.h, 2 real float args
+     * (f1-f2, GX2SetPointSize's own already-established float-arg
+     * convention above). Real hardware clamps the effective point size
+     * (set via GX2SetPointSize) to this [min, max] range; deko3d's own
+     * `dkCmdBufSetPointSize` (already used by GX2SetPointSize above)
+     * has no matching min/max clamp parameter or separate real API
+     * found for one -- a genuine, documented gap, not a guess, since
+     * there's no plausible deko3d call to guess at rather than simply
+     * having none. Accepted, not stored. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetStreamOutEnable(PpcContext *ctx) {
+    /* void GX2SetStreamOutEnable(BOOL enable) -- real signature
+     * confirmed against wut's gx2/shaders.h. Real hardware transform
+     * feedback (writing vertex-shader output to a real memory buffer
+     * instead of/in addition to rasterizing) has no real deko3d bind/
+     * enable call found in this project's actual deko3d.h (only a
+     * `DkCounter_TransformFeedbackPrimitivesWritten` query counter
+     * exists, no setup API) -- consistent with there being no real
+     * vertex/geometry shader translation pipeline in this project yet
+     * either (a separate, much larger unattempted problem, see
+     * docs/phase1d_import_surface.md), so there's genuinely nothing for
+     * a real transform-feedback buffer to attach to regardless.
+     * Accepted, not stored -- a real, honest gap. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetTessellation(PpcContext *ctx) {
+    /* void GX2SetTessellation(GX2TessellationMode tessellationMode,
+     * GX2PrimitiveMode primitiveMode, GX2IndexType indexType) -- real
+     * signature confirmed against wut's gx2/tessellation.h. Real AMD
+     * hardware tessellation (a fixed-function tessellator stage between
+     * hull and domain shaders) has no matching concept anywhere in
+     * deko3d.h -- confirmed by its complete absence, not assumed; this
+     * project also has no real hull/domain shader translation to feed
+     * it regardless (shader translation itself remains unattempted, see
+     * docs/phase1d_import_surface.md). Accepted, not stored -- a real,
+     * honest gap, not a guess at unavailable state. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetMinTessellationLevel(PpcContext *ctx) {
+    /* void GX2SetMinTessellationLevel(float min) -- same real
+     * unimplemented-hardware-feature reasoning as GX2SetTessellation
+     * above; this real per-edge tessellation-factor floor has nothing
+     * in deko3d to configure. Accepted, not stored. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetMaxTessellationLevel(PpcContext *ctx) {
+    /* void GX2SetMaxTessellationLevel(float max) -- same real
+     * unimplemented-hardware-feature reasoning as GX2SetTessellation
+     * above. Accepted, not stored. */
     (void)ctx;
 }
 
