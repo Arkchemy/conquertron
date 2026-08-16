@@ -1357,6 +1357,31 @@ static inline void ppc_import_gx2_GX2SetDRCScale(PpcContext *ctx) {
     (void)ctx;
 }
 
+static inline void ppc_import_gx2_GX2SetTVGamma(PpcContext *ctx) {
+    /* void GX2SetTVGamma(float gamma) -- real behavior (confirmed
+     * against Cemu's GX2_Misc.cpp) stores `1.0f - gamma` into internal
+     * GPU state consumed by the real TV scan-out gamma-correction
+     * hardware stage. This runtime's present path
+     * (`GX2SwapScanBuffers`/`dkQueuePresentImage`) has no real
+     * gamma-correction stage of its own to feed this into yet --
+     * accepted, not stored, same "no real getter in this game's actual
+     * import list to contradict it" reasoning as `GX2SetSwapInterval`/
+     * `GX2SetTVScale` above. Real, documented gap: a game relying on
+     * this for real gamma correction would render at the wrong
+     * brightness/contrast curve until scan-out gamma is wired up for
+     * real (likely as a post-process shader pass, since deko3d itself
+     * has no fixed-function gamma stage either). */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetDRCGamma(PpcContext *ctx) {
+    /* void GX2SetDRCGamma(float gamma) -- same real per-scan-target
+     * gamma correction GX2SetTVGamma above is, just for the GamePad/DRC
+     * target this runtime also has no second real display for (see
+     * GX2SetDRCEnable above). Same reasoning: accepted, not stored. */
+    (void)ctx;
+}
+
 static inline void ppc_import_gx2_GX2SetTVBuffer(PpcContext *ctx) {
     /* void GX2SetTVBuffer(void *buffer, uint32_t size, GX2TVRenderMode
      * tvRenderMode, GX2SurfaceFormat surfaceFormat, GX2BufferingMode
