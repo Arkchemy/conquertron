@@ -1513,6 +1513,59 @@ static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) {
     ctx->r[3] = bpp;
 }
 
+/* ---- GX2DepthBuffer clear-value setters --------------------------------
+ *
+ * GX2SetClearDepth/GX2SetClearStencil/GX2SetClearDepthStencil write the
+ * real depthClear/stencilClear fields directly into a guest
+ * `GX2DepthBuffer` struct (confirmed real offsets: depthClear at 0x88,
+ * a float; stencilClear at 0x8C, a uint32_t despite the real API taking
+ * a uint8_t -- both WUT_CHECK_OFFSET-confirmed against wut's
+ * gx2/surface.h). Confirmed against Cemu's real HLE
+ * (src/Cafe/OS/libs/gx2/GX2_Blit.cpp): real hardware also submits a
+ * DB_DEPTH_CLEAR/DB_STENCIL_CLEAR PM4 register write here, but this
+ * runtime has no real PM4 command-stream model to submit into (see
+ * `ppc_dispatch`/command-buffer notes elsewhere in this file) -- the
+ * real, guest-visible effect these functions have on `GX2DepthBuffer`
+ * itself is what's implemented; the immediate register write is a real
+ * gap, consistent with how this shim already only tracks guest-visible
+ * state rather than modeling the underlying real GPU command stream
+ * byte-for-byte. Backend-independent (pure guest-memory writes, no
+ * deko3d call), works identically on host and Switch. */
+
+#define BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET 0x88u
+#define BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET 0x8Cu
+
+static inline void ppc_import_gx2_GX2SetClearDepth(PpcContext *ctx) {
+    /* void GX2SetClearDepth(GX2DepthBuffer *depthBuffer, float depth) --
+     * real args: r3=depthBuffer (pointer, integer sequence), f1=depth
+     * (independent float sequence, real PPC32 SVR4 ABI). */
+    uint32_t depth_buffer_addr = ctx->r[3];
+    ppc_store_f32(ctx, depth_buffer_addr + BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET, ctx->f[1]);
+}
+
+static inline void ppc_import_gx2_GX2SetClearStencil(PpcContext *ctx) {
+    /* void GX2SetClearStencil(GX2DepthBuffer *depthBuffer,
+     * uint8_t stencil) -- real args: both integers, r3=depthBuffer,
+     * r4=stencil (widened to the real uint32_t field width, matching
+     * the real GX2DepthBuffer struct's own `stencilClear` field type). */
+    uint32_t depth_buffer_addr = ctx->r[3];
+    uint32_t stencil = ctx->r[4] & 0xFFu;
+    ppc_store_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET, stencil);
+}
+
+static inline void ppc_import_gx2_GX2SetClearDepthStencil(PpcContext *ctx) {
+    /* void GX2SetClearDepthStencil(GX2DepthBuffer *depthBuffer,
+     * float depth, uint8_t stencil) -- real args: r3=depthBuffer
+     * (integer sequence #1), f1=depth (independent float sequence),
+     * r4=stencil (integer sequence #2) -- real PPC32 SVR4 ABI keeps the
+     * integer and float argument sequences independent regardless of
+     * their position in the real source-level parameter list. */
+    uint32_t depth_buffer_addr = ctx->r[3];
+    uint32_t stencil = ctx->r[4] & 0xFFu;
+    ppc_store_f32(ctx, depth_buffer_addr + BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET, ctx->f[1]);
+    ppc_store_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET, stencil);
+}
+
 /* ---- GX2Sampler init family ------------------------------------------
  *
  * GX2Sampler is a real, tiny opaque struct: `uint32_t regs[3]` (12 bytes,
