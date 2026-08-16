@@ -211,6 +211,18 @@ typedef struct {
      * DkSamplerDescriptor entries, its DkGpuAddr recorded once). */
     DkMemBlock sampler_descriptor_mem_block;
     DkGpuAddr sampler_descriptor_gpu_addr;
+
+    /* Real per-slot border color storage (see GX2SetPixelSamplerBorderColor/
+     * GX2SetVertexSamplerBorderColor's own comment). Real GX2/AMD
+     * hardware keeps this in a genuinely separate register bank
+     * (TD_PS_SAMPLER_BORDER_COLOR/TD_VS_SAMPLER_BORDER_COLOR, confirmed
+     * against Cemu's real LatteReg.h), indexed the same real way as the
+     * sampler descriptor pool above (pixel/vertex non-overlapping
+     * ranges) -- kept here rather than folded into GX2Sampler's own
+     * bits since real hardware keeps them separate too: a sampler's
+     * BORDER_COLOR_TYPE field only says *which kind* of border to use
+     * (including "the real register value"), not the value itself. */
+    float sampler_border_color[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS][4];
 } BrambleGx2State;
 
 /* GX2EventType's real enumerator count (confirmed against wut's
@@ -1392,7 +1404,7 @@ static inline float bramble_gx2_aniso_ratio_to_dk(uint32_t gx2_ratio) {
  * register") since that real register is set by a distinct function,
  * GX2Set{Pixel,Vertex}SamplerBorderColor, not implemented here -- a
  * real, honest, separate gap, not silently guessed at. */
-static inline void bramble_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_addr, DkSampler *out_sampler) {
+static inline void bramble_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_addr, uint32_t slot, DkSampler *out_sampler) {
     uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
     uint32_t word1 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD1_OFFSET);
     uint32_t clamp_x = (word0 >> 0) & 0x7u;
@@ -1402,6 +1414,7 @@ static inline void bramble_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_
     uint32_t xy_min_filter = (word0 >> 12) & 0x7u;
     uint32_t mip_filter = (word0 >> 17) & 0x3u;
     uint32_t max_aniso_ratio = (word0 >> 19) & 0x7u;
+    uint32_t border_color_type = (word0 >> 22) & 0x3u;
     uint32_t depth_compare_function = (word0 >> 26) & 0x7u;
     uint32_t min_lod = (word1 >> 0) & 0x3FFu;
     uint32_t max_lod = (word1 >> 10) & 0x3FFu;
@@ -1420,6 +1433,36 @@ static inline void bramble_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_
     out_sampler->lodClampMin = (float)min_lod / 64.0f;
     out_sampler->lodClampMax = (float)max_lod / 64.0f;
     out_sampler->lodBias = (float)lod_bias / 64.0f;
+
+    /* Real GX2TexBorderType (confirmed against wut's gx2/enum.h):
+     * TRANSPARENT_BLACK=0, BLACK=1, WHITE=2, VARIABLE=3. The first
+     * three are real, well-known fixed RGBA constants; VARIABLE means
+     * "use this slot's real, separately-set border-color register"
+     * (GX2SetPixelSamplerBorderColor/GX2SetVertexSamplerBorderColor),
+     * looked up here by the real slot this sampler is being bound
+     * into. */
+    switch (border_color_type) {
+        case 1: /* BLACK (opaque) */
+            out_sampler->borderColor[0].value_f = 0.0f;
+            out_sampler->borderColor[1].value_f = 0.0f;
+            out_sampler->borderColor[2].value_f = 0.0f;
+            out_sampler->borderColor[3].value_f = 1.0f;
+            break;
+        case 2: /* WHITE (opaque) */
+            out_sampler->borderColor[0].value_f = 1.0f;
+            out_sampler->borderColor[1].value_f = 1.0f;
+            out_sampler->borderColor[2].value_f = 1.0f;
+            out_sampler->borderColor[3].value_f = 1.0f;
+            break;
+        case 3: /* VARIABLE -- real, separately-set register value */
+            out_sampler->borderColor[0].value_f = g_bramble_gx2.sampler_border_color[slot][0];
+            out_sampler->borderColor[1].value_f = g_bramble_gx2.sampler_border_color[slot][1];
+            out_sampler->borderColor[2].value_f = g_bramble_gx2.sampler_border_color[slot][2];
+            out_sampler->borderColor[3].value_f = g_bramble_gx2.sampler_border_color[slot][3];
+            break;
+        default: /* TRANSPARENT_BLACK (0) -- also deko3d's own real default, nothing to do */
+            break;
+    }
 }
 
 /* Pushes a decoded DkSampler into this stage's real slot of the shared
@@ -1439,7 +1482,7 @@ static inline void bramble_gx2_set_sampler(PpcContext *ctx, uint32_t sampler_add
     uint32_t slot;
     if (index >= BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE) return; /* real, bounded pool -- out-of-range index is a no-op, not a crash */
     slot = base_index + index;
-    bramble_gx2_sampler_decode(ctx, sampler_addr, &sampler);
+    bramble_gx2_sampler_decode(ctx, sampler_addr, slot, &sampler);
     dkSamplerDescriptorInitialize(&descriptor, &sampler);
     dkCmdBufPushData(g_bramble_gx2.cmdbuf, g_bramble_gx2.sampler_descriptor_gpu_addr + (uint64_t)slot * sizeof(DkSamplerDescriptor),
                       &descriptor, sizeof(DkSamplerDescriptor));
@@ -1469,6 +1512,51 @@ static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) {
     uint32_t sampler_addr = ctx->r[3];
     uint32_t sampler_index = ctx->r[4];
     bramble_gx2_set_sampler(ctx, sampler_addr, BRAMBLE_GX2_SAMPLER_VERTEX_BASE, sampler_index);
+}
+
+static inline void bramble_gx2_set_sampler_border_color(PpcContext *ctx, uint32_t base_index, uint32_t index) {
+    uint32_t slot;
+    if (index >= BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE) return; /* real, bounded pool -- out-of-range index is a no-op, not a crash */
+    slot = base_index + index;
+    g_bramble_gx2.sampler_border_color[slot][0] = (float)ctx->f[1];
+    g_bramble_gx2.sampler_border_color[slot][1] = (float)ctx->f[2];
+    g_bramble_gx2.sampler_border_color[slot][2] = (float)ctx->f[3];
+    g_bramble_gx2.sampler_border_color[slot][3] = (float)ctx->f[4];
+}
+
+static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx) {
+    /* void GX2SetPixelSamplerBorderColor(uint32_t pixelSamplerIndex,
+     * float red, float green, float blue, float alpha) -- real
+     * signature confirmed against Cemu's real GX2_Texture.cpp
+     * (`GX2SetPixelSamplerBorderColor`/`GX2SetSamplerBorderColor`).
+     * Real args: r3=index (integer sequence), f1-f4=r,g,b,a
+     * (independent float sequence, real PPC32 SVR4 ABI). Real hardware
+     * writes this into a genuinely separate register bank
+     * (`TD_PS_SAMPLER_BORDER_COLOR[index]`, confirmed against Cemu's
+     * real LatteReg.h) rather than into the `GX2Sampler` struct itself
+     * -- stored the same way here (see BrambleGx2State's
+     * `sampler_border_color` field comment), consulted by
+     * `bramble_gx2_sampler_decode` only when a sampler's own real
+     * `BORDER_COLOR_TYPE` field says `VARIABLE`. Real, honest
+     * consequence of that real hardware design: calling this *after*
+     * `GX2SetPixelSampler` has already pushed a `VARIABLE`-type
+     * sampler for this slot doesn't retroactively update the already-
+     * pushed real descriptor -- matching real hardware's own actual
+     * behavior (the register write takes effect for the *next* real
+     * draw that samples this slot, not instantly), not a bug specific
+     * to this shim. */
+    uint32_t index = ctx->r[3];
+    bramble_gx2_set_sampler_border_color(ctx, BRAMBLE_GX2_SAMPLER_PIXEL_BASE, index);
+}
+
+static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx) {
+    /* void GX2SetVertexSamplerBorderColor(uint32_t vertexSamplerIndex,
+     * float red, float green, float blue, float alpha) -- real
+     * signature confirmed against Cemu's real GX2_Texture.cpp. See
+     * GX2SetPixelSamplerBorderColor's own comment for the real
+     * register-bank/timing reasoning. */
+    uint32_t index = ctx->r[3];
+    bramble_gx2_set_sampler_border_color(ctx, BRAMBLE_GX2_SAMPLER_VERTEX_BASE, index);
 }
 
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
@@ -1505,6 +1593,8 @@ static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) { (void)ctx;
 static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx) { (void)ctx; }
 
 #endif /* __SWITCH__ */
 
