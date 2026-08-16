@@ -629,26 +629,61 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 out << "  " << reg(rD) << " = " << reg(rA) << " * " << reg(rB) << ";\n";
                 break;
             }
-            case PPC_INS_CMPWI: {
-                int rA = reg_idx(ppc.operands[0].reg);
-                out << "  ppc_cmpw(ctx, (int32_t)" << reg(rA) << ", " << simm(ppc.operands[1]) << ");\n";
-                break;
-            }
-            case PPC_INS_CMPW: {
-                int rA = reg_idx(ppc.operands[0].reg);
-                int rB = reg_idx(ppc.operands[1].reg);
-                out << "  ppc_cmpw(ctx, (int32_t)" << reg(rA) << ", (int32_t)" << reg(rB) << ");\n";
-                break;
-            }
-            case PPC_INS_CMPLW: {
-                int rA = reg_idx(ppc.operands[0].reg);
-                int rB = reg_idx(ppc.operands[1].reg);
-                out << "  ppc_cmplw(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
-                break;
-            }
+            case PPC_INS_CMPWI:
+            case PPC_INS_CMPW:
+            case PPC_INS_CMPLW:
             case PPC_INS_CMPLWI: {
-                int rA = reg_idx(ppc.operands[0].reg);
-                out << "  ppc_cmplw(ctx, " << reg(rA) << ", " << uimm(ppc.operands[1]) << "u);\n";
+                // Real cmp*-form instructions can explicitly name a
+                // non-default CR field, e.g. `cmpw cr1, r3, r4` --
+                // confirmed real and live in real-world code (21 real
+                // instances found testing against two different real,
+                // legally-obtained open-source Wii U homebrew binaries,
+                // though not in this project's own actual Skylanders
+                // target). Capstone represents this as a 3-operand form
+                // (CR register first, then the real operands), vs. the
+                // far more common implicit-cr0 2-operand form -- the same
+                // real ambiguity PPC_INS_BEQ/BNE/etc.'s branch handling
+                // already has to account for (see its own comment). Using
+                // a fixed operand index regardless previously misread the
+                // CR register as if it were the first real source
+                // register -- not even a compile error, a genuinely
+                // *silent* miscompile (worse than the branch case, which
+                // at least produced a garbage target address that failed
+                // to resolve). This runtime only tracks cr0
+                // (`ctx->cr0_lt`/`gt`/`eq`), so an explicit non-cr0 field
+                // real-fails loudly here instead, same reasoning and
+                // pattern as PPC_INS_BEQ's own real-cr0-only handling. */
+                bool has_cr_operand = ppc.op_count == 3;
+                if (has_cr_operand && ppc.operands[0].reg != PPC_REG_CR0) {
+                    out << "#error \"compare on non-cr0 field (cr" << (ppc.operands[0].reg - PPC_REG_CR0)
+                        << ") at 0x" << std::hex << insn.address << std::dec << " in function " << func.name
+                        << " -- not modeled, see PPC_INS_CMPWI's codegen.cpp comment\"\n";
+                    unhandled.push_back(insn.mnemonic);
+                    break;
+                }
+                int op_base = has_cr_operand ? 1 : 0;
+                int rA = reg_idx(ppc.operands[op_base].reg);
+                switch (insn.id) {
+                    case PPC_INS_CMPWI:
+                        out << "  ppc_cmpw(ctx, (int32_t)" << reg(rA) << ", " << simm(ppc.operands[op_base + 1])
+                            << ");\n";
+                        break;
+                    case PPC_INS_CMPW: {
+                        int rB = reg_idx(ppc.operands[op_base + 1].reg);
+                        out << "  ppc_cmpw(ctx, (int32_t)" << reg(rA) << ", (int32_t)" << reg(rB) << ");\n";
+                        break;
+                    }
+                    case PPC_INS_CMPLW: {
+                        int rB = reg_idx(ppc.operands[op_base + 1].reg);
+                        out << "  ppc_cmplw(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
+                        break;
+                    }
+                    case PPC_INS_CMPLWI:
+                        out << "  ppc_cmplw(ctx, " << reg(rA) << ", " << uimm(ppc.operands[op_base + 1]) << "u);\n";
+                        break;
+                    default:
+                        break;
+                }
                 break;
             }
             case PPC_INS_LWZX: {
