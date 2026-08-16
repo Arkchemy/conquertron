@@ -982,6 +982,17 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 out << "  ctx->ctr = " << reg(rS) << ";\n";
                 break;
             }
+            case PPC_INS_MFCTR: {
+                // Real, not hypothetical -- found running recomp against
+                // real, different, legally-obtained open-source Wii U
+                // homebrew binaries (not this project's own Skylanders
+                // target, which never needed this). ctx->ctr is already
+                // real, tracked state (see PPC_INS_MTCTR/BDNZ/BDZ/BCTRL
+                // above), so reading it back is direct.
+                int rD = reg_idx(ppc.operands[0].reg);
+                out << "  " << reg(rD) << " = ctx->ctr;\n";
+                break;
+            }
             case PPC_INS_BCTRL: {
                 // Indirect call through a function pointer (vtables,
                 // callback tables, etc.) -- unlike `bl`, the target isn't
@@ -1199,11 +1210,18 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_DCBST:
-            case PPC_INS_ISYNC: {
+            case PPC_INS_ISYNC:
+            case PPC_INS_EIEIO: {
                 // Cache-management/memory-ordering barriers -- meaningless
                 // in this purely sequential single-threaded interpreter
                 // model (no cache, no reordering to synchronize against),
-                // so both are genuine no-ops here.
+                // so all three are genuine no-ops here. eieio specifically
+                // (real, not hypothetical -- found running recomp against
+                // real, different, legally-obtained open-source Wii U
+                // homebrew binaries, not this project's own Skylanders
+                // target) enforces real I/O ordering on actual hardware
+                // between memory-mapped device accesses, a real hardware
+                // concern this shim-based runtime doesn't model at all.
                 break;
             }
             case PPC_INS_LWARX: {
