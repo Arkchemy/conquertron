@@ -319,6 +319,17 @@ static inline void bramble_gx2_create_framebuffers(void) {
     DkMemBlockMaker fb_mem_maker;
     DkSwapchainMaker swapchain_maker;
 
+    /* Defensive: zero-initialize `layout` first, same real reasoning as
+     * GX2SetColorBuffer/GX2SetDepthBuffer's own comments (a real,
+     * confirmed uninitialized-memory bug found via an actual
+     * on-hardware crash in GX2SetColorBuffer). This image is
+     * block-linear, whose real code path in dkImageLayoutInitialize
+     * does set every field dkImageInitialize later reads (confirmed:
+     * this exact framebuffer path has been real-hardware-verified
+     * working across many earlier test runs), so this is pure,
+     * zero-risk defense-in-depth, not a fix for a known bug here. */
+    memset(&layout, 0, sizeof(layout));
+
     dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
     layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_HwCompression;
     layout_maker.format = DkImageFormat_RGBA8_Unorm;
