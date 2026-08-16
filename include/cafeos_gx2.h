@@ -2,6 +2,7 @@
 #define BRAMBLE_CAFEOS_GX2_H
 
 #include "ppc_runtime.h"
+#include <time.h>
 
 /*
  * Phase 1d/2 CafeOS runtime shim -- gx2 (graphics).
@@ -92,11 +93,41 @@ typedef struct {
     DkImage framebuffers[BRAMBLE_GX2_NUM_FRAMEBUFFERS];
     DkSwapchain swapchain;
     int acquired_slot; /* -1 if no framebuffer image is currently acquired this frame */
+
+    /* Real GX2 timestamp/swap-status tracking (GX2GetLastSubmittedTimeStamp/
+     * GX2GetRetiredTimeStamp/GX2WaitTimeStamp/GX2GetSwapStatus below).
+     * Real hardware's OSTime is an actual wall-clock-derived tick count
+     * a real GPU command's completion is stamped with; this runtime has
+     * no asynchronous GPU pipeline to stamp against yet (every submit
+     * this shim makes is followed by a real, synchronous
+     * dkQueueWaitIdle -- see GX2Flush/GX2DrawDone/GX2SwapScanBuffers
+     * below), so `submitted_timestamp`/`retired_timestamp` are a
+     * monotonically increasing host tick count (same
+     * `clock_gettime(CLOCK_MONOTONIC)` source already used for
+     * `OSGetTime` in cafeos_coreinit_sync.h) taken at each real submit
+     * point -- not a claim of matching real Wii U tick magnitude/epoch,
+     * same documented approximation already used there. */
+    uint64_t submitted_timestamp;
+    uint64_t retired_timestamp;
+    uint32_t swap_count;
+    uint32_t flip_count;
 } BrambleGx2State;
 
 static BrambleGx2State g_bramble_gx2;
 
 #define BRAMBLE_GX2_CMD_MEM_SIZE 0x10000u
+
+/* Same real host monotonic clock source/reasoning as
+ * cafeos_coreinit_sync.h's ppc_coreinit_host_ticks -- a distinct,
+ * gx2-scoped name since both headers are `static inline` and can be
+ * included in the same translation unit (a real generated program
+ * pulls in every cafeos_*.h it needs), which a shared name would
+ * redefine. */
+static inline uint64_t bramble_gx2_host_ticks(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
 
 static inline void bramble_gx2_create_framebuffers(void) {
     DkImageLayout layout;
@@ -771,8 +802,12 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) {
     (void)ctx;
     if (g_bramble_gx2.acquired_slot < 0) return;
     dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
+    g_bramble_gx2.submitted_timestamp = bramble_gx2_host_ticks();
     dkQueuePresentImage(g_bramble_gx2.queue, g_bramble_gx2.swapchain, g_bramble_gx2.acquired_slot);
     dkQueueWaitIdle(g_bramble_gx2.queue);
+    g_bramble_gx2.retired_timestamp = g_bramble_gx2.submitted_timestamp;
+    g_bramble_gx2.swap_count++;
+    g_bramble_gx2.flip_count++;
     dkCmdBufClear(g_bramble_gx2.cmdbuf);
     g_bramble_gx2.acquired_slot = -1;
 }
@@ -795,29 +830,116 @@ static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) {
      * in GX2SwapScanBuffers), not a ring buffer that could be
      * overwritten mid-frame. Safe (and correct per deko3d's own
      * multi-list-per-cmdbuf usage pattern) to call with nothing
-     * recorded yet -- submits an empty list. */
+     * recorded yet -- submits an empty list. Also stamps
+     * `submitted_timestamp` (see GX2GetLastSubmittedTimeStamp/
+     * GX2WaitTimeStamp below), since this is a real submit point same
+     * as GX2SwapScanBuffers'. */
     (void)ctx;
     dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
+    g_bramble_gx2.submitted_timestamp = bramble_gx2_host_ticks();
 }
 
 static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) {
-    /* void GX2DrawDone(void) -- real behavior blocks the calling
-     * thread until the GPU has fully finished every command submitted
-     * so far. Maps directly onto dkQueueWaitIdle -- the same real call
-     * GX2SwapScanBuffers already uses for its own (documented,
-     * deliberately synchronous-for-now) end-of-frame wait, just
-     * invoked directly by the game rather than implied by a swap. Real
-     * per-real-usage note: since nothing here has been submitted to
-     * the GPU without also being recorded into the still-open
-     * `cmdbuf`, this doesn't first call GX2Flush -- if the game calls
-     * GX2DrawDone without an intervening GX2Flush/GX2SwapScanBuffers,
-     * whatever's only *recorded* but not yet *submitted* is still
-     * waiting in `cmdbuf`, not on the GPU, so there's nothing yet for
-     * dkQueueWaitIdle to wait on for that portion -- consistent with
-     * GX2Flush above being a separate, explicit real GX2 call the game
-     * is expected to make first if it wants that. */
+    /* BOOL GX2DrawDone(void) -- real signature confirmed against wut's
+     * gx2/event.h (returns BOOL, not void). Real Cemu HLE
+     * (GX2_Event.cpp) implements it as "flush the pipeline, then wait
+     * on the just-submitted timestamp, return that wait's result" --
+     * i.e. a real GX2Flush followed by a real
+     * GX2WaitTimeStamp(GX2GetLastSubmittedTimeStamp()), not a bare
+     * wait. Mirrored here: submits whatever's pending (same as
+     * GX2Flush above), blocks until the GPU is fully idle
+     * (dkQueueWaitIdle), stamps `retired_timestamp` caught up to
+     * `submitted_timestamp`, and returns TRUE -- correct per real
+     * semantics since an unconditional dkQueueWaitIdle always
+     * completes (this runtime has no timeout/cancellation path for
+     * GX2WaitTimeStamp to have failed on). */
     (void)ctx;
+    dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
+    g_bramble_gx2.submitted_timestamp = bramble_gx2_host_ticks();
     dkQueueWaitIdle(g_bramble_gx2.queue);
+    g_bramble_gx2.retired_timestamp = g_bramble_gx2.submitted_timestamp;
+    ctx->r[3] = 1; /* TRUE */
+}
+
+static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) {
+    /* OSTime GX2GetLastSubmittedTimeStamp(void) -- real 64-bit OSTime
+     * return, split across r3(high)/r4(low) per the real PPC32 ABI's
+     * 64-bit return convention (same convention already used by
+     * cafeos_coreinit_sync.h's OSGetTime). See the
+     * `submitted_timestamp` field comment above for what this actually
+     * measures here (a host monotonic tick at each real submit point,
+     * not a real Wii U-magnitude tick count). */
+    uint64_t t = g_bramble_gx2.submitted_timestamp;
+    ctx->r[3] = (uint32_t)(t >> 32);
+    ctx->r[4] = (uint32_t)t;
+}
+
+static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) {
+    /* OSTime GX2GetRetiredTimeStamp(void) -- same real 64-bit OSTime
+     * return convention as GX2GetLastSubmittedTimeStamp above. Since
+     * every real submit point in this runtime (GX2Flush/GX2DrawDone/
+     * GX2SwapScanBuffers) is immediately followed by a real, blocking
+     * dkQueueWaitIdle except GX2Flush itself, `retired_timestamp` only
+     * catches up to `submitted_timestamp` on an actual wait -- a real,
+     * honest reflection of "GX2Flush submits without waiting" even
+     * though this runtime has no real async completion tracking of its
+     * own. */
+    uint64_t t = g_bramble_gx2.retired_timestamp;
+    ctx->r[3] = (uint32_t)(t >> 32);
+    ctx->r[4] = (uint32_t)t;
+}
+
+static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) {
+    /* BOOL GX2WaitTimeStamp(OSTime time) -- real 64-bit OSTime arg,
+     * split across r3(high)/r4(low) per the real PPC32 ABI (same
+     * convention already used by cafeos_coreinit_sync.h's
+     * OSSleepTicks). Real behavior blocks until `time` has retired.
+     * Since this runtime always fully idles the GPU on any real wait
+     * (see GX2DrawDone/GX2SwapScanBuffers above), if `time` is already
+     * <=`retired_timestamp` there's nothing to wait for; otherwise a
+     * real dkQueueWaitIdle catches `retired_timestamp` all the way up
+     * to `submitted_timestamp` (the furthest this runtime can ever
+     * retire to, since nothing is submitted beyond that point yet).
+     * Always returns TRUE -- same "no timeout/cancellation path to
+     * have failed on" reasoning as GX2DrawDone above. */
+    uint64_t time = ((uint64_t)ctx->r[3] << 32) | (uint64_t)ctx->r[4];
+    if (time > g_bramble_gx2.retired_timestamp) {
+        dkQueueWaitIdle(g_bramble_gx2.queue);
+        g_bramble_gx2.retired_timestamp = g_bramble_gx2.submitted_timestamp;
+    }
+    ctx->r[3] = 1; /* TRUE */
+}
+
+static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) {
+    /* void GX2GetSwapStatus(uint32_t *swapCount, uint32_t *flipCount,
+     * OSTime *lastFlip, OSTime *lastVsync) -- real signature confirmed
+     * against wut's gx2/event.h, 4 real guest-memory out-pointers in
+     * r3-r6. Real GX2 lets any of these be NULL when the caller only
+     * wants a subset -- guarded here the same way, not a guess: every
+     * other guest-out-pointer shim in this project (e.g.
+     * cafeos_coreinit_fs.h's FS* calls) already treats a NULL/0 guest
+     * address as "caller doesn't want this one", consistent with how
+     * real Cafe OS pointer args are conventionally optional unless
+     * documented otherwise. `swapCount`/`flipCount` are real per-swap
+     * counters (see GX2SwapScanBuffers above, which increments both --
+     * this runtime never distinguishes a "swap" from a "flip" the way
+     * real hardware's separate scan-buffer-flip vs. GX2SwapScanBuffers-call
+     * concepts might, so both counters move together here, a
+     * documented simplification). `lastFlip`/`lastVsync` both report
+     * `retired_timestamp` -- this runtime has no separate real vsync
+     * signal distinct from "the last frame's GPU work fully retired"
+     * (dkQueueWaitIdle already blocks until then in
+     * GX2SwapScanBuffers), so the two real hardware concepts collapse
+     * to the same value here. */
+    uint32_t swap_count_ptr = ctx->r[3];
+    uint32_t flip_count_ptr = ctx->r[4];
+    uint32_t last_flip_ptr = ctx->r[5];
+    uint32_t last_vsync_ptr = ctx->r[6];
+
+    if (swap_count_ptr) ppc_store_u32(ctx, swap_count_ptr, g_bramble_gx2.swap_count);
+    if (flip_count_ptr) ppc_store_u32(ctx, flip_count_ptr, g_bramble_gx2.flip_count);
+    if (last_flip_ptr) ppc_store_u64(ctx, last_flip_ptr, g_bramble_gx2.retired_timestamp);
+    if (last_vsync_ptr) ppc_store_u64(ctx, last_vsync_ptr, g_bramble_gx2.retired_timestamp);
 }
 
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
@@ -843,6 +965,10 @@ static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) { (void)ctx; }
 
 #endif /* __SWITCH__ */
 
@@ -929,6 +1055,25 @@ static inline void ppc_import_gx2_GX2SetDRCScale(PpcContext *ctx) {
      * the GamePad/DRC target this runtime also has no second real
      * display for (see GX2SetDRCEnable above). Same reasoning: accepted,
      * not stored, no real getter in this game's actual import list. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2Invalidate(PpcContext *ctx) {
+    /* void GX2Invalidate(GX2InvalidateMode mode, void *buffer,
+     * uint32_t size) -- real signature confirmed against wut's
+     * gx2/mem.h. Real hardware invalidates GPU-side caches for a CPU-
+     * written buffer region before the GPU reads it (or the reverse).
+     * A genuine no-op here, same reasoning already established for
+     * DCFlushRange in cafeos_coreinit.h: this runtime has no modeled
+     * GPU cache of its own to invalidate (deko3d/the real Switch
+     * hardware handle their own real memory coherency internally), and
+     * there's no real GX2 surface/texture upload path yet for `buffer`/
+     * `size` to even correspond to actual GPU-visible memory (see
+     * GX2CalcSurfaceSizeAndAlignment's own still-unattempted status in
+     * docs/phase1d_import_surface.md) -- so there's genuinely nothing
+     * real for this to do yet, not a shortcut around something that
+     * matters. Backend-independent (works identically whether or not
+     * deko3d is available), unlike most of this file's GX2* functions. */
     (void)ctx;
 }
 
