@@ -1699,6 +1699,22 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
     DkImageLayout layout;
     DkMemBlockMaker mem_maker;
 
+    /* Real bug found and fixed via an actual on-hardware crash: deko3d's
+     * own real dkImageLayoutInitialize (confirmed by reading its actual
+     * source) only ever sets DkImageLayout's internal real memory-kind
+     * field on the *block-linear* code path -- the pitch-linear branch
+     * this function deliberately takes returns without touching it at
+     * all. Leaving `layout` as an uninitialized local (its previous,
+     * real behavior here) meant that field held real, genuine stack
+     * garbage, later read directly by dkImageInitialize and fed into a
+     * real low-level GPU addressing call -- a real, classic
+     * uninitialized-memory bug, not a logic error, explaining why this
+     * crashed unpredictably on real hardware rather than failing
+     * consistently. Zero-initializing `layout` first is the real,
+     * correct fix regardless of that specific field's exact real
+     * meaning for a pitch-linear image. */
+    memset(&layout, 0, sizeof(layout));
+
     if (target >= BRAMBLE_GX2_NUM_RENDER_TARGETS) return; /* real, bounded slot range */
 
     dim = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
@@ -1817,6 +1833,15 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) {
     DkImageView dst_view;
     DkImageRect dst_rect;
     DkCopyBuf src_buf;
+
+    /* Defensive: zero-initialize `layout` before
+     * dkImageLayoutInitialize, same real reasoning as
+     * GX2SetColorBuffer's own comment (a real, confirmed bug found via
+     * an actual on-hardware crash in that function) -- this image is
+     * block-linear, whose real code path does set every field
+     * dkImageInitialize later reads, but there's no reason to leave
+     * this one as an uninitialized local either. */
+    memset(&layout, 0, sizeof(layout));
 
     dim = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
     width = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
