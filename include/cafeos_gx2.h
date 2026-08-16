@@ -2,6 +2,7 @@
 #define BRAMBLE_CAFEOS_GX2_H
 
 #include "ppc_runtime.h"
+#include <string.h>
 #include <time.h>
 
 /*
@@ -130,8 +131,27 @@ typedef struct {
     DkRasterizerState rasterizer_state;
     DkDepthStencilState depth_stencil_state;
     DkColorState color_state;
-    DkColorWriteState color_write_state;
     DkMultisampleState multisample_state;
+
+    /* GX2SetColorControl's `colorWriteEnable` and GX2SetTargetChannelMasks'
+     * per-target `GX2ChannelMask`s are two real, independent GX2 calls
+     * that both ultimately determine the same deko3d DkColorWriteState
+     * -- but unlike the shadow structs above, they don't each own a
+     * disjoint subset of *fields* within one struct; they both want to
+     * control the *same* per-target/per-channel mask bits, just from
+     * two different real angles (a master on/off switch vs. explicit
+     * per-channel selection). Kept as two separate source-of-truth
+     * values instead of a shared `DkColorWriteState`, combined via
+     * `bramble_gx2_rebind_color_write_state` below (colorWriteEnable
+     * ANDed against channel_masks) whenever either changes -- a real,
+     * documented interpretation of GX2SetColorControl's own "master
+     * on/off switch" description, not the "whichever call happened
+     * last wins outright" behavior this file used to have (which
+     * would silently discard GX2SetTargetChannelMasks' finer-grained
+     * per-channel masking the next time GX2SetColorControl ran for an
+     * unrelated reason, e.g. just toggling blend). */
+    uint32_t color_write_enable;
+    uint32_t channel_masks;
 
     /* GX2SetEventCallback registration (see BRAMBLE_GX2_NUM_EVENT_TYPES
      * below) -- real guest addresses (function pointer + userData),
@@ -250,8 +270,23 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) {
     dkRasterizerStateDefaults(&g_bramble_gx2.rasterizer_state);
     dkDepthStencilStateDefaults(&g_bramble_gx2.depth_stencil_state);
     dkColorStateDefaults(&g_bramble_gx2.color_state);
-    dkColorWriteStateDefaults(&g_bramble_gx2.color_write_state);
     dkMultisampleStateDefaults(&g_bramble_gx2.multisample_state);
+    /* deko3d's own default (alphaToCoverageDither=true, deko3d.h) does
+     * NOT match real GX2's own real default (GX2_ALPHA_TO_MASK_MODE_
+     * NON_DITHERED=0, i.e. dither off) -- corrected here so a game that
+     * never calls GX2SetAlphaToMask gets real GX2's actual power-on
+     * behavior, not deko3d's differing one. alphaToCoverageEnable's
+     * deko3d default (false) already matches GX2's real default
+     * (alpha-to-coverage off), so that one's untouched. */
+    g_bramble_gx2.multisample_state.alphaToCoverageDither = 0;
+
+    /* Real GX2 default: color writes enabled, all channels, all
+     * targets (matching deko3d's own DkColorWriteState default of
+     * masks=0xFFFFFFFF) -- see the color_write_enable/channel_masks
+     * field comment on BrambleGx2State above for why these are two
+     * separate values instead of one shared DkColorWriteState. */
+    g_bramble_gx2.color_write_enable = 1;
+    g_bramble_gx2.channel_masks = 0xFFFFFFFFu;
 
     g_bramble_gx2.initialized = true;
 }
@@ -268,6 +303,18 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) {
     dkCmdBufDestroy(g_bramble_gx2.cmdbuf);
     dkMemBlockDestroy(g_bramble_gx2.cmd_mem_block);
     dkDeviceDestroy(g_bramble_gx2.device);
+    /* Real correctness fix: event_callback_func/userdata (see
+     * GX2SetEventCallback) hold real *guest* addresses that only stay
+     * meaningful for the lifetime of the game session that registered
+     * them -- a real GX2Shutdown followed by a fresh GX2Init (e.g. a
+     * resolution/mode change) without every event type being
+     * re-registered would otherwise leave stale callback addresses
+     * from the prior session around. Harmless today since invocation
+     * isn't implemented yet (see that function's own comment), but a
+     * real landmine for whenever dispatch is added -- cleared now so
+     * it never becomes one. */
+    memset(g_bramble_gx2.event_callback_func, 0, sizeof(g_bramble_gx2.event_callback_func));
+    memset(g_bramble_gx2.event_callback_userdata, 0, sizeof(g_bramble_gx2.event_callback_userdata));
     g_bramble_gx2.initialized = false;
 }
 
@@ -448,6 +495,22 @@ static inline DkLogicOp bramble_gx2_logic_op_to_dk(uint32_t gx2_rop3) {
     return (DkLogicOp)table[index];
 }
 
+static inline void bramble_gx2_rebind_color_write_state(void) {
+    /* Combines GX2SetColorControl's `color_write_enable` (a real
+     * master on/off switch) with GX2SetTargetChannelMasks'
+     * `channel_masks` (real per-target/per-channel selection) via a
+     * real bitwise AND -- when disabled, every channel/target is
+     * masked off regardless of what channel_masks says; when enabled,
+     * channel_masks' actual per-channel granularity is preserved. Both
+     * GX2SetColorControl and GX2SetTargetChannelMasks call this after
+     * updating their own field, so either one's change is always
+     * reflected without either silently discarding the other's. */
+    DkColorWriteState state;
+    dkColorWriteStateDefaults(&state);
+    state.masks = g_bramble_gx2.color_write_enable ? g_bramble_gx2.channel_masks : 0u;
+    dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &state);
+}
+
 static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) {
     /* void GX2SetColorControl(GX2LogicOp rop3, uint8_t targetBlendEnable,
      * BOOL multiWriteEnable, BOOL colorWriteEnable) -- real signature
@@ -458,27 +521,28 @@ static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) {
      * targetBlendEnable is a real per-render-target bitmask (bit i =
      * blending enabled for target i) -- applied via
      * dkColorStateSetBlendEnable per target, matching deko3d's own
-     * per-target model exactly. colorWriteEnable is a single real
-     * master on/off switch in GX2 with no matching single field in
-     * deko3d (deko3d's DkColorWriteState is a real per-target,
-     * per-channel RGBA mask instead) -- interpreted here as "all
-     * channels, all targets" when true and "nothing" when false, a
-     * reasonable, documented, unconfirmed simplification.
-     * multiWriteEnable (a real AMD-specific feature broadcasting
-     * render target 0's color to every bound target) has no deko3d
-     * equivalent found -- a real, honest, unimplemented gap, not
-     * silently dropped: the argument is read but intentionally
-     * unused.
+     * per-target model exactly. colorWriteEnable is a real master
+     * on/off switch, combined with GX2SetTargetChannelMasks' real
+     * per-channel masks via `bramble_gx2_rebind_color_write_state`
+     * (see its own comment) rather than unilaterally overwriting every
+     * target to all-or-nothing -- a real correctness fix over this
+     * file's earlier "whichever of these two calls happened most
+     * recently wins outright" behavior, which would have silently
+     * discarded GX2SetTargetChannelMasks' finer-grained masking the
+     * next time GX2SetColorControl ran for an unrelated reason (e.g.
+     * just toggling blend). multiWriteEnable (a real AMD-specific
+     * feature broadcasting render target 0's color to every bound
+     * target) has no deko3d equivalent found -- a real, honest,
+     * unimplemented gap, not silently dropped: the argument is read
+     * but intentionally unused.
      *
-     * Reads/writes the persistent `g_bramble_gx2.color_state`/
-     * `color_write_state` shadow copies (see their field comment on
-     * BrambleGx2State) rather than binding fresh, freshly-defaulted
-     * local structs -- GX2SetAlphaTest below touches
-     * `color_state.alphaCompareOp`, and GX2SetTargetChannelMasks
-     * touches `color_write_state` per-target, both real, independent
-     * GX2 calls that share deko3d's same two combined state objects;
-     * rebinding a local default here would silently erase whichever of
-     * those the other already set. */
+     * Reads/writes the persistent `g_bramble_gx2.color_state` shadow
+     * copy (see its field comment on BrambleGx2State) rather than
+     * binding a fresh, freshly-defaulted local struct -- GX2SetAlphaTest
+     * below also touches `color_state.alphaCompareOp`, a real,
+     * independent GX2 call that shares deko3d's same combined state
+     * object; rebinding a local default here would silently erase
+     * whatever it already set. */
     uint32_t rop3 = ctx->r[3];
     uint32_t target_blend_enable = ctx->r[4];
     uint32_t multi_write_enable = ctx->r[5];
@@ -493,10 +557,8 @@ static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) {
     }
     dkCmdBufBindColorState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.color_state);
 
-    for (i = 0; i < 8; i++) {
-        dkColorWriteStateSetMask(&g_bramble_gx2.color_write_state, i, color_write_enable ? DkColorMask_RGBA : 0u);
-    }
-    dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.color_write_state);
+    g_bramble_gx2.color_write_enable = color_write_enable ? 1u : 0u;
+    bramble_gx2_rebind_color_write_state();
 }
 
 static inline DkCompareOp bramble_gx2_compare_func_to_dk(uint32_t gx2_func) {
@@ -671,6 +733,19 @@ static inline DkPolygonMode bramble_gx2_polygon_mode_to_dk(uint32_t gx2_mode) {
     return (DkPolygonMode)gx2_mode;
 }
 
+static inline void bramble_gx2_apply_cull_state(DkRasterizerState *state, uint32_t front_face, uint32_t cull_front, uint32_t cull_back) {
+    /* Shared frontFace/cullMode translation -- GX2SetPolygonControl
+     * and GX2SetCullOnlyControl below both real, independent GX2 calls
+     * writing this exact same subset of the same hardware register;
+     * extracted so a future correction only needs to change one place
+     * instead of two byte-identical copies staying in sync by hand. */
+    state->frontFace = bramble_gx2_front_face_to_dk(front_face);
+    if (cull_front && cull_back) state->cullMode = DkFace_FrontAndBack;
+    else if (cull_front) state->cullMode = DkFace_Front;
+    else if (cull_back) state->cullMode = DkFace_Back;
+    else state->cullMode = DkFace_None;
+}
+
 static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) {
     /* void GX2SetPolygonControl(GX2FrontFace frontFace, BOOL cullFront,
      * BOOL cullBack, BOOL polyMode, GX2PolygonMode polyModeFront,
@@ -723,11 +798,7 @@ static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) {
      * GX2SetRasterizerClipControl further down are real subsets/
      * neighbors of this same hardware register and share this same
      * object. */
-    state->frontFace = bramble_gx2_front_face_to_dk(front_face);
-    if (cull_front && cull_back) state->cullMode = DkFace_FrontAndBack;
-    else if (cull_front) state->cullMode = DkFace_Front;
-    else if (cull_back) state->cullMode = DkFace_Back;
-    else state->cullMode = DkFace_None;
+    bramble_gx2_apply_cull_state(state, front_face, cull_front, cull_back);
 
     if (poly_mode) {
         state->polygonModeFront = bramble_gx2_polygon_mode_to_dk(poly_mode_front);
@@ -755,11 +826,7 @@ static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) {
     uint32_t cull_back = ctx->r[5];
     DkRasterizerState *state = &g_bramble_gx2.rasterizer_state;
 
-    state->frontFace = bramble_gx2_front_face_to_dk(front_face);
-    if (cull_front && cull_back) state->cullMode = DkFace_FrontAndBack;
-    else if (cull_front) state->cullMode = DkFace_Front;
-    else if (cull_back) state->cullMode = DkFace_Back;
-    else state->cullMode = DkFace_None;
+    bramble_gx2_apply_cull_state(state, front_face, cull_front, cull_back);
 
     dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, state);
 }
@@ -855,22 +922,22 @@ static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) {
      * no translation table needed, unlike most other GX2<->deko3d enum
      * mappings in this file.
      *
-     * Reads/writes the persistent `g_bramble_gx2.color_write_state`
-     * shadow copy -- GX2SetColorControl above's `colorWriteEnable` also
-     * writes every target's mask in this same combined deko3d object,
-     * so whichever of the two real GX2 calls runs last wins (a real,
-     * documented "last write wins" simplification for now, since which
-     * of the two real hardware registers actually takes precedence when
-     * both are set isn't confirmed here). */
-    uint32_t masks[8];
+     * Reads/writes the persistent `g_bramble_gx2.channel_masks` value,
+     * combined with GX2SetColorControl's `color_write_enable` via
+     * `bramble_gx2_rebind_color_write_state` (see its own comment) --
+     * both real, independent GX2 calls that affect the same real
+     * per-target mask bits, now genuinely independent instead of
+     * whichever one happened to run last silently overwriting the
+     * other's setting. */
+    DkColorWriteState packed;
     uint32_t i;
 
-    for (i = 0; i < 8; i++) masks[i] = ctx->r[3 + i];
-
+    dkColorWriteStateDefaults(&packed);
     for (i = 0; i < 8; i++) {
-        dkColorWriteStateSetMask(&g_bramble_gx2.color_write_state, i, masks[i]);
+        dkColorWriteStateSetMask(&packed, i, ctx->r[3 + i]);
     }
-    dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.color_write_state);
+    g_bramble_gx2.channel_masks = packed.masks;
+    bramble_gx2_rebind_color_write_state();
 }
 
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
@@ -1020,8 +1087,18 @@ static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) {
      * simplification: a dedicated hardware vblank interrupt is not
      * modeled separately from GPU-idle, consistent with this whole
      * file's synchronous-for-now design (see GX2SwapScanBuffers'
-     * own `dkQueueWaitIdle` comment). */
+     * own `dkQueueWaitIdle` comment).
+     *
+     * Real correctness fix: like GX2DrawDone, this must submit
+     * whatever's currently only *recorded* in `cmdbuf` before waiting
+     * -- `dkQueueWaitIdle` alone only waits on work already submitted
+     * to the GPU, so a game that records state/draw calls and then
+     * calls GX2WaitForVsync without an intervening GX2Flush/
+     * GX2SwapScanBuffers would otherwise get back a "synced" result
+     * while that work was never actually sent to the GPU. */
     (void)ctx;
+    dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
+    g_bramble_gx2.submitted_timestamp = bramble_gx2_host_ticks();
     dkQueueWaitIdle(g_bramble_gx2.queue);
     g_bramble_gx2.retired_timestamp = g_bramble_gx2.submitted_timestamp;
 }
@@ -1132,22 +1209,30 @@ static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) {
      * here. A real, functioning improvement over doing nothing at all
      * (the callback is at least genuinely remembered, not silently
      * dropped), with the actual dispatch left as a clearly-flagged
-     * follow-up rather than invented timing. Return value (the
-     * previously-registered callback, per real GX2 semantics) isn't
-     * set -- no caller in the real tfbGame_cafe.rpx import list reads
-     * this function's return value as anything other than void-ish
-     * (the real return type only matters for GX2GetEventCallback-style
-     * round-tripping, and that getter isn't in this game's real import
-     * list either, confirmed the same way GX2SetSwapInterval's
-     * accepted-not-stored reasoning was). */
+     * follow-up rather than invented timing. Return value: wut's own
+     * header names it `GX2DRCConnectCallback` (a different, unrelated
+     * real typedef from this function's own `GX2EventCallbackFunction`
+     * parameter type -- plausibly a wut documentation copy/paste quirk,
+     * not confirmed either way), but real GX2's documented behavior for
+     * this class of Set*Callback function is "returns the
+     * previously-registered callback" -- returned here as the
+     * best-effort real interpretation (this event type's previous
+     * `func`, or 0 if none was registered yet) rather than leaving
+     * `r[3]` holding stale garbage from whatever the caller's register
+     * last held, which a real caller checking the return value (e.g.
+     * "was one already registered?") could otherwise misread as a
+     * valid address. */
     uint32_t type = ctx->r[3];
     uint32_t func = ctx->r[4];
     uint32_t user_data = ctx->r[5];
+    uint32_t previous_func = 0;
 
     if (type < BRAMBLE_GX2_NUM_EVENT_TYPES) {
+        previous_func = g_bramble_gx2.event_callback_func[type];
         g_bramble_gx2.event_callback_func[type] = func;
         g_bramble_gx2.event_callback_userdata[type] = user_data;
     }
+    ctx->r[3] = previous_func;
 }
 
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
