@@ -181,7 +181,18 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
         }
         if (is_branch && insn.detail->ppc.op_count >= 1) {
-            targets.insert((uint32_t)insn.detail->ppc.operands[0].imm);
+            // BEQ/BNE/BLT/BLE/BGT/BGE can explicitly name a non-default CR
+            // field (e.g. real code emits `bne cr1, target` -- confirmed
+            // against the real game binary, see PPC_INS_BEQ's own comment
+            // below for the real ABI reason). When present, Capstone gives
+            // that CR register as operands[0] and the real branch target
+            // as operands[1]; with the implicit-cr0 form (the overwhelming
+            // majority of real branches), the target is operands[0] and
+            // there's nothing else. Using the wrong index here previously
+            // recorded the CR register's own encoded value as a bogus
+            // "target" address instead of the real one.
+            int target_op = (insn.detail->ppc.op_count >= 2) ? 1 : 0;
+            targets.insert((uint32_t)insn.detail->ppc.operands[target_op].imm);
         }
     }
 
@@ -721,7 +732,36 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_BLE:
             case PPC_INS_BGT:
             case PPC_INS_BGE: {
-                uint32_t target = (uint32_t)ppc.operands[0].imm;
+                // Real code can explicitly name a non-default CR field,
+                // e.g. `bne cr1, target` -- confirmed against the actual
+                // game binary, inside real GHS varargs-handling prologues
+                // (the real PowerPC SVR4 ABI convention where a caller
+                // sets CR bit 6, i.e. CR1's EQ bit, to tell a vararg
+                // callee whether any floating-point register arguments
+                // were passed). Capstone represents this as a 2-operand
+                // form (CR register, then target); the far more common
+                // implicit-cr0 form is a single operand (just the
+                // target). This runtime only tracks cr0
+                // (`ctx->cr0_lt`/`gt`/`eq`) -- no cr1-cr7 -- and doesn't
+                // model which real instruction/call-site convention would
+                // set them, so rather than silently guessing a condition
+                // against the wrong (cr0) state, any explicit non-cr0
+                // field real-fails loudly here with the *correct* target
+                // address (previously misread as the CR register's own
+                // encoded value, e.g. a nonsensical `0xd`, from reading
+                // the wrong operand index) -- real, accurate diagnostic
+                // info for whoever adds real cr1-cr7 support, not a
+                // guess.
+                bool has_cr_operand = ppc.op_count >= 2;
+                uint32_t target = (uint32_t)ppc.operands[has_cr_operand ? 1 : 0].imm;
+                if (has_cr_operand && ppc.operands[0].reg != PPC_REG_CR0) {
+                    out << "#error \"conditional branch on non-cr0 field (cr"
+                        << (ppc.operands[0].reg - PPC_REG_CR0) << ") at 0x" << std::hex << insn.address
+                        << " to 0x" << target << std::dec << " in function " << func.name
+                        << " -- not modeled, see PPC_INS_BEQ's codegen.cpp comment\"\n";
+                    unhandled.push_back(insn.mnemonic);
+                    break;
+                }
                 std::string cond;
                 switch (insn.id) {
                     case PPC_INS_BEQ: cond = "ctx->cr0_eq"; break;
