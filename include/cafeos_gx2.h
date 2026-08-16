@@ -3060,4 +3060,80 @@ static inline void ppc_import_gx2_GX2InitSamplerDepthCompare(PpcContext *ctx) {
     ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
+/* GX2InitColorBufferRegs/GX2InitDepthBufferRegs/GX2InitDepthBufferHiZEnable
+ * -- real signatures confirmed against wut's gx2/surface.h. Real
+ * reference behavior (decaf-emu's actual, open-source
+ * `gx2_surface.cpp`, `GX2InitColorBufferRegs`/`GX2InitDepthBufferRegs`/
+ * `GX2InitDepthBufferHiZEnable`): these compute real AMD "Latte" GPU
+ * hardware register bit patterns (`CB_COLORN_SIZE`/`CB_COLORN_INFO`/
+ * `CB_COLORN_MASK`/`CB_COLORN_VIEW`, `DB_DEPTH_SIZE`/`DB_DEPTH_VIEW`/
+ * `DB_HTILE_SURFACE`/`DB_PREFETCH_LIMIT`/`DB_PRELOAD_CONTROL`/
+ * `DB_DEPTH_INFO`/`PA_SU_POLY_OFFSET_DB_FMT_CNTL`) and store them into
+ * the real guest `GX2ColorBuffer`/`GX2DepthBuffer`'s own `regs[]`
+ * array -- a real, deliberate architectural mismatch with this
+ * project's own design, not something to port faithfully: those
+ * fields have no deko3d/Nvidia equivalent at all (they're raw AMD
+ * command-processor register encodings), and this project's own real
+ * `GX2SetColorBuffer`/`GX2SetDepthBuffer` (see their own comments
+ * above) deliberately never read `regs[]` back out -- they build a
+ * real deko3d image straight from the surface's own `dim`/`width`/
+ * `height`/`format`/`tileMode`/`pitch`/`image` fields instead. So a
+ * byte-for-byte accurate port here would be real, substantial AMD
+ * register-bitfield work spent on an output this runtime's own render
+ * path can never consume -- a real, honest no-op instead, matching
+ * this file's established "don't guess, don't fake, but don't do
+ * pointless work either" pattern. What these real shims *do* exist
+ * for: real game code that calls them (following the real, official
+ * "init surface, calc size, alloc, init regs, set buffer" sequence)
+ * needs a real, callable symbol to link against at all -- without
+ * these, that real call site would be a hard compile-time gap, not
+ * just an unconsumed side effect. */
+static inline void ppc_import_gx2_GX2InitColorBufferRegs(PpcContext *ctx) {
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2InitDepthBufferRegs(PpcContext *ctx) {
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2InitDepthBufferHiZEnable(PpcContext *ctx) {
+    /* void GX2InitDepthBufferHiZEnable(GX2DepthBuffer *depthBuffer,
+     * BOOL enable) -- real reference behavior (decaf-emu) only ever
+     * flips one bit (`TILE_SURFACE_ENABLE`) inside the same real,
+     * unconsumed `regs.db_depth_info` field GX2InitDepthBufferRegs
+     * above already no-ops -- same real reasoning applies here. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2InitTextureRegs(PpcContext *ctx) {
+    /* void GX2InitTextureRegs(GX2Texture *texture) -- real signature
+     * confirmed against wut's gx2/texture.h. Real reference behavior
+     * (decaf-emu's actual `gx2_texture.cpp`): most of this function
+     * computes real AMD `SQ_TEX_RESOURCE_WORD0-6` register bits, the
+     * same kind of unconsumed-by-this-project's-own-design output as
+     * GX2InitColorBufferRegs above -- a real, honest no-op for that
+     * part, same reasoning. But real decaf-emu's own body *also*
+     * clamps a few real guest fields to a minimum of 1 first
+     * (`viewNumMips`, `viewNumSlices`, `surface.width`) before doing
+     * that register math -- a real, externally-visible side effect on
+     * fields this project's own `GX2SetPixelTexture`/
+     * `GX2SetVertexTexture` (see their own comment) *do* read, not
+     * just internal register scratch work, so that part is ported
+     * faithfully here even though the register math around it isn't. */
+    uint32_t texture_addr = ctx->r[3];
+    uint32_t view_num_mips = ppc_load_u32(ctx, texture_addr + 0x78u);   /* GX2Texture::viewNumMips offset, confirmed against wut's gx2/texture.h */
+    uint32_t view_num_slices = ppc_load_u32(ctx, texture_addr + 0x80u); /* GX2Texture::viewNumSlices offset */
+    uint32_t width = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
+
+    if (view_num_mips == 0u) {
+        ppc_store_u32(ctx, texture_addr + 0x78u, 1u);
+    }
+    if (view_num_slices == 0u) {
+        ppc_store_u32(ctx, texture_addr + 0x80u, 1u);
+    }
+    if (width == 0u) {
+        ppc_store_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET, 1u);
+    }
+}
+
 #endif /* BRAMBLE_CAFEOS_GX2_H */
