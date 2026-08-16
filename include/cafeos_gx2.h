@@ -1745,7 +1745,26 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
     image_size = (uint32_t)dkImageLayoutGetSize(&layout);
     dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device,
                              bramble_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
-    mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+    /* Real, second bug found and fixed via the same real on-hardware
+     * crash as the `layout` zero-init above (that fix alone wasn't
+     * enough -- confirmed by an unchanged crash point on a second real
+     * run): deko3d's own real `MemBlock::getGpuAddrForImage`
+     * (`dk_memblock.cpp`) only takes its plain, always-available
+     * `m_gpuAddrPitch` path when the image's real memory-kind field is
+     * *exactly* `NvKind_Pitch` -- a real, specific enum value this
+     * project has no public header access to and can't safely assume
+     * equals the zero this file's own `layout` zero-init produces.
+     * Every other real memory-kind value falls through to a *different*
+     * real path using `m_gpuAddrCompressed`, a second GPU address-space
+     * mapping that's only actually created when the memory block itself
+     * has `DkMemBlockFlags_Image` set (confirmed in the same real
+     * source) -- without it, that fallback path uses a genuinely
+     * uninitialized real GPU address handle, a real crash, not a
+     * validation-catchable error. Adding `DkMemBlockFlags_Image` here
+     * makes both of deko3d's real address-mapping paths valid
+     * regardless of the exact real memory-kind value, removing the
+     * dependency on knowing/matching `NvKind_Pitch` exactly. */
+    mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
 
     if (g_bramble_gx2.color_target_bound[target]) {
         /* Real resource lifecycle: replace, don't leak, a previous
