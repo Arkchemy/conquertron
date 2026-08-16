@@ -2,6 +2,7 @@
 #define BRAMBLE_CAFEOS_GX2_H
 
 #include "ppc_runtime.h"
+#include <math.h>
 #include <string.h>
 #include <time.h>
 
@@ -1510,6 +1511,212 @@ static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) {
         bpp /= 16u;
     }
     ctx->r[3] = bpp;
+}
+
+/* ---- GX2Sampler init family ------------------------------------------
+ *
+ * GX2Sampler is a real, tiny opaque struct: `uint32_t regs[3]` (12 bytes,
+ * WUT_CHECK_SIZE-confirmed) holding three raw AMD "Latte" GPU hardware
+ * register values (SQ_TEX_SAMPLER_WORD0/1/2) in the real, exact bit
+ * layout real Wii U hardware uses -- these Init* functions just pack
+ * guest-supplied enum/float arguments into those bits, matching what the
+ * real GX2 library itself does (and what real recompiled code that later
+ * peeks at a GX2Sampler's raw bytes, however unlikely, would still see
+ * correctly). This shim doesn't guess the bit layout: every field
+ * offset/width and every fixed-point scale factor below is taken
+ * directly from Cemu's real HLE reimplementation
+ * (src/Cafe/HW/Latte/ISA/LatteReg.h's LATTE_SQ_TEX_SAMPLER_WORD0/1/2_0
+ * structs, and src/Cafe/OS/libs/gx2/GX2_Texture.cpp's actual
+ * GX2InitSampler / GX2InitSamplerXYFilter / etc. bodies), not derived
+ * or assumed. GX2's own enum values (GX2TexClampMode, GX2TexXYFilterMode,
+ * GX2TexZFilterMode, GX2TexMipFilterMode, GX2TexBorderType,
+ * GX2CompareFunction) are real, direct 1:1 hardware register encodings
+ * with no translation needed -- confirmed by Cemu's own real
+ * implementation passing them straight through with no lookup table of
+ * its own either.
+ *
+ * No deko3d call happens here: unlike every other real GX2 function in
+ * this file, GX2Sampler is pure guest-memory state -- the real, actual
+ * binding to a deko3d DkSampler only happens once GX2SetPixelSampler/
+ * GX2SetVertexSampler (still unimplemented) decode these same bits back
+ * out, the same real two-step "build state struct, then bind it" shape
+ * real hardware itself uses. This works identically on host and Switch
+ * (no __SWITCH__ guard needed), same as every other pure-guest-memory-
+ * struct shim in this project.
+ */
+
+#define BRAMBLE_GX2_SAMPLER_WORD0_OFFSET 0u
+#define BRAMBLE_GX2_SAMPLER_WORD1_OFFSET 4u
+#define BRAMBLE_GX2_SAMPLER_WORD2_OFFSET 8u
+
+static inline uint32_t bramble_gx2_bitfield_set(uint32_t word, uint32_t value, uint32_t shift, uint32_t width) {
+    uint32_t mask = ((width >= 32u) ? 0xFFFFFFFFu : ((1u << width) - 1u)) << shift;
+    return (word & ~mask) | ((value << shift) & mask);
+}
+
+static inline void ppc_import_gx2_GX2InitSampler(PpcContext *ctx) {
+    /* void GX2InitSampler(GX2Sampler *sampler, GX2TexClampMode clampMode,
+     * GX2TexXYFilterMode minMagFilterMode) -- real body (GX2_Texture.cpp):
+     * sets CLAMP_X/Y/Z all to clampMode, XY_MAG/MIN_FILTER both to
+     * minMagFilterMode, Z_FILTER/MIP_FILTER to POINT(1), TEX_ARRAY_OVERRIDE
+     * to true, WORD1's MAX_LOD to 0x3FF (the real, full, "no limit" 10-bit
+     * max), and WORD2's TYPE field to E_SAMPLER_TYPE::UKN1(1) -- an
+     * unconfirmed-meaning hardware field this project preserves exactly
+     * as real GX2 sets it, not guessed independently. */
+    uint32_t sampler_addr = ctx->r[3];
+    uint32_t clamp_mode = ctx->r[4];
+    uint32_t filter_mode = ctx->r[5];
+    uint32_t word0 = 0, word1 = 0, word2 = 0;
+
+    word0 = bramble_gx2_bitfield_set(word0, clamp_mode, 0, 3);  /* CLAMP_X */
+    word0 = bramble_gx2_bitfield_set(word0, clamp_mode, 3, 3);  /* CLAMP_Y */
+    word0 = bramble_gx2_bitfield_set(word0, clamp_mode, 6, 3);  /* CLAMP_Z */
+    word0 = bramble_gx2_bitfield_set(word0, filter_mode, 9, 3);  /* XY_MAG_FILTER */
+    word0 = bramble_gx2_bitfield_set(word0, filter_mode, 12, 3); /* XY_MIN_FILTER */
+    word0 = bramble_gx2_bitfield_set(word0, 1u, 15, 2); /* Z_FILTER = POINT */
+    word0 = bramble_gx2_bitfield_set(word0, 1u, 17, 2); /* MIP_FILTER = POINT */
+    word0 = bramble_gx2_bitfield_set(word0, 1u, 25, 1); /* TEX_ARRAY_OVERRIDE = true */
+
+    word1 = bramble_gx2_bitfield_set(word1, 0x3FFu, 10, 10); /* MAX_LOD = 0x3FF */
+
+    word2 = bramble_gx2_bitfield_set(word2, 1u, 31, 1); /* TYPE = UKN1 */
+
+    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
+    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD1_OFFSET, word1);
+    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD2_OFFSET, word2);
+}
+
+static inline void ppc_import_gx2_GX2InitSamplerXYFilter(PpcContext *ctx) {
+    /* void GX2InitSamplerXYFilter(GX2Sampler *sampler,
+     * GX2TexXYFilterMode filterMag, GX2TexXYFilterMode filterMin,
+     * GX2TexAnisoRatio maxAniso) -- real body: if maxAniso==0, sets
+     * XY_MAG/MIN_FILTER directly and MAX_ANISO_RATIO to 0; otherwise
+     * remaps POINT(0)->ANISO_POINT(4) and LINEAR/BILINEAR(1)->
+     * ANISO_BILINEAR(5) (real hardware's separate anisotropic filter
+     * mode values -- BICUBIC(2) has no anisotropic counterpart in real
+     * hardware, not exercised here since this shim only translates
+     * inputs it's given, matching Cemu's own `cemu_assert_debug`-guarded
+     * real behavior of not handling that case either) before storing,
+     * and sets MAX_ANISO_RATIO to the real requested ratio. */
+    uint32_t sampler_addr = ctx->r[3];
+    uint32_t filter_mag = ctx->r[4];
+    uint32_t filter_min = ctx->r[5];
+    uint32_t max_aniso = ctx->r[6];
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+
+    if (max_aniso != 0u) {
+        if (filter_mag == 0u) filter_mag = 4u; /* POINT -> ANISO_POINT */
+        else if (filter_mag == 1u) filter_mag = 5u; /* LINEAR -> ANISO_BILINEAR */
+        if (filter_min == 0u) filter_min = 4u;
+        else if (filter_min == 1u) filter_min = 5u;
+    }
+
+    word0 = bramble_gx2_bitfield_set(word0, filter_mag, 9, 3);
+    word0 = bramble_gx2_bitfield_set(word0, filter_min, 12, 3);
+    word0 = bramble_gx2_bitfield_set(word0, max_aniso, 19, 3);
+
+    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
+}
+
+static inline void ppc_import_gx2_GX2InitSamplerZMFilter(PpcContext *ctx) {
+    /* void GX2InitSamplerZMFilter(GX2Sampler *sampler,
+     * GX2TexZFilterMode zFilter, GX2TexMipFilterMode mipFilter) --
+     * real, direct field writes, no remapping. */
+    uint32_t sampler_addr = ctx->r[3];
+    uint32_t z_filter = ctx->r[4];
+    uint32_t mip_filter = ctx->r[5];
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+
+    word0 = bramble_gx2_bitfield_set(word0, z_filter, 15, 2);
+    word0 = bramble_gx2_bitfield_set(word0, mip_filter, 17, 2);
+
+    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
+}
+
+static inline void ppc_import_gx2_GX2InitSamplerLOD(PpcContext *ctx) {
+    /* void GX2InitSamplerLOD(GX2Sampler *sampler, float minLod,
+     * float maxLod, float lodBias) -- real args: r3=sampler (pointer,
+     * integer sequence), f1/f2/f3=minLod/maxLod/lodBias (independent
+     * float sequence, real PPC32 SVR4 ABI). Real fixed-point encoding
+     * (Cemu's actual GX2InitSamplerLOD body, not derived): minLod
+     * clamped to >=0, maxLod clamped to <=16.0 first (a real, documented
+     * special-case clamp Cemu itself applies for known real game
+     * compatibility), then each float is scaled by 64.0 and floored;
+     * minLod/maxLod (10-bit unsigned fields) clamp to [0, 1023], lodBias
+     * (12-bit signed field) clamps to [-2048, 2047]. */
+    uint32_t sampler_addr = ctx->r[3];
+    float min_lod = (float)ctx->f[1];
+    float max_lod = (float)ctx->f[2];
+    float lod_bias = (float)ctx->f[3];
+    int32_t i_min_lod, i_max_lod, i_lod_bias;
+    uint32_t word1;
+
+    if (min_lod < 0.0f) min_lod = 0.0f;
+    if (max_lod > 16.0f) max_lod = 16.0f;
+
+    i_min_lod = (int32_t)floorf(min_lod * 64.0f);
+    i_max_lod = (int32_t)floorf(max_lod * 64.0f);
+    i_lod_bias = (int32_t)floorf(lod_bias * 64.0f);
+
+    if (i_min_lod < 0) i_min_lod = 0;
+    if (i_min_lod > 1023) i_min_lod = 1023;
+    if (i_max_lod < 0) i_max_lod = 0;
+    if (i_max_lod > 1023) i_max_lod = 1023;
+    if (i_lod_bias < -2048) i_lod_bias = -2048;
+    if (i_lod_bias > 2047) i_lod_bias = 2047;
+
+    word1 = 0;
+    word1 = bramble_gx2_bitfield_set(word1, (uint32_t)i_min_lod, 0, 10);
+    word1 = bramble_gx2_bitfield_set(word1, (uint32_t)i_max_lod, 10, 10);
+    word1 = bramble_gx2_bitfield_set(word1, (uint32_t)(i_lod_bias & 0xFFF), 20, 12);
+
+    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD1_OFFSET, word1);
+}
+
+static inline void ppc_import_gx2_GX2InitSamplerClamping(PpcContext *ctx) {
+    /* void GX2InitSamplerClamping(GX2Sampler *sampler,
+     * GX2TexClampMode clampX, GX2TexClampMode clampY,
+     * GX2TexClampMode clampZ) -- real, direct field writes. */
+    uint32_t sampler_addr = ctx->r[3];
+    uint32_t clamp_x = ctx->r[4];
+    uint32_t clamp_y = ctx->r[5];
+    uint32_t clamp_z = ctx->r[6];
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+
+    word0 = bramble_gx2_bitfield_set(word0, clamp_x, 0, 3);
+    word0 = bramble_gx2_bitfield_set(word0, clamp_y, 3, 3);
+    word0 = bramble_gx2_bitfield_set(word0, clamp_z, 6, 3);
+
+    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
+}
+
+static inline void ppc_import_gx2_GX2InitSamplerBorderType(PpcContext *ctx) {
+    /* void GX2InitSamplerBorderType(GX2Sampler *sampler,
+     * GX2TexBorderType borderColorType) -- real, direct field write. */
+    uint32_t sampler_addr = ctx->r[3];
+    uint32_t border_type = ctx->r[4];
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+
+    word0 = bramble_gx2_bitfield_set(word0, border_type, 22, 2);
+
+    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
+}
+
+static inline void ppc_import_gx2_GX2InitSamplerDepthCompare(PpcContext *ctx) {
+    /* void GX2InitSamplerDepthCompare(GX2Sampler *sampler,
+     * GX2CompareFunction depthCompareFunction) -- real, direct field
+     * write; unlike every deko3d-facing GX2CompareFunction usage
+     * elsewhere in this file, no DkCompareOp translation happens here
+     * because this raw value is going straight into a real hardware
+     * register bit layout that already matches GX2's own encoding, not
+     * into a deko3d struct. */
+    uint32_t sampler_addr = ctx->r[3];
+    uint32_t depth_compare = ctx->r[4];
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+
+    word0 = bramble_gx2_bitfield_set(word0, depth_compare, 26, 3);
+
+    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
 #endif /* BRAMBLE_CAFEOS_GX2_H */
