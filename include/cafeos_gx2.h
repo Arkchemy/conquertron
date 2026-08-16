@@ -263,6 +263,29 @@ typedef struct {
     DkImage color_target_image[BRAMBLE_GX2_NUM_RENDER_TARGETS];
     DkMemBlock color_target_mem_block[BRAMBLE_GX2_NUM_RENDER_TARGETS];
     bool color_target_bound[BRAMBLE_GX2_NUM_RENDER_TARGETS];
+
+    /* Real, independent depth-buffer binding (see GX2SetDepthBuffer's
+     * own comment for the full real design). Real hardware/GX2 only
+     * has one active depth buffer at a time (no target index, unlike
+     * color), but -- unlike GX2SetColorBuffer's pitch-linear direct-
+     * CPU-copy design -- deko3d's own real source confirms depth
+     * render targets can't be `DkImageFlags_PitchLinear` at all, so
+     * this needs a real, separate, block-linear `DkImage` (needing
+     * `DkMemBlockFlags_Image`, unlike the color path) plus a real,
+     * separate linear staging `DkMemBlock` (real guest pixel bytes
+     * copied in via the CPU, same as color) that a real, recorded
+     * `dkCmdBufCopyBufferToImage` GPU command later swizzles into the
+     * real depth image -- deferred, submitted whenever the next real
+     * `GX2Flush`/`GX2SwapScanBuffers` call submits the shared cmdbuf,
+     * same real timing every other state-recording function in this
+     * file already has. The staging block must stay alive until that
+     * real submit actually happens (the GPU reads it then, not at
+     * record time), so it's kept here as real, persistent state too,
+     * not freed right after recording. */
+    DkImage depth_target_image;
+    DkMemBlock depth_target_mem_block;
+    DkMemBlock depth_target_staging_mem_block;
+    bool depth_target_bound;
 } BrambleGx2State;
 
 /* GX2EventType's real enumerator count (confirmed against wut's
@@ -422,6 +445,13 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) {
                 g_bramble_gx2.color_target_bound[i] = false;
             }
         }
+    }
+    if (g_bramble_gx2.depth_target_bound) {
+        /* Real cleanup for any bound depth buffer (see
+         * GX2SetDepthBuffer's own comment). */
+        dkMemBlockDestroy(g_bramble_gx2.depth_target_mem_block);
+        dkMemBlockDestroy(g_bramble_gx2.depth_target_staging_mem_block);
+        g_bramble_gx2.depth_target_bound = false;
     }
     dkQueueDestroy(g_bramble_gx2.queue);
     dkCmdBufDestroy(g_bramble_gx2.cmdbuf);
@@ -1733,6 +1763,143 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
     }
 }
 
+/* void GX2SetDepthBuffer(const GX2DepthBuffer *depthBuffer) -- real
+ * signature confirmed against wut's gx2/surface.h; single pointer arg
+ * (r3), no target index (real hardware only has one active depth
+ * buffer at a time, unlike color's 7 real render-target slots).
+ *
+ * Real, deliberately bounded scope, same reasoning as
+ * `GX2SetColorBuffer`: `dim` must be `DIM_2D` (1), `tileMode` must
+ * already be `TM_LINEAR_ALIGNED`/`TM_LINEAR_SPECIAL` (matching
+ * `GX2CalcSurfaceSizeAndAlignment`'s own real linear-only scope),
+ * `mipLevels <= 1`, and `format` must be
+ * `GX2_SURFACE_FORMAT_UNORM_R24_X8` (0x11) — a real, common,
+ * depth-only (no stencil) 32-bit real GX2 format, mapped to deko3d's
+ * `DkImageFormat_Z24X8` (confirmed matching real bit depth/byte size
+ * against deko3d's own real format-trait table,
+ * `source/maxwell/format_traits.inc`: 4 real bytes per pixel, same as
+ * this project's own bpp table already gives for hw_format 0x11).
+ *
+ * Real, important design difference from `GX2SetColorBuffer`,
+ * confirmed by reading deko3d's own real source (`dk_image.cpp`) --
+ * NOT assumed from the color-buffer case: depth render targets are
+ * real-hardware-disallowed from being `DkImageFlags_PitchLinear`
+ * (`DK_DEBUG_BAD_INPUT(usage == DepthRenderTarget && (... ||
+ * DkImageFlags_PitchLinear), ...)`), so the direct-CPU-memcpy-into-a-
+ * pitch-linear-image bridge `GX2SetColorBuffer` uses doesn't apply
+ * here at all. Real, correct alternative instead: a real, separate,
+ * tightly-packed linear *staging* `DkMemBlock` (real guest pixel bytes
+ * copied in via the CPU, same as color), then a real, recorded
+ * `dkCmdBufCopyBufferToImage` GPU command that swizzles it into a
+ * real, proper block-linear depth `DkImage` (needing
+ * `DkMemBlockFlags_Image` this time, unlike the pitch-linear color
+ * path — confirmed via the same real `dk_memblock.cpp` check
+ * `GX2SetColorBuffer`'s own comment already cites). This command is
+ * only *recorded* here, not submitted — real, deliberate, matching
+ * every other state-recording function in this file; it actually
+ * takes effect whenever the next real `GX2Flush`/`GX2SwapScanBuffers`
+ * submits the shared cmdbuf. `DkCopyBuf`'s real `rowLength`/
+ * `imageHeight` are left at their real default (0 = tightly-packed,
+ * confirmed against deko3d's own real source,
+ * `srcInfo.m_horizontal = src->rowLength ? src->rowLength :
+ * params.width*bytesPerBlock`), matching this staging buffer's own
+ * real, simple, unpadded layout exactly. */
+static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) {
+    uint32_t depth_buffer_addr = ctx->r[3];
+    uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
+    uint32_t bytes_per_pixel = 4u; /* Z24X8 only, see this function's own comment */
+    uint32_t staging_size, image_size, row, copy_bytes;
+    uint8_t *staging_cpu;
+    DkImageLayoutMaker layout_maker;
+    DkImageLayout layout;
+    DkMemBlockMaker mem_maker;
+    DkMemBlockMaker staging_maker;
+    DkImageView dst_view;
+    DkImageRect dst_rect;
+    DkCopyBuf src_buf;
+
+    dim = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
+    width = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
+    height = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
+    mip_levels = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET);
+    format = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
+    tile_mode = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
+    pitch = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
+    image_addr = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+
+    if (dim != 1u) return;                            /* real scope: DIM_2D only */
+    if (tile_mode != 1u && tile_mode != 16u) return;   /* real scope: already-resolved-linear only */
+    if (mip_levels > 1u) return;                       /* real scope: mip level 0 only */
+    if (format != 0x11u) return;                       /* real scope: UNORM_R24_X8 only */
+    if (width == 0u || height == 0u || pitch == 0u) return;
+
+    /* Real block-linear depth image (no PitchLinear flag -- see this
+     * function's own comment). */
+    dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
+    layout_maker.flags = DkImageFlags_UsageRender;
+    layout_maker.format = DkImageFormat_Z24X8;
+    layout_maker.dimensions[0] = width;
+    layout_maker.dimensions[1] = height;
+    layout_maker.dimensions[2] = 1;
+    layout_maker.mipLevels = 1;
+    dkImageLayoutInitialize(&layout, &layout_maker);
+
+    image_size = (uint32_t)dkImageLayoutGetSize(&layout);
+    dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device,
+                             bramble_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
+    mem_maker.flags = DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
+
+    /* Real, tightly-packed linear staging buffer -- real guest pixel
+     * bytes copied in via the CPU, then GPU-blitted (real,
+     * `dkCmdBufCopyBufferToImage`) into the real block-linear image
+     * above once this recorded command actually submits. */
+    staging_size = bytes_per_pixel * width * height;
+    dkMemBlockMakerDefaults(&staging_maker, g_bramble_gx2.device,
+                             bramble_gx2_pow2_align(staging_size, DK_MEMBLOCK_ALIGNMENT));
+    staging_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+
+    if (g_bramble_gx2.depth_target_bound) {
+        /* Real resource lifecycle: replace, don't leak, a previous
+         * real depth-buffer binding. */
+        dkMemBlockDestroy(g_bramble_gx2.depth_target_mem_block);
+        dkMemBlockDestroy(g_bramble_gx2.depth_target_staging_mem_block);
+        g_bramble_gx2.depth_target_bound = false;
+    }
+    g_bramble_gx2.depth_target_mem_block = dkMemBlockCreate(&mem_maker);
+    dkImageInitialize(&g_bramble_gx2.depth_target_image, &layout, g_bramble_gx2.depth_target_mem_block, 0);
+    g_bramble_gx2.depth_target_staging_mem_block = dkMemBlockCreate(&staging_maker);
+    g_bramble_gx2.depth_target_bound = true;
+
+    /* Real guest-memory-to-staging-buffer pixel copy, row by row --
+     * the real guest surface's own row stride is its `pitch` (in
+     * pixels) times the real bytes-per-pixel; the real staging
+     * buffer's own row stride is tightly packed (`width *
+     * bytes_per_pixel`, no padding), matching `DkCopyBuf`'s own real
+     * default-stride assumption (`rowLength`/`imageHeight` left 0). */
+    staging_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.depth_target_staging_mem_block);
+    copy_bytes = bytes_per_pixel * width;
+    if (copy_bytes > pitch * bytes_per_pixel) copy_bytes = pitch * bytes_per_pixel; /* real, defensive: never read past the guest's own declared row */
+    for (row = 0; row < height; row++) {
+        uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
+        uint32_t dst_off = row * bytes_per_pixel * width;
+        uint32_t i;
+        for (i = 0; i < copy_bytes; i++) {
+            staging_cpu[dst_off + i] = ppc_load_u8(ctx, src_off + i);
+        }
+    }
+
+    /* Real, recorded (not yet submitted) GPU blit from the real
+     * staging buffer into the real block-linear depth image -- see
+     * this function's own comment for the real submit timing. */
+    dkImageViewDefaults(&dst_view, &g_bramble_gx2.depth_target_image);
+    dst_rect.x = 0; dst_rect.y = 0; dst_rect.z = 0;
+    dst_rect.width = width; dst_rect.height = height; dst_rect.depth = 1;
+    src_buf.addr = dkMemBlockGetGpuAddr(g_bramble_gx2.depth_target_staging_mem_block);
+    src_buf.rowLength = 0;  /* real default: tightly-packed, matching the staging buffer's own real layout */
+    src_buf.imageHeight = 0;
+    dkCmdBufCopyBufferToImage(g_bramble_gx2.cmdbuf, &src_buf, &dst_view, &dst_rect, 0);
+}
+
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
 
 static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { (void)ctx; }
@@ -1770,6 +1937,7 @@ static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) { (void)c
 static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) { (void)ctx; }
 
 #endif /* __SWITCH__ */
 
