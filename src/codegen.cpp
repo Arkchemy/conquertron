@@ -337,6 +337,31 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                         // bctrl.
                         out << "  " << reg(rD) << " = " << it->second.func_addr << "u; /* &" << it->second.func_name
                             << " */\n";
+                    } else if (it->second.is_import) {
+                        // &imported-function (e.g. building a function-
+                        // pointer table/comparing against a known pointer
+                        // that happens to be a real CafeOS import) -- a
+                        // real, distinct case from both is_function (a
+                        // local function's real address) and the plain
+                        // synthetic-global-data case below (whose
+                        // global_section_base map is never populated for
+                        // .fimport_* sections in the first place -- see
+                        // its own construction site). Confirmed as a real,
+                        // not hypothetical, gap: recompiling a real,
+                        // different devkitPPC-built homebrew binary
+                        // (Aroma's root.rpx) hit this and crashed the
+                        // whole tool with an unhandled std::out_of_range
+                        // from .at() before this check existed. No real
+                        // dispatch mechanism exists yet for calling an
+                        // import indirectly through a computed pointer
+                        // (unlike a direct `bl`, resolved via
+                        // import_trampolines/call_relocs) -- real, honest
+                        // gap, not guessed at. */
+                        out << "#error \"unresolved &import (" << it->second.import_library << "."
+                            << it->second.import_function << ") at 0x" << std::hex << insn.address << std::dec
+                            << " in function " << func.name << " -- taking an imported function's address is not "
+                            << "supported yet, see PPC_INS_LIS's codegen.cpp comment\"\n";
+                        unhandled.push_back(insn.mnemonic);
                     } else {
                         // Real synthetic address (assign_global_addrs) --
                         // applies uniformly to mutable globals and
@@ -363,6 +388,18 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     if (it->second.is_function) {
                         out << "  " << reg(rD) << " = " << base_expr(rA) << " + " << it->second.func_addr
                             << "u; /* &" << it->second.func_name << " */\n";
+                    } else if (it->second.is_import) {
+                        // &imported-function via addis -- same real gap as
+                        // PPC_INS_LIS's own is_import case above (see its
+                        // comment for the full real explanation); addis is
+                        // the same relocation shape with an extra `+ rA`,
+                        // real code can use either form for the same
+                        // real idiom.
+                        out << "#error \"unresolved &import (" << it->second.import_library << "."
+                            << it->second.import_function << ") at 0x" << std::hex << insn.address << std::dec
+                            << " in function " << func.name << " -- taking an imported function's address is not "
+                            << "supported yet, see PPC_INS_LIS's codegen.cpp comment\"\n";
+                        unhandled.push_back(insn.mnemonic);
                     } else {
                         uint32_t addr = img.global_section_base.at(it->second.section) + (uint32_t)it->second.addend;
                         out << "  " << reg(rD) << " = " << base_expr(rA) << " + " << addr << "u; /* &"
