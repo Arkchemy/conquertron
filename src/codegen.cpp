@@ -1102,8 +1102,28 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_FCMPU: {
-                // operands[0] is the crf field (always cr0 in this model --
-                // see the struct-level fidelity note in ppc_runtime.h).
+                // operands[0] is the real crfD field -- fcmpu's encoding
+                // always includes it explicitly (unlike cmpw/branches,
+                // which have a genuinely optional implicit-cr0 form), but
+                // real compilers apparently only ever emit cr0 here in
+                // practice (confirmed zero non-cr0 instances found
+                // disassembling this project's own Skylanders target and
+                // two other real, different, legally-obtained open-source
+                // Wii U binaries -- unlike cmpw/branches, where the
+                // non-cr0 form turned out to be real and common). Guarded
+                // anyway for the same real reason as those: this runtime
+                // only tracks cr0 (`ctx->cr0_lt`/`gt`/`eq`), so silently
+                // computing into it regardless of the real requested
+                // field would be a silent miscompile, same class of bug
+                // already fixed for cmpw/branches, if real code ever does
+                // use a non-cr0 field here.
+                if (ppc.operands[0].reg != PPC_REG_CR0) {
+                    out << "#error \"fcmpu on non-cr0 field (cr" << (ppc.operands[0].reg - PPC_REG_CR0) << ") at 0x"
+                        << std::hex << insn.address << std::dec << " in function " << func.name
+                        << " -- not modeled, see PPC_INS_FCMPU's codegen.cpp comment\"\n";
+                    unhandled.push_back(insn.mnemonic);
+                    break;
+                }
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fB = freg_idx(ppc.operands[2].reg);
                 out << "  ppc_fcmpu(ctx, " << freg(fA) << ", " << freg(fB) << ");\n";
