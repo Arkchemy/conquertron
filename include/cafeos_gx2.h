@@ -1538,6 +1538,37 @@ static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) {
     ctx->r[3] = bpp;
 }
 
+static inline void ppc_import_gx2_GX2CalcDepthBufferHiZInfo(PpcContext *ctx) {
+    /* void GX2CalcDepthBufferHiZInfo(GX2DepthBuffer *depthBuffer,
+     * uint32_t *outSize, uint32_t *outAlignment) -- real signature
+     * confirmed against wut's gx2/surface.h. Real Cemu HLE behavior
+     * (`GX2_Surface.cpp`) is itself just `*sizeOut = 0x1000;
+     * *alignOut = 0x100;` with its own `// todo: implement` comment --
+     * real, actual upstream behavior for this function is these fixed
+     * constants, not a placeholder this shim invented; matched exactly,
+     * not guessed. `depthBuffer` (r3) is unused, matching real
+     * behavior. */
+    uint32_t out_size_addr = ctx->r[4];
+    uint32_t out_align_addr = ctx->r[5];
+    ppc_store_u32(ctx, out_size_addr, 0x1000u);
+    ppc_store_u32(ctx, out_align_addr, 0x100u);
+}
+
+static inline void ppc_import_gx2_GX2CalcColorBufferAuxInfo(PpcContext *ctx) {
+    /* void GX2CalcColorBufferAuxInfo(GX2ColorBuffer *colorBuffer,
+     * uint32_t *outSize, uint32_t *outAlignment) -- real signature
+     * confirmed against wut's gx2/surface.h. Same real Cemu HLE
+     * behavior as GX2CalcDepthBufferHiZInfo above: fixed
+     * `0x1000`/`0x100` constants, real upstream's own actual (if
+     * admittedly incomplete, per its own `// todo: implement` comment)
+     * behavior -- matched exactly. `colorBuffer` (r3) is unused,
+     * matching real behavior. */
+    uint32_t out_size_addr = ctx->r[4];
+    uint32_t out_align_addr = ctx->r[5];
+    ppc_store_u32(ctx, out_size_addr, 0x1000u);
+    ppc_store_u32(ctx, out_align_addr, 0x100u);
+}
+
 /* ---- GX2DepthBuffer clear-value setters --------------------------------
  *
  * GX2SetClearDepth/GX2SetClearStencil/GX2SetClearDepthStencil write the
