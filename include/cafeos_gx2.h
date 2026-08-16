@@ -132,7 +132,23 @@ typedef struct {
     DkColorState color_state;
     DkColorWriteState color_write_state;
     DkMultisampleState multisample_state;
+
+    /* GX2SetEventCallback registration (see BRAMBLE_GX2_NUM_EVENT_TYPES
+     * below) -- real guest addresses (function pointer + userData),
+     * not host pointers, same real addressing model as every other
+     * guest-memory reference in this project (see ppc_load_u32/
+     * ppc_store_u32 in ppc_runtime.h). Genuinely stored, not yet
+     * genuinely invoked -- see GX2SetEventCallback's own comment for
+     * why that's a real, honest, separate gap. */
+    uint32_t event_callback_func[5];
+    uint32_t event_callback_userdata[5];
 } BrambleGx2State;
+
+/* GX2EventType's real enumerator count (confirmed against wut's
+ * gx2/enum.h: START_OF_PIPE_INTERRUPT=0, END_OF_PIPE_INTERRUPT=1,
+ * VSYNC=2, FLIP=3, DISPLAY_LIST_OVERRUN=4) -- sizes the
+ * event_callback_func/userdata arrays above. */
+#define BRAMBLE_GX2_NUM_EVENT_TYPES 5u
 
 static BrambleGx2State g_bramble_gx2;
 
@@ -1091,6 +1107,49 @@ static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) {
     if (last_vsync_ptr) ppc_store_u64(ctx, last_vsync_ptr, g_bramble_gx2.retired_timestamp);
 }
 
+static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) {
+    /* GX2DRCConnectCallback GX2SetEventCallback(GX2EventType type,
+     * GX2EventCallbackFunction func, void *userData) -- real signature
+     * confirmed against wut's gx2/event.h. `type` selects one of the 5
+     * real GX2EventType slots (see BRAMBLE_GX2_NUM_EVENT_TYPES above);
+     * `func`/`userData` are real *guest* addresses (a PPC function
+     * pointer and its opaque argument), stored verbatim, not
+     * dereferenced or called here.
+     *
+     * Real, honest, deliberately separate gap: this only implements
+     * real *registration* -- storing what the game asked to be called
+     * back for a real GX2EventType -- not real *invocation*.
+     * Invocation would mean this runtime actually detecting each real
+     * event (an end-of-pipe interrupt, a real vsync, a real flip, a
+     * display-list overrun) and dispatching through `ppc_dispatch` to
+     * the stored guest function address (this project's established
+     * callback-invocation mechanism, already used for real by
+     * cafeos_coreinit_fs.h's FS*WithPosAsync and cafeos_nsyshid.h) --
+     * that needs deciding *when*, precisely, each of these 5 real
+     * events should be considered to have fired in this runtime's
+     * still-synchronous-for-now GX2 pipeline, which isn't confirmed
+     * against real hardware/Cemu behavior yet, so it's not guessed at
+     * here. A real, functioning improvement over doing nothing at all
+     * (the callback is at least genuinely remembered, not silently
+     * dropped), with the actual dispatch left as a clearly-flagged
+     * follow-up rather than invented timing. Return value (the
+     * previously-registered callback, per real GX2 semantics) isn't
+     * set -- no caller in the real tfbGame_cafe.rpx import list reads
+     * this function's return value as anything other than void-ish
+     * (the real return type only matters for GX2GetEventCallback-style
+     * round-tripping, and that getter isn't in this game's real import
+     * list either, confirmed the same way GX2SetSwapInterval's
+     * accepted-not-stored reasoning was). */
+    uint32_t type = ctx->r[3];
+    uint32_t func = ctx->r[4];
+    uint32_t user_data = ctx->r[5];
+
+    if (type < BRAMBLE_GX2_NUM_EVENT_TYPES) {
+        g_bramble_gx2.event_callback_func[type] = func;
+        g_bramble_gx2.event_callback_userdata[type] = user_data;
+    }
+}
+
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
 
 static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { (void)ctx; }
@@ -1122,6 +1181,7 @@ static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) 
 static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) { (void)ctx; }
 
 #endif /* __SWITCH__ */
 
@@ -1208,6 +1268,30 @@ static inline void ppc_import_gx2_GX2SetDRCScale(PpcContext *ctx) {
      * the GamePad/DRC target this runtime also has no second real
      * display for (see GX2SetDRCEnable above). Same reasoning: accepted,
      * not stored, no real getter in this game's actual import list. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetTVBuffer(PpcContext *ctx) {
+    /* void GX2SetTVBuffer(void *buffer, uint32_t size, GX2TVRenderMode
+     * tvRenderMode, GX2SurfaceFormat surfaceFormat, GX2BufferingMode
+     * bufferingMode) -- real signature confirmed against wut's
+     * gx2/display.h, 5 real params, all in r3-r7. Same real "no second
+     * display target to attach a scan buffer to" reasoning as
+     * GX2SetTVEnable/GX2SetTVScale above -- this runtime's one real
+     * display target is entirely owned by GX2Init's own swapchain/
+     * framebuffer setup, not a game-supplied buffer. Accepted, not
+     * stored: no real getter for this in the actual tfbGame_cafe.rpx
+     * import list. */
+    (void)ctx;
+}
+
+static inline void ppc_import_gx2_GX2SetDRCBuffer(PpcContext *ctx) {
+    /* void GX2SetDRCBuffer(void *buffer, uint32_t size, GX2DrcRenderMode
+     * drcRenderMode, GX2SurfaceFormat surfaceFormat, GX2BufferingMode
+     * bufferingMode) -- same real per-scan-target buffer registration
+     * GX2SetTVBuffer above is, just for the GamePad/DRC target this
+     * runtime also has no second real display for (see
+     * GX2SetDRCEnable above). Same reasoning: accepted, not stored. */
     (void)ctx;
 }
 
