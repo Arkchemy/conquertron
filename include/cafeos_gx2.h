@@ -53,6 +53,18 @@
  * formula, independent of any backend choice.
  */
 
+/* Real, WUT_CHECK_SIZE-confirmed byte offsets of GX2Sampler's 3 packed
+ * uint32_t hardware-register words within the struct (see the
+ * GX2Sampler init family's own file comment further below for the
+ * full real design) -- defined here, unconditionally (not inside the
+ * __SWITCH__ block below), since both the platform-independent packing
+ * code (GX2InitSampler* below) and the real, __SWITCH__-only decoding
+ * code (GX2SetPixelSampler/GX2SetVertexSampler) need them, and the
+ * host build never sees inside that block at all. */
+#define BRAMBLE_GX2_SAMPLER_WORD0_OFFSET 0u
+#define BRAMBLE_GX2_SAMPLER_WORD1_OFFSET 4u
+#define BRAMBLE_GX2_SAMPLER_WORD2_OFFSET 8u
+
 #ifdef __SWITCH__
 #include <deko3d.h>
 #include <switch.h>
@@ -76,6 +88,33 @@
 #define BRAMBLE_GX2_NUM_FRAMEBUFFERS 2u
 #define BRAMBLE_GX2_FB_WIDTH 1280u
 #define BRAMBLE_GX2_FB_HEIGHT 720u
+
+/* Real per-stage sampler count (confirmed against Cemu's real
+ * Latte::GPU_LIMITS::NUM_SAMPLERS_PER_STAGE = 18, even Cemu's own
+ * developers weren't fully certain if it's 16 or 18, but 18 is what
+ * their real, shipped HLE actually uses -- matched here rather than
+ * picked independently). Real GX2 keeps pixel/vertex/geometry sampler
+ * index spaces separate via real AMD hardware base-index register
+ * offsets (SAMPLER_BASE_INDEX_PIXEL/VERTEX/GEOMETRY); deko3d has no
+ * such per-stage namespace concept at all (one flat sampler descriptor
+ * array, stage association is a real shader-side binding decision no
+ * shader translation exists yet to make) -- this project's own,
+ * documented, honest substitute keeps them apart the simple way
+ * instead, by giving pixel and vertex samplers non-overlapping index
+ * ranges within the one real shared descriptor array (geometry
+ * samplers aren't in this game's real gx2 import list at all, so no
+ * third range is reserved). */
+#define BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE 18u
+#define BRAMBLE_GX2_SAMPLER_PIXEL_BASE 0u
+#define BRAMBLE_GX2_SAMPLER_VERTEX_BASE BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE
+#define BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS (BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE * 2u)
+/* Real DkSamplerDescriptor is a fixed, confirmed 32-byte opaque type
+ * (DK_DECL_OPAQUE(SamplerDescriptor, 4, 32) in deko3d.h); 36 real
+ * entries only need 1152 bytes, rounded up to one full real
+ * DK_MEMBLOCK_ALIGNMENT (0x1000) page -- plenty of headroom, same
+ * "generous starting point" trade-off as BRAMBLE_GX2_CMD_MEM_SIZE
+ * above. */
+#define BRAMBLE_GX2_SAMPLER_DESCRIPTOR_MEM_SIZE 0x1000u
 
 typedef struct {
     bool initialized;
@@ -163,6 +202,15 @@ typedef struct {
      * why that's a real, honest, separate gap. */
     uint32_t event_callback_func[5];
     uint32_t event_callback_userdata[5];
+
+    /* Real deko3d sampler descriptor pool (see GX2SetPixelSampler/
+     * GX2SetVertexSampler's own comment for the full real design) --
+     * one shared, persistent, GPU-visible memory block, following
+     * devkitPro's own official CDescriptorSet example pattern (a
+     * DkMemBlock sized/aligned for a fixed real number of
+     * DkSamplerDescriptor entries, its DkGpuAddr recorded once). */
+    DkMemBlock sampler_descriptor_mem_block;
+    DkGpuAddr sampler_descriptor_gpu_addr;
 } BrambleGx2State;
 
 /* GX2EventType's real enumerator count (confirmed against wut's
@@ -289,6 +337,17 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) {
     g_bramble_gx2.color_write_enable = 1;
     g_bramble_gx2.channel_masks = 0xFFFFFFFFu;
 
+    /* Real sampler descriptor pool -- see GX2SetPixelSampler/
+     * GX2SetVertexSampler's own comment and BrambleGx2State's field
+     * comment for the full real design. */
+    {
+        DkMemBlockMaker sampler_mem_maker;
+        dkMemBlockMakerDefaults(&sampler_mem_maker, g_bramble_gx2.device, BRAMBLE_GX2_SAMPLER_DESCRIPTOR_MEM_SIZE);
+        sampler_mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+        g_bramble_gx2.sampler_descriptor_mem_block = dkMemBlockCreate(&sampler_mem_maker);
+        g_bramble_gx2.sampler_descriptor_gpu_addr = dkMemBlockGetGpuAddr(g_bramble_gx2.sampler_descriptor_mem_block);
+    }
+
     g_bramble_gx2.initialized = true;
 }
 
@@ -300,6 +359,7 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) {
     dkSwapchainDestroy(g_bramble_gx2.swapchain);
     /* DkImage itself needs no explicit per-image destroy call -- only its backing DkMemBlock does */
     dkMemBlockDestroy(g_bramble_gx2.fb_mem_block);
+    dkMemBlockDestroy(g_bramble_gx2.sampler_descriptor_mem_block);
     dkQueueDestroy(g_bramble_gx2.queue);
     dkCmdBufDestroy(g_bramble_gx2.cmdbuf);
     dkMemBlockDestroy(g_bramble_gx2.cmd_mem_block);
@@ -1236,6 +1296,181 @@ static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) {
     ctx->r[3] = previous_func;
 }
 
+static inline DkWrapMode bramble_gx2_clamp_mode_to_dk(uint32_t gx2_clamp) {
+    /* GX2TexClampMode -> DkWrapMode. Confirmed real values both sides
+     * (wut's gx2/enum.h: WRAP=0, MIRROR=1, CLAMP=2, MIRROR_ONCE=3,
+     * CLAMP_HALF_BORDER=4, MIRROR_ONCE_HALF_BORDER=5, CLAMP_BORDER=6,
+     * MIRROR_ONCE_BORDER=7; deko3d.h: Repeat=0, MirroredRepeat=1,
+     * ClampToEdge=2, ClampToBorder=3, Clamp=4, MirrorClampToEdge=5,
+     * MirrorClampToBorder=6, MirrorClamp=7) -- mapped by real semantic
+     * meaning, not raw value (the two enums don't share one consistent
+     * offset/order). WRAP/MIRROR/CLAMP/MIRROR_ONCE map cleanly onto
+     * Repeat/MirroredRepeat/ClampToEdge/MirrorClampToEdge. GX2's real
+     * *_HALF_BORDER variants (an AMD-specific clamp-to-half-the-border-
+     * color mode) have no deko3d equivalent -- approximated as the
+     * plain (non-half) border clamp, a documented, unconfirmed
+     * simplification for two entries not expected to be hit in
+     * practice. */
+    static const uint8_t table[8] = {
+        0, /* WRAP -> Repeat */
+        1, /* MIRROR -> MirroredRepeat */
+        2, /* CLAMP -> ClampToEdge */
+        5, /* MIRROR_ONCE -> MirrorClampToEdge */
+        3, /* CLAMP_HALF_BORDER -> ClampToBorder (approximated, see above) */
+        6, /* MIRROR_ONCE_HALF_BORDER -> MirrorClampToBorder (approximated) */
+        3, /* CLAMP_BORDER -> ClampToBorder */
+        6, /* MIRROR_ONCE_BORDER -> MirrorClampToBorder */
+    };
+    if (gx2_clamp >= 8) return DkWrapMode_Repeat; /* defensive fallback for an out-of-range/unrecognized value */
+    return (DkWrapMode)table[gx2_clamp];
+}
+
+static inline DkFilter bramble_gx2_xy_filter_to_dk(uint32_t gx2_filter) {
+    /* GX2TexXYFilterMode -> DkFilter. Real GX2 values (wut's
+     * gx2/enum.h): POINT=0, LINEAR=1, BICUBIC=2 -- plus the real
+     * hardware-only ANISO_POINT=4/ANISO_BILINEAR=5 values
+     * GX2InitSamplerXYFilter's own real remapping (see its comment
+     * above) can substitute in when anisotropic filtering is
+     * requested. deko3d has only two real filter modes
+     * (Nearest/Linear) plus a separate `maxAnisotropy` float (handled
+     * by bramble_gx2_aniso_ratio_to_dk below) -- BICUBIC and the
+     * ANISO_* variants all collapse onto the nearest real deko3d
+     * equivalent (BICUBIC -> Linear, a documented, unconfirmed
+     * simplification; ANISO_POINT/ANISO_BILINEAR -> Nearest/Linear,
+     * since deko3d expresses "anisotropic" via maxAnisotropy > 1
+     * layered on top of a real base filter, not a distinct filter
+     * enum value of its own). */
+    static const uint8_t table[6] = {
+        1, /* POINT -> Nearest */
+        2, /* LINEAR -> Linear */
+        2, /* BICUBIC -> Linear (approximated, see above) */
+        2, /* (unused/reserved GX2 value 3) -> Linear, defensive */
+        1, /* ANISO_POINT -> Nearest */
+        2, /* ANISO_BILINEAR -> Linear */
+    };
+    if (gx2_filter >= 6) return DkFilter_Linear; /* defensive fallback for an out-of-range/unrecognized value */
+    return (DkFilter)table[gx2_filter];
+}
+
+static inline DkMipFilter bramble_gx2_mip_filter_to_dk(uint32_t gx2_filter) {
+    /* GX2TexZFilterMode/GX2TexMipFilterMode (both share the same real
+     * NONE=0/POINT=1/LINEAR=2 encoding, confirmed against wut's
+     * gx2/enum.h) -> DkMipFilter (None=1, Nearest=2, Linear=3,
+     * confirmed against deko3d.h) -- a uniform +1 offset, both APIs
+     * enumerate the same 3 real mip-filtering modes in the same
+     * order. */
+    if (gx2_filter >= 3) return DkMipFilter_Linear; /* defensive fallback for an out-of-range/unrecognized value */
+    return (DkMipFilter)(gx2_filter + 1);
+}
+
+static inline float bramble_gx2_aniso_ratio_to_dk(uint32_t gx2_ratio) {
+    /* GX2TexAnisoRatio (NONE=0, 2:1=1, 4:1=2, 8:1=3, 16:1=4, confirmed
+     * against wut's gx2/enum.h) -> deko3d's real `maxAnisotropy` float
+     * field -- a real, direct `1 << ratio` conversion (1x/2x/4x/8x/16x
+     * anisotropic filtering), not a lookup table, since GX2's own
+     * enum values already encode the real power-of-two ratio
+     * directly. */
+    if (gx2_ratio > 4) gx2_ratio = 4; /* defensive clamp for an out-of-range/unrecognized value */
+    return (float)(1u << gx2_ratio);
+}
+
+/* Real decode of a guest GX2Sampler's 3 packed hardware-register words
+ * back into a real DkSampler -- the exact inverse of the bit-packing
+ * GX2InitSampler/GX2InitSamplerXYFilter/etc. do above, using the same
+ * real, Cemu-confirmed field offsets/widths (see that section's own
+ * file comment). Real, documented, honest gap: `compareEnable` is left
+ * at deko3d's own default (false) -- real GX2/AMD hardware only
+ * actually performs shadow/depth-compare sampling when the *bound
+ * texture* is itself a depth-format surface, a decision made at
+ * texture-binding time (GX2SetPixelTexture/GX2SetVertexTexture, both
+ * still unimplemented), not something a GX2Sampler's own bits alone
+ * determine -- so this decodes and stores `compareOp` (harmless either
+ * way) but doesn't guess at enabling it. `borderColor` is left at
+ * deko3d's own default (transparent black, matching GX2's own
+ * TRANSPARENT_BLACK default) for every real GX2TexBorderType value
+ * except VARIABLE (3, "use a separately-set real border color
+ * register") since that real register is set by a distinct function,
+ * GX2Set{Pixel,Vertex}SamplerBorderColor, not implemented here -- a
+ * real, honest, separate gap, not silently guessed at. */
+static inline void bramble_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_addr, DkSampler *out_sampler) {
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+    uint32_t word1 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD1_OFFSET);
+    uint32_t clamp_x = (word0 >> 0) & 0x7u;
+    uint32_t clamp_y = (word0 >> 3) & 0x7u;
+    uint32_t clamp_z = (word0 >> 6) & 0x7u;
+    uint32_t xy_mag_filter = (word0 >> 9) & 0x7u;
+    uint32_t xy_min_filter = (word0 >> 12) & 0x7u;
+    uint32_t mip_filter = (word0 >> 17) & 0x3u;
+    uint32_t max_aniso_ratio = (word0 >> 19) & 0x7u;
+    uint32_t depth_compare_function = (word0 >> 26) & 0x7u;
+    uint32_t min_lod = (word1 >> 0) & 0x3FFu;
+    uint32_t max_lod = (word1 >> 10) & 0x3FFu;
+    int32_t lod_bias = (int32_t)((word1 >> 20) & 0xFFFu);
+    if (lod_bias & 0x800) lod_bias -= 0x1000; /* sign-extend the real 12-bit field */
+
+    dkSamplerDefaults(out_sampler);
+    out_sampler->wrapMode[0] = bramble_gx2_clamp_mode_to_dk(clamp_x);
+    out_sampler->wrapMode[1] = bramble_gx2_clamp_mode_to_dk(clamp_y);
+    out_sampler->wrapMode[2] = bramble_gx2_clamp_mode_to_dk(clamp_z);
+    out_sampler->magFilter = bramble_gx2_xy_filter_to_dk(xy_mag_filter);
+    out_sampler->minFilter = bramble_gx2_xy_filter_to_dk(xy_min_filter);
+    out_sampler->mipFilter = bramble_gx2_mip_filter_to_dk(mip_filter);
+    out_sampler->maxAnisotropy = bramble_gx2_aniso_ratio_to_dk(max_aniso_ratio);
+    out_sampler->compareOp = bramble_gx2_compare_func_to_dk(depth_compare_function);
+    out_sampler->lodClampMin = (float)min_lod / 64.0f;
+    out_sampler->lodClampMax = (float)max_lod / 64.0f;
+    out_sampler->lodBias = (float)lod_bias / 64.0f;
+}
+
+/* Pushes a decoded DkSampler into this stage's real slot of the shared
+ * sampler descriptor pool and (re-)binds the whole set -- see
+ * BrambleGx2State's own field comment and the constants above for the
+ * real pool layout/sizing. Binding on every single call (rather than
+ * once per frame/draw, the real deko3d-example convention) is a real,
+ * deliberate "trade performance for straightforward correctness"
+ * choice consistent with this project's existing pattern elsewhere
+ * (e.g. GX2SwapScanBuffers' per-frame dkQueueWaitIdle) -- there's no
+ * real draw-call pipeline yet to know when "right before a draw"
+ * actually is, so this keeps the bound set always up to date instead
+ * of guessing when a real draw call might eventually need it current. */
+static inline void bramble_gx2_set_sampler(PpcContext *ctx, uint32_t sampler_addr, uint32_t base_index, uint32_t index) {
+    DkSampler sampler;
+    DkSamplerDescriptor descriptor;
+    uint32_t slot;
+    if (index >= BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE) return; /* real, bounded pool -- out-of-range index is a no-op, not a crash */
+    slot = base_index + index;
+    bramble_gx2_sampler_decode(ctx, sampler_addr, &sampler);
+    dkSamplerDescriptorInitialize(&descriptor, &sampler);
+    dkCmdBufPushData(g_bramble_gx2.cmdbuf, g_bramble_gx2.sampler_descriptor_gpu_addr + (uint64_t)slot * sizeof(DkSamplerDescriptor),
+                      &descriptor, sizeof(DkSamplerDescriptor));
+    dkCmdBufBindSamplerDescriptorSet(g_bramble_gx2.cmdbuf, g_bramble_gx2.sampler_descriptor_gpu_addr, BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS);
+}
+
+static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) {
+    /* void GX2SetPixelSampler(GX2Sampler *sampler, uint32_t
+     * samplerIndex) -- real signature confirmed against Cemu's real
+     * GX2_Texture.cpp (`GX2SetPixelSampler`/`_GX2SetSampler`). Real
+     * hardware adds a real `SAMPLER_BASE_INDEX_PIXEL` register offset
+     * to keep pixel-stage samplers in their own real AMD hardware
+     * register range, separate from vertex/geometry -- deko3d has no
+     * such per-stage namespace at all (see
+     * `BRAMBLE_GX2_SAMPLER_PIXEL_BASE`'s own comment above for the
+     * real, documented substitute this project uses instead). */
+    uint32_t sampler_addr = ctx->r[3];
+    uint32_t sampler_index = ctx->r[4];
+    bramble_gx2_set_sampler(ctx, sampler_addr, BRAMBLE_GX2_SAMPLER_PIXEL_BASE, sampler_index);
+}
+
+static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) {
+    /* void GX2SetVertexSampler(GX2Sampler *sampler, uint32_t
+     * vertexSamplerIndex) -- real signature confirmed against Cemu's
+     * real GX2_Texture.cpp. See GX2SetPixelSampler's own comment for
+     * the real pixel/vertex namespace-separation reasoning. */
+    uint32_t sampler_addr = ctx->r[3];
+    uint32_t sampler_index = ctx->r[4];
+    bramble_gx2_set_sampler(ctx, sampler_addr, BRAMBLE_GX2_SAMPLER_VERTEX_BASE, sampler_index);
+}
+
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
 
 static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { (void)ctx; }
@@ -1268,6 +1503,8 @@ static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) { (voi
 static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) { (void)ctx; }
+static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) { (void)ctx; }
 
 #endif /* __SWITCH__ */
 
@@ -1647,16 +1884,14 @@ static inline void ppc_import_gx2_GX2SetClearDepthStencil(PpcContext *ctx) {
  * No deko3d call happens here: unlike every other real GX2 function in
  * this file, GX2Sampler is pure guest-memory state -- the real, actual
  * binding to a deko3d DkSampler only happens once GX2SetPixelSampler/
- * GX2SetVertexSampler (still unimplemented) decode these same bits back
- * out, the same real two-step "build state struct, then bind it" shape
- * real hardware itself uses. This works identically on host and Switch
- * (no __SWITCH__ guard needed), same as every other pure-guest-memory-
+ * GX2SetVertexSampler decode these same bits back out (see their own
+ * real, now-implemented decode/bind logic and
+ * `BRAMBLE_GX2_SAMPLER_WORD0_OFFSET`'s own definition above), the same
+ * real two-step "build state struct, then bind it" shape real hardware
+ * itself uses. This works identically on host and Switch (no
+ * __SWITCH__ guard needed), same as every other pure-guest-memory-
  * struct shim in this project.
  */
-
-#define BRAMBLE_GX2_SAMPLER_WORD0_OFFSET 0u
-#define BRAMBLE_GX2_SAMPLER_WORD1_OFFSET 4u
-#define BRAMBLE_GX2_SAMPLER_WORD2_OFFSET 8u
 
 static inline uint32_t bramble_gx2_bitfield_set(uint32_t word, uint32_t value, uint32_t shift, uint32_t width) {
     uint32_t mask = ((width >= 32u) ? 0xFFFFFFFFu : ((1u << width) - 1u)) << shift;
