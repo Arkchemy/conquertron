@@ -69,8 +69,8 @@ enum {
 
 #define BRAMBLE_FS_MAX_HANDLES 64
 
-static FILE *g_ppc_fs_files[BRAMBLE_FS_MAX_HANDLES];
-static int32_t g_ppc_fs_last_error = BRAMBLE_FS_STATUS_OK;
+extern FILE *g_ppc_fs_files[BRAMBLE_FS_MAX_HANDLES]; /* real definition in cafeos_state.c -- see its own file comment */
+extern int32_t g_ppc_fs_last_error; /* real definition in cafeos_state.c -- see its own file comment */
 
 /* Reads a NUL-terminated string out of the guest's synthetic memory --
  * every FS* path/mode argument is a pointer into it, never a host
@@ -324,7 +324,7 @@ static inline void ppc_import_coreinit_FSGetStatFile(PpcContext *ctx) {
  * above, just a second table since FSFileHandle and FSDirectoryHandle
  * are numbered independently on real hardware. */
 #define BRAMBLE_FS_MAX_DIR_HANDLES 32
-static DIR *g_ppc_fs_dirs[BRAMBLE_FS_MAX_DIR_HANDLES];
+extern DIR *g_ppc_fs_dirs[BRAMBLE_FS_MAX_DIR_HANDLES]; /* real definition in cafeos_state.c -- see its own file comment */
 
 static inline uint32_t ppc_fs_alloc_dir_handle(DIR *d) {
     for (uint32_t i = 0; i < BRAMBLE_FS_MAX_DIR_HANDLES; i++) {

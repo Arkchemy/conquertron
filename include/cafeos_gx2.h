@@ -347,7 +347,7 @@ typedef struct {
  * event_callback_func/userdata arrays above. */
 #define BRAMBLE_GX2_NUM_EVENT_TYPES 5u
 
-static BrambleGx2State g_bramble_gx2;
+extern BrambleGx2State g_bramble_gx2; /* real definition in cafeos_state.c -- see its own file comment */
 
 #define BRAMBLE_GX2_CMD_MEM_SIZE 0x10000u
 

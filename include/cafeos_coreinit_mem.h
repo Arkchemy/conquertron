@@ -71,12 +71,13 @@ typedef struct BrambleMemHeap {
 } BrambleMemHeap;
 
 #define BRAMBLE_MEM_MAX_HEAPS 8
-static BrambleMemHeap g_bramble_mem_heaps[BRAMBLE_MEM_MAX_HEAPS];
+/* Real definitions in cafeos_state.c -- see its own file comment. */
+extern BrambleMemHeap g_bramble_mem_heaps[BRAMBLE_MEM_MAX_HEAPS];
 
 /* MEM_BASE_HEAP_MEM1=0, MEM_BASE_HEAP_MEM2=1, MEM_BASE_HEAP_FG=8 -- see
  * coreinit/memheap.h's MEMBaseHeapType. Indexed [0]=MEM1, [1]=MEM2,
  * [2]=FG; 0 means "not yet lazily created". */
-static uint32_t g_bramble_base_heap_handle[3];
+extern uint32_t g_bramble_base_heap_handle[3];
 
 #define BRAMBLE_MEM1_BASE 0x8000u
 #define BRAMBLE_MEM1_SIZE 0x3000u

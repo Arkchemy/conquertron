@@ -82,7 +82,7 @@
  * source" caveat already used for cafeos_ghs_runtime.h's
  * __ghs_flock_* functions.
  */
-static int g_ax_initialized = 0;
+extern int g_ax_initialized; /* real definition in cafeos_state.c -- see its own file comment */
 
 static inline void ppc_import_snd_core_AXInit(PpcContext *ctx) { (void)ctx; g_ax_initialized = 1; }
 static inline void ppc_import_snd_core_AXInitWithParams(PpcContext *ctx) { (void)ctx; g_ax_initialized = 1; }
@@ -124,7 +124,7 @@ static inline void ppc_import_snd_core_AXRegisterExceedCallback(PpcContext *ctx)
 #define BRAMBLE_AXVOICE_OFF_USERCONTEXT 0x24u
 #define BRAMBLE_AXVOICE_OFF_OFFSETS 0x34u /* AXVoiceOffsets: dataType u16@+0, loopingEnabled u16@+2, loopOffset u32@+4, endOffset u32@+8, currentOffset u32@+c, data ptr@+0x10 */
 
-static int g_bramble_ax_voice_used[BRAMBLE_AXVOICE_MAX];
+extern int g_bramble_ax_voice_used[BRAMBLE_AXVOICE_MAX]; /* real definition in cafeos_state.c -- see its own file comment */
 
 static inline void ppc_import_snd_core_AXAcquireVoice(PpcContext *ctx) {
     /* AXVoice *AXAcquireVoice(uint32_t priority, AXVoiceCallbackFn callback, void *userContext) */

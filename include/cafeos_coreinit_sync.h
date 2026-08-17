@@ -84,8 +84,9 @@ typedef struct {
     int active;
     pthread_mutex_t mutex;
 } BrambleMutexEntry;
-static BrambleMutexEntry g_bramble_mutexes[BRAMBLE_SYNC_TABLE_SIZE];
-static pthread_mutex_t g_bramble_mutex_table_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Real definitions in cafeos_state.c -- see its own file comment. */
+extern BrambleMutexEntry g_bramble_mutexes[BRAMBLE_SYNC_TABLE_SIZE];
+extern pthread_mutex_t g_bramble_mutex_table_lock;
 
 /* Finds (or, if requested, lazily creates) the real pthread_mutex_t
  * backing a given guest OSMutex address. Lazy creation on first use
@@ -137,8 +138,9 @@ typedef struct {
     uint64_t epoch;
     int waiting_count;
 } BrambleEventEntry;
-static BrambleEventEntry g_bramble_events[BRAMBLE_SYNC_TABLE_SIZE];
-static pthread_mutex_t g_bramble_event_table_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Real definitions in cafeos_state.c -- see its own file comment. */
+extern BrambleEventEntry g_bramble_events[BRAMBLE_SYNC_TABLE_SIZE];
+extern pthread_mutex_t g_bramble_event_table_lock;
 
 static inline BrambleEventEntry *bramble_event_get(uint32_t addr, int create_with_value, int create_with_mode) {
     int i, free_slot = -1;
@@ -332,8 +334,9 @@ typedef struct {
     pthread_cond_t cond;
     int32_t count;
 } BrambleSemEntry;
-static BrambleSemEntry g_bramble_sems[BRAMBLE_SYNC_TABLE_SIZE];
-static pthread_mutex_t g_bramble_sem_table_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Real definitions in cafeos_state.c -- see its own file comment. */
+extern BrambleSemEntry g_bramble_sems[BRAMBLE_SYNC_TABLE_SIZE];
+extern pthread_mutex_t g_bramble_sem_table_lock;
 
 static inline BrambleSemEntry *bramble_sem_get(uint32_t addr, int create_with_count) {
     int i, free_slot = -1;

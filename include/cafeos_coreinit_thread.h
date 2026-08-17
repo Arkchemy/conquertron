@@ -78,10 +78,11 @@ typedef struct {
     PpcSharedMemory *shared;
 } BrambleThreadEntry;
 
-static BrambleThreadEntry g_bramble_threads[BRAMBLE_THREAD_TABLE_SIZE];
-static pthread_mutex_t g_bramble_thread_table_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_key_t g_bramble_current_thread_key;
-static pthread_once_t g_bramble_thread_tls_once = PTHREAD_ONCE_INIT;
+/* Real definitions in cafeos_state.c -- see its own file comment. */
+extern BrambleThreadEntry g_bramble_threads[BRAMBLE_THREAD_TABLE_SIZE];
+extern pthread_mutex_t g_bramble_thread_table_lock;
+extern pthread_key_t g_bramble_current_thread_key;
+extern pthread_once_t g_bramble_thread_tls_once;
 
 static inline void bramble_thread_tls_init(void) { pthread_key_create(&g_bramble_current_thread_key, NULL); }
 

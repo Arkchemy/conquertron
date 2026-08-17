@@ -74,6 +74,39 @@ typedef struct PpcContext {
     uint8_t cr0_lt;
     uint8_t cr0_gt;
     uint8_t cr0_eq;
+    /* Real CR1-CR7 field bits (LT/GT/EQ; SO is never tracked, same real
+     * gap CR0's own SO already has). Added additively, alongside the
+     * existing `cr0_lt`/`cr0_gt`/`cr0_eq` fields above (left completely
+     * untouched -- every already-proven cr0-only codegen path keeps
+     * using them exactly as before), rather than folding cr0 into this
+     * array too, to avoid touching heavily-tested existing code for no
+     * real benefit. Index 0 of each array is real but unused (cr0 has
+     * its own dedicated fields above instead) -- kept anyway so `crN`
+     * maps directly to array index N with no off-by-one, matching
+     * codegen.cpp's own real crN address-to-index arithmetic
+     * (`reg - PPC_REG_CR0LT` etc., confirmed contiguous in real
+     * Capstone's own `ppc.h` register enum). Real motivation: the real
+     * PowerPC SVR4 ABI's own varargs convention has a real caller set
+     * CR1's EQ bit via `crclr`/`cror`/`crmove` to tell a vararg callee
+     * whether floating-point register arguments were passed -- real,
+     * confirmed-live code in the actual Skylanders binary this project
+     * targets (GHS-compiled varargs prologues), not a hypothetical. */
+    uint8_t cr_lt[8];
+    uint8_t cr_gt[8];
+    uint8_t cr_eq[8];
+    /* Real GQR0-GQR7 (Graphics Quantization Registers), SPRs 912-919 --
+     * real hardware state controlling psq_l/psq_lu/psq_st/psq_stu's
+     * real quantized (non-float) paired-single formats (see
+     * ppc_psq_store_quantized/ppc_psq_load_quantized below for the real
+     * bit layout/semantics, confirmed against Dolphin's real, open-
+     * source Gekko/Broadway CPU emulation -- same real CPU family as
+     * the Wii U's Espresso). Zero-initialized, matching real hardware's
+     * own real post-reset GQR state (type=FLOAT, scale=0, i.e. no
+     * quantization) -- an honest, documented real default, not a
+     * guess, for the common case where nothing in a given recompiled
+     * program ever writes a GQR via mtspr before using a quantized
+     * paired-single load/store. */
+    uint32_t gqr[8];
     uint8_t xer_ca; /* XER carry bit, set by addc/adde (used for multi-word/64-bit arithmetic) */
     /* mftb (move-from-timebase): real code reads this as a free-running
      * hardware cycle counter (profiling, or occasionally a random seed).
@@ -201,25 +234,57 @@ static inline void ppc_cmplw(PpcContext *ctx, uint32_t a, uint32_t b) {
     ctx->cr0_eq = a == b;
 }
 
-/* mfcr: packs CR0 (the only CR field this model tracks -- see the
- * struct-level fidelity note above) into bits 28-31 of a 32-bit value,
- * matching the real CR register layout (CR0 is the top 4 bits: LT,GT,EQ,
- * SO). SO is never tracked/set, so that bit is always 0. Other CR fields
- * are always 0 here too, which is only actually correct if nothing in
- * the recompiled code reads them -- a real but narrow gap shared with
- * every other cr0-only piece of this runtime. */
-static inline uint32_t ppc_mfcr(const PpcContext *ctx) {
-    uint32_t cr0 = (ctx->cr0_lt ? 8u : 0u) | (ctx->cr0_gt ? 4u : 0u) | (ctx->cr0_eq ? 2u : 0u);
-    return cr0 << 28;
+/* Real cmpw/cmplw variants targeting an explicit non-cr0 field
+ * (`cr` is 1-7 -- see `PpcContext::cr_lt`/`cr_gt`/`cr_eq`'s own
+ * comment for why cr0 keeps using the separate, original functions
+ * above instead of index 0 here). */
+static inline void ppc_cmpw_cr(PpcContext *ctx, int cr, int32_t a, int32_t b) {
+    ctx->cr_lt[cr] = a < b;
+    ctx->cr_gt[cr] = a > b;
+    ctx->cr_eq[cr] = a == b;
 }
 
-/* mtcrf targeting field 0 (CR0) specifically -- see codegen.cpp's
- * PPC_INS_MTCRF handling for why only field 0 is wired up. */
+static inline void ppc_cmplw_cr(PpcContext *ctx, int cr, uint32_t a, uint32_t b) {
+    ctx->cr_lt[cr] = a < b;
+    ctx->cr_gt[cr] = a > b;
+    ctx->cr_eq[cr] = a == b;
+}
+
+/* mfcr: packs all 8 real CR fields into a real 32-bit CR value, matching
+ * real hardware's layout (CR0 is the top 4 bits: LT,GT,EQ,SO; CR1 the
+ * next 4; ...; CR7 the bottom 4). SO is never tracked/set for any real
+ * field (a real, narrow, pre-existing gap), so those bits are always 0.
+ * CR1-CR7 now come from the real, tracked `cr_lt`/`cr_gt`/`cr_eq` arrays
+ * (see PpcContext's own comment) -- previously always 0 here
+ * regardless, correct only when nothing recompiled read them. */
+static inline uint32_t ppc_mfcr(const PpcContext *ctx) {
+    uint32_t cr = ((ctx->cr0_lt ? 8u : 0u) | (ctx->cr0_gt ? 4u : 0u) | (ctx->cr0_eq ? 2u : 0u)) << 28;
+    int i;
+    for (i = 1; i < 8; i++) {
+        uint32_t field = (ctx->cr_lt[i] ? 8u : 0u) | (ctx->cr_gt[i] ? 4u : 0u) | (ctx->cr_eq[i] ? 2u : 0u);
+        cr |= field << (28 - i * 4);
+    }
+    return cr;
+}
+
+/* mtcrf targeting field 0 (CR0) specifically -- real hardware bit
+ * layout, same reasoning as ppc_mfcr above. */
 static inline void ppc_mtcrf_cr0(PpcContext *ctx, uint32_t val) {
     uint32_t cr0 = (val >> 28) & 0xFu;
     ctx->cr0_lt = (cr0 & 8u) != 0;
     ctx->cr0_gt = (cr0 & 4u) != 0;
     ctx->cr0_eq = (cr0 & 2u) != 0;
+}
+
+/* mtcrf targeting an explicit non-cr0 field (1-7) -- extracts that
+ * field's real 4-bit slice (LT,GT,EQ,SO) from the same real bit
+ * position it occupies in a full 32-bit CR value, matching
+ * ppc_mtcrf_cr0's own real bit-layout reasoning. */
+static inline void ppc_mtcrf_field(PpcContext *ctx, int field, uint32_t val) {
+    uint32_t bits = (val >> (28 - field * 4)) & 0xFu;
+    ctx->cr_lt[field] = (bits & 8u) != 0;
+    ctx->cr_gt[field] = (bits & 4u) != 0;
+    ctx->cr_eq[field] = (bits & 2u) != 0;
 }
 
 /* addc/adde: used together to add 64-bit (or wider) values held across
@@ -390,9 +455,137 @@ static inline void ppc_fcmpu(PpcContext *ctx, double a, double b) {
     ctx->cr0_eq = a == b;
 }
 
+/* Real fcmpu variant targeting an explicit non-cr0 field, same real
+ * reasoning as ppc_cmpw_cr/ppc_cmplw_cr above. */
+static inline void ppc_fcmpu_cr(PpcContext *ctx, int cr, double a, double b) {
+    ctx->cr_lt[cr] = a < b;
+    ctx->cr_gt[cr] = a > b;
+    ctx->cr_eq[cr] = a == b;
+}
+
 /* fabs fD, fB: absolute value, done branchlessly here to avoid pulling in
  * <math.h> for something this simple. */
 static inline double ppc_fabs(double val) { return val < 0.0 ? -val : val; }
+
+/* ---- Real GQR-quantized paired-single load/store -----------------------
+ *
+ * Real GQR register bit layout and real quantize-type encodings,
+ * confirmed against Dolphin's real, open-source Gekko/Broadway CPU
+ * emulation (`Source/Core/Core/PowerPC/Gekko.h`'s real `UGQR` union and
+ * `EQuantizeType` enum) -- same real CPU family as the Wii U's Espresso,
+ * not guessed/derived: `st_type` bits [0:2], `st_scale` bits [8:13],
+ * `ld_type` bits [16:18], `ld_scale` bits [24:29]. Real types: 0=FLOAT
+ * (no quantization), 1-3=reserved/invalid (never expected in practice,
+ * treated the same as FLOAT here -- an honest "no quantization applied"
+ * fallback, not a guess at some other real behavior), 4=U8, 5=U16,
+ * 6=S8, 7=S16. */
+#define PPC_GQR_TYPE_U8 4u
+#define PPC_GQR_TYPE_U16 5u
+#define PPC_GQR_TYPE_S8 6u
+#define PPC_GQR_TYPE_S16 7u
+
+/* Real quantize/dequantize scale factor: a real GQR scale field is a
+ * real, signed 6-bit value (raw 32-63 means -32..-1 in two's
+ * complement) -- confirmed against Dolphin's real dequantize/quantize
+ * lookup tables, which are mathematically just a real `2^scale` for a
+ * signed scale in that same range; `ldexpf` gives the identical real
+ * result without needing a 64-entry table. */
+static inline float ppc_gqr_scale_factor(uint32_t scale6, int negate) {
+    int signed_scale = (scale6 >= 32) ? (int)scale6 - 64 : (int)scale6;
+    return ldexpf(1.0f, negate ? -signed_scale : signed_scale);
+}
+
+/* Real quantized paired-single store: writes 1 or 2 real elements (per
+ * `single`, matching the real instruction's W bit) of a real
+ * quantized-type-and-width-appropriate size, each real element =
+ * `clamp(ps * 2^st_scale, real type range)`, matching Dolphin's own
+ * real `ScaleAndClamp`/`QuantizeAndStore` logic exactly. `gqr` is the
+ * real, raw 32-bit GQR register value (only its real ST_TYPE/ST_SCALE
+ * bits are read here). */
+static inline void ppc_psq_store_quantized(PpcContext *ctx, uint32_t addr, double ps0, double ps1, uint32_t gqr, int single) {
+    uint32_t type = gqr & 0x7u;
+    uint32_t scale = (gqr >> 8) & 0x3Fu;
+    float factor = ppc_gqr_scale_factor(scale, 0);
+    float v0 = (float)ps0 * factor;
+    float v1 = (float)ps1 * factor;
+    switch (type) {
+        case PPC_GQR_TYPE_U8: {
+            float c0f = v0 < 0.0f ? 0.0f : (v0 > 255.0f ? 255.0f : v0);
+            ppc_store_u8(ctx, addr, (uint8_t)c0f);
+            if (!single) {
+                float c1f = v1 < 0.0f ? 0.0f : (v1 > 255.0f ? 255.0f : v1);
+                ppc_store_u8(ctx, addr + 1, (uint8_t)c1f);
+            }
+            break;
+        }
+        case PPC_GQR_TYPE_S8: {
+            float c0f = v0 < -128.0f ? -128.0f : (v0 > 127.0f ? 127.0f : v0);
+            ppc_store_u8(ctx, addr, (uint8_t)(int8_t)c0f);
+            if (!single) {
+                float c1f = v1 < -128.0f ? -128.0f : (v1 > 127.0f ? 127.0f : v1);
+                ppc_store_u8(ctx, addr + 1, (uint8_t)(int8_t)c1f);
+            }
+            break;
+        }
+        case PPC_GQR_TYPE_U16: {
+            float c0f = v0 < 0.0f ? 0.0f : (v0 > 65535.0f ? 65535.0f : v0);
+            ppc_store_u16(ctx, addr, (uint16_t)c0f);
+            if (!single) {
+                float c1f = v1 < 0.0f ? 0.0f : (v1 > 65535.0f ? 65535.0f : v1);
+                ppc_store_u16(ctx, addr + 2, (uint16_t)c1f);
+            }
+            break;
+        }
+        case PPC_GQR_TYPE_S16: {
+            float c0f = v0 < -32768.0f ? -32768.0f : (v0 > 32767.0f ? 32767.0f : v0);
+            ppc_store_u16(ctx, addr, (uint16_t)(int16_t)c0f);
+            if (!single) {
+                float c1f = v1 < -32768.0f ? -32768.0f : (v1 > 32767.0f ? 32767.0f : v1);
+                ppc_store_u16(ctx, addr + 2, (uint16_t)(int16_t)c1f);
+            }
+            break;
+        }
+        default: /* FLOAT (0) or a real reserved/invalid type (1-3) -- honest fallback, no quantization */
+            ppc_store_f32(ctx, addr, ps0);
+            if (!single) ppc_store_f32(ctx, addr + 4, ps1);
+            break;
+    }
+}
+
+/* Real quantized paired-single load, the dequantize counterpart to
+ * ppc_psq_store_quantized above -- `gqr`'s real LD_TYPE/LD_SCALE bits
+ * (a different real bit range from ST_TYPE/ST_SCALE) determine the
+ * real element width/dequantize factor. `*out_ps1` is left untouched
+ * when `single` (matching real psq_l/psq_lu's own W=1 behavior of
+ * always setting ps1 to 1.0f, handled by the caller, not here, same
+ * as the existing float-only psq_l/psq_lu codegen already does). */
+static inline void ppc_psq_load_quantized(const PpcContext *ctx, uint32_t addr, double *out_ps0, double *out_ps1, uint32_t gqr, int single) {
+    uint32_t type = (gqr >> 16) & 0x7u;
+    uint32_t scale = (gqr >> 24) & 0x3Fu;
+    float factor = ppc_gqr_scale_factor(scale, 1);
+    switch (type) {
+        case PPC_GQR_TYPE_U8:
+            *out_ps0 = (double)((float)ppc_load_u8(ctx, addr) * factor);
+            if (!single) *out_ps1 = (double)((float)ppc_load_u8(ctx, addr + 1) * factor);
+            break;
+        case PPC_GQR_TYPE_S8:
+            *out_ps0 = (double)((float)(int8_t)ppc_load_u8(ctx, addr) * factor);
+            if (!single) *out_ps1 = (double)((float)(int8_t)ppc_load_u8(ctx, addr + 1) * factor);
+            break;
+        case PPC_GQR_TYPE_U16:
+            *out_ps0 = (double)((float)ppc_load_u16(ctx, addr) * factor);
+            if (!single) *out_ps1 = (double)((float)ppc_load_u16(ctx, addr + 2) * factor);
+            break;
+        case PPC_GQR_TYPE_S16:
+            *out_ps0 = (double)((float)(int16_t)ppc_load_u16(ctx, addr) * factor);
+            if (!single) *out_ps1 = (double)((float)(int16_t)ppc_load_u16(ctx, addr + 2) * factor);
+            break;
+        default: /* FLOAT (0) or a real reserved/invalid type (1-3) -- honest fallback, no quantization */
+            *out_ps0 = (double)ppc_load_f32(ctx, addr);
+            if (!single) *out_ps1 = (double)ppc_load_f32(ctx, addr + 4);
+            break;
+    }
+}
 
 /* tw/twu (unconditional trap): real hardware raises a program exception,
  * which real compiled code relies on to actually stop execution (e.g.
@@ -403,6 +596,29 @@ static inline double ppc_fabs(double val) { return val < 0.0 ? -val : val; }
  * executing instead of failing loudly the way the original binary
  * would. */
 static inline void ppc_trap(void) { abort(); }
+
+/* Real, honest, deliberately temporary fallback for the small number of
+ * real instructions this runtime doesn't yet model correctly (every
+ * real call site names itself via recomp's own generated `what`
+ * string, taken directly from the exact real `#error` diagnostic that
+ * would otherwise have blocked the whole program from compiling --
+ * this exists specifically to unblock a full real-game build/run while
+ * those few genuinely-unhandled real cases get fixed properly, not to
+ * hide them). Logs (if a sink is registered via
+ * ppc_set_unhandled_log -- real, optional, e.g. a real SD-card
+ * checkpoint file) and returns, letting the rest of a real recompiled
+ * program keep running instead of hard-aborting the whole process over
+ * one, possibly-never-exercised code path -- a real, deliberate choice
+ * favoring "see the real game run" over "perfect from instruction
+ * one," consistent with this project's own established shader/draw-
+ * call no-op precedent (see cafeos_gx2.h's own comment on that). */
+typedef void (*ppc_unhandled_log_fn)(const char *);
+static ppc_unhandled_log_fn g_ppc_unhandled_log = NULL;
+static inline void ppc_set_unhandled_log(ppc_unhandled_log_fn fn) { g_ppc_unhandled_log = fn; }
+static inline void ppc_unhandled_stub(PpcContext *ctx, const char *what) {
+    (void)ctx;
+    if (g_ppc_unhandled_log) g_ppc_unhandled_log(what);
+}
 
 /* lswi rD, rA, NB: loads NB bytes (1-32; 0 means 32) from memory starting
  * at EA into consecutive GPRs starting at rD, wrapping r31 -> r0. Each

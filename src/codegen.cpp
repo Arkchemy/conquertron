@@ -31,6 +31,26 @@ std::string ps1(int i) {
     return "ctx->ps1[" + std::to_string(i) + "]";
 }
 
+// Real C expression for a real, individual CR bit register (one of
+// PPC_REG_CR0LT..CR7LT / CR0GT..CR7GT / CR0EQ..CR7EQ / CR0UN..CR7UN --
+// confirmed contiguous per bit-type in real Capstone's own ppc.h). CR0
+// keeps using PpcContext's original, dedicated `cr0_lt`/`cr0_gt`/
+// `cr0_eq` fields (untouched, zero risk to every already-proven cr0
+// codegen path); CR1-CR7 map directly into the newer `cr_lt`/`cr_gt`/
+// `cr_eq` arrays (see PpcContext's own comment for why). Returns an
+// empty string for an untracked bit (any real CR*UN/"summary overflow"
+// bit -- never set by this runtime, same real, narrow, pre-existing gap
+// CR0's own SO bit already has).
+std::string cr_bit_expr(unsigned int r) {
+    if (r == PPC_REG_CR0LT) return "ctx->cr0_lt";
+    if (r == PPC_REG_CR0GT) return "ctx->cr0_gt";
+    if (r == PPC_REG_CR0EQ) return "ctx->cr0_eq";
+    if (r >= PPC_REG_CR1LT && r <= PPC_REG_CR7LT) return "ctx->cr_lt[" + std::to_string(r - PPC_REG_CR0LT) + "]";
+    if (r >= PPC_REG_CR1GT && r <= PPC_REG_CR7GT) return "ctx->cr_gt[" + std::to_string(r - PPC_REG_CR0GT) + "]";
+    if (r >= PPC_REG_CR1EQ && r <= PPC_REG_CR7EQ) return "ctx->cr_eq[" + std::to_string(r - PPC_REG_CR0EQ) + "]";
+    return "";
+}
+
 // Sign-extending cast: matches how addi/li/mulli/branch-displacement
 // immediates are meant to be interpreted.
 int32_t simm(const cs_ppc_op &op) { return (int32_t)op.imm; }
@@ -637,49 +657,43 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // non-default CR field, e.g. `cmpw cr1, r3, r4` --
                 // confirmed real and live in real-world code (21 real
                 // instances found testing against two different real,
-                // legally-obtained open-source Wii U homebrew binaries,
-                // though not in this project's own actual Skylanders
-                // target). Capstone represents this as a 3-operand form
-                // (CR register first, then the real operands), vs. the
-                // far more common implicit-cr0 2-operand form -- the same
+                // legally-obtained open-source Wii U homebrew binaries).
+                // Capstone represents this as a 3-operand form (CR
+                // register first, then the real operands), vs. the far
+                // more common implicit-cr0 2-operand form -- the same
                 // real ambiguity PPC_INS_BEQ/BNE/etc.'s branch handling
                 // already has to account for (see its own comment). Using
                 // a fixed operand index regardless previously misread the
                 // CR register as if it were the first real source
                 // register -- not even a compile error, a genuinely
-                // *silent* miscompile (worse than the branch case, which
-                // at least produced a garbage target address that failed
-                // to resolve). This runtime only tracks cr0
-                // (`ctx->cr0_lt`/`gt`/`eq`), so an explicit non-cr0 field
-                // real-fails loudly here instead, same reasoning and
-                // pattern as PPC_INS_BEQ's own real-cr0-only handling. */
+                // *silent* miscompile. Real CR1-CR7 fields are now
+                // tracked (see PpcContext::cr_lt's own comment and
+                // ppc_cmpw_cr/ppc_cmplw_cr below) -- routes to the real
+                // per-field variant for an explicit non-cr0 field,
+                // instead of erroring. */
                 bool has_cr_operand = ppc.op_count == 3;
-                if (has_cr_operand && ppc.operands[0].reg != PPC_REG_CR0) {
-                    out << "#error \"compare on non-cr0 field (cr" << (ppc.operands[0].reg - PPC_REG_CR0)
-                        << ") at 0x" << std::hex << insn.address << std::dec << " in function " << func.name
-                        << " -- not modeled, see PPC_INS_CMPWI's codegen.cpp comment\"\n";
-                    unhandled.push_back(insn.mnemonic);
-                    break;
-                }
+                int cr_field = has_cr_operand ? (int)(ppc.operands[0].reg - PPC_REG_CR0) : 0;
                 int op_base = has_cr_operand ? 1 : 0;
                 int rA = reg_idx(ppc.operands[op_base].reg);
+                std::string cmpw_call = cr_field == 0 ? "ppc_cmpw(ctx, " : ("ppc_cmpw_cr(ctx, " + std::to_string(cr_field) + ", ");
+                std::string cmplw_call = cr_field == 0 ? "ppc_cmplw(ctx, " : ("ppc_cmplw_cr(ctx, " + std::to_string(cr_field) + ", ");
                 switch (insn.id) {
                     case PPC_INS_CMPWI:
-                        out << "  ppc_cmpw(ctx, (int32_t)" << reg(rA) << ", " << simm(ppc.operands[op_base + 1])
+                        out << "  " << cmpw_call << "(int32_t)" << reg(rA) << ", " << simm(ppc.operands[op_base + 1])
                             << ");\n";
                         break;
                     case PPC_INS_CMPW: {
                         int rB = reg_idx(ppc.operands[op_base + 1].reg);
-                        out << "  ppc_cmpw(ctx, (int32_t)" << reg(rA) << ", (int32_t)" << reg(rB) << ");\n";
+                        out << "  " << cmpw_call << "(int32_t)" << reg(rA) << ", (int32_t)" << reg(rB) << ");\n";
                         break;
                     }
                     case PPC_INS_CMPLW: {
                         int rB = reg_idx(ppc.operands[op_base + 1].reg);
-                        out << "  ppc_cmplw(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
+                        out << "  " << cmplw_call << reg(rA) << ", " << reg(rB) << ");\n";
                         break;
                     }
                     case PPC_INS_CMPLWI:
-                        out << "  ppc_cmplw(ctx, " << reg(rA) << ", " << uimm(ppc.operands[op_base + 1]) << "u);\n";
+                        out << "  " << cmplw_call << reg(rA) << ", " << uimm(ppc.operands[op_base + 1]) << "u);\n";
                         break;
                     default:
                         break;
@@ -810,38 +824,29 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // (the real PowerPC SVR4 ABI convention where a caller
                 // sets CR bit 6, i.e. CR1's EQ bit, to tell a vararg
                 // callee whether any floating-point register arguments
-                // were passed). Capstone represents this as a 2-operand
-                // form (CR register, then target); the far more common
-                // implicit-cr0 form is a single operand (just the
-                // target). This runtime only tracks cr0
-                // (`ctx->cr0_lt`/`gt`/`eq`) -- no cr1-cr7 -- and doesn't
-                // model which real instruction/call-site convention would
-                // set them, so rather than silently guessing a condition
-                // against the wrong (cr0) state, any explicit non-cr0
-                // field real-fails loudly here with the *correct* target
-                // address (previously misread as the CR register's own
-                // encoded value, e.g. a nonsensical `0xd`, from reading
-                // the wrong operand index) -- real, accurate diagnostic
-                // info for whoever adds real cr1-cr7 support, not a
-                // guess.
+                // were passed, via a real `crclr`/`cror`/`crmove` on that
+                // bit -- see those cases' own comments, now real-tracked
+                // for CR1-CR7 too, not just CR0). Capstone represents
+                // this as a 2-operand form (CR register, then target);
+                // the far more common implicit-cr0 form is a single
+                // operand (just the target). Real CR1-CR7 fields are now
+                // tracked (see PpcContext::cr_lt's own comment) -- routes
+                // to the real per-field state for an explicit non-cr0
+                // field, instead of erroring. */
                 bool has_cr_operand = ppc.op_count >= 2;
                 uint32_t target = (uint32_t)ppc.operands[has_cr_operand ? 1 : 0].imm;
-                if (has_cr_operand && ppc.operands[0].reg != PPC_REG_CR0) {
-                    out << "#error \"conditional branch on non-cr0 field (cr"
-                        << (ppc.operands[0].reg - PPC_REG_CR0) << ") at 0x" << std::hex << insn.address
-                        << " to 0x" << target << std::dec << " in function " << func.name
-                        << " -- not modeled, see PPC_INS_BEQ's codegen.cpp comment\"\n";
-                    unhandled.push_back(insn.mnemonic);
-                    break;
-                }
+                int cr_field = has_cr_operand ? (int)(ppc.operands[0].reg - PPC_REG_CR0) : 0;
+                std::string lt = cr_field == 0 ? "ctx->cr0_lt" : ("ctx->cr_lt[" + std::to_string(cr_field) + "]");
+                std::string gt = cr_field == 0 ? "ctx->cr0_gt" : ("ctx->cr_gt[" + std::to_string(cr_field) + "]");
+                std::string eq = cr_field == 0 ? "ctx->cr0_eq" : ("ctx->cr_eq[" + std::to_string(cr_field) + "]");
                 std::string cond;
                 switch (insn.id) {
-                    case PPC_INS_BEQ: cond = "ctx->cr0_eq"; break;
-                    case PPC_INS_BNE: cond = "!ctx->cr0_eq"; break;
-                    case PPC_INS_BLT: cond = "ctx->cr0_lt"; break;
-                    case PPC_INS_BLE: cond = "(ctx->cr0_lt || ctx->cr0_eq)"; break;
-                    case PPC_INS_BGT: cond = "ctx->cr0_gt"; break;
-                    case PPC_INS_BGE: cond = "(ctx->cr0_gt || ctx->cr0_eq)"; break;
+                    case PPC_INS_BEQ: cond = eq; break;
+                    case PPC_INS_BNE: cond = "!" + eq; break;
+                    case PPC_INS_BLT: cond = lt; break;
+                    case PPC_INS_BLE: cond = "(" + lt + " || " + eq + ")"; break;
+                    case PPC_INS_BGT: cond = gt; break;
+                    case PPC_INS_BGE: cond = "(" + gt + " || " + eq + ")"; break;
                     default: break;
                 }
                 emit_conditional_branch(out, cond, target, img, func, insn, addr_to_name, unhandled);
@@ -884,15 +889,26 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_BGELR: {
                 // Conditional early return -- the blr-flavored counterpart
                 // to the beq/bne/... conditional branches above, common
-                // for "if (some guard fails) return;" prologues.
+                // for "if (some guard fails) return;" prologues. Real,
+                // same explicit-non-cr0-field support as the plain
+                // conditional branches above (e.g. `beqlr cr1`) --
+                // previously always assumed cr0 unconditionally here with
+                // no operand check at all, a real latent gap (not caught
+                // by any #error, since nothing flagged it) fixed now,
+                // same real reasoning/pattern as the branch case above. */
+                bool has_cr_operand = ppc.op_count >= 1;
+                int cr_field = has_cr_operand ? (int)(ppc.operands[0].reg - PPC_REG_CR0) : 0;
+                std::string lt = cr_field == 0 ? "ctx->cr0_lt" : ("ctx->cr_lt[" + std::to_string(cr_field) + "]");
+                std::string gt = cr_field == 0 ? "ctx->cr0_gt" : ("ctx->cr_gt[" + std::to_string(cr_field) + "]");
+                std::string eq = cr_field == 0 ? "ctx->cr0_eq" : ("ctx->cr_eq[" + std::to_string(cr_field) + "]");
                 std::string cond;
                 switch (insn.id) {
-                    case PPC_INS_BEQLR: cond = "ctx->cr0_eq"; break;
-                    case PPC_INS_BNELR: cond = "!ctx->cr0_eq"; break;
-                    case PPC_INS_BLTLR: cond = "ctx->cr0_lt"; break;
-                    case PPC_INS_BLELR: cond = "(ctx->cr0_lt || ctx->cr0_eq)"; break;
-                    case PPC_INS_BGTLR: cond = "ctx->cr0_gt"; break;
-                    case PPC_INS_BGELR: cond = "(ctx->cr0_gt || ctx->cr0_eq)"; break;
+                    case PPC_INS_BEQLR: cond = eq; break;
+                    case PPC_INS_BNELR: cond = "!" + eq; break;
+                    case PPC_INS_BLTLR: cond = lt; break;
+                    case PPC_INS_BLELR: cond = "(" + lt + " || " + eq + ")"; break;
+                    case PPC_INS_BGTLR: cond = gt; break;
+                    case PPC_INS_BGELR: cond = "(" + gt + " || " + eq + ")"; break;
                     default: break;
                 }
                 out << "  if (" << cond << ") return;\n";
@@ -904,24 +920,33 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_MTCRF: {
-                // Only field 0 (CR0) is tracked by this runtime -- see
-                // ppc_mtcrf_cr0's comment. The field mask (crm) operand is
-                // an immediate; only bother emitting anything when it
-                // actually selects field 0 (mask bit 0x80).
-                if ((uimm(ppc.operands[0]) & 0x80u) != 0) {
-                    int rS = reg_idx(ppc.operands[1].reg);
-                    out << "  ppc_mtcrf_cr0(ctx, " << reg(rS) << ");\n";
-                } else {
-                    out << "  /* mtcrf targeting a CR field other than CR0 -- not tracked, no-op */\n";
+                // Real, all 8 CR fields tracked now (see PpcContext's own
+                // comment) -- the field mask (crm) operand is an 8-bit
+                // immediate, bit 0x80 selecting field 0 (CR0) down to bit
+                // 0x01 selecting field 7 (CR7), matching real hardware's
+                // own real bit-to-field mapping (see ppc_mfcr's own
+                // comment). Emits one real update per real set mask bit.
+                uint32_t mask = uimm(ppc.operands[0]);
+                int rS = reg_idx(ppc.operands[1].reg);
+                int field;
+                bool any = false;
+                for (field = 0; field < 8; field++) {
+                    if ((mask & (0x80u >> field)) == 0) continue;
+                    any = true;
+                    if (field == 0) out << "  ppc_mtcrf_cr0(ctx, " << reg(rS) << ");\n";
+                    else out << "  ppc_mtcrf_field(ctx, " << field << ", " << reg(rS) << ");\n";
                 }
+                if (!any) out << "  /* mtcrf with an empty field mask -- no-op */\n";
                 break;
             }
             case PPC_INS_CRCLR: {
-                // Clears a single CR bit. Only CR0's LT/GT/EQ are tracked;
-                // any other field (including CR0's SO, which this runtime
-                // never sets anyway) is silently a no-op.
+                // Clears a single CR bit. Real LT/GT/EQ bits across all
+                // real CR0-CR7 fields are tracked (see cr_bit_expr's own
+                // comment); any other real bit (every real CR*UN/"summary
+                // overflow" bit, never set by this runtime at all) is
+                // silently a no-op.
                 //
-                // Real bug fixed here: this originally read
+                // Real bug fixed here originally: this used to read
                 // operands[0].crx.reg, assuming capstone reports crclr's
                 // bit operand as a PPC_OP_CRX operand (crx is a struct
                 // with a leading `scale` field before `reg`). Real capstone
@@ -931,10 +956,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // no-op every time rather than crash (the garbage never
                 // matched a tracked enum value), masking that CR0-bit
                 // cases were never actually being applied.
-                unsigned int r = ppc.operands[0].reg;
-                if (r == PPC_REG_CR0LT) out << "  ctx->cr0_lt = 0;\n";
-                else if (r == PPC_REG_CR0GT) out << "  ctx->cr0_gt = 0;\n";
-                else if (r == PPC_REG_CR0EQ) out << "  ctx->cr0_eq = 0;\n";
+                std::string bit = cr_bit_expr(ppc.operands[0].reg);
+                if (!bit.empty()) out << "  " << bit << " = 0;\n";
                 else out << "  /* crclr on an untracked CR bit -- no-op */\n";
                 break;
             }
@@ -945,19 +968,14 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // 3-distinct-operand encodings under PPC_INS_CRMOVE too
                 // rather than PPC_INS_CROR, confirmed against real
                 // devkitPPC-compiled code, so both IDs are handled the
-                // same way here). Only representable when all three
-                // operands are tracked CR0 bits -- see PPC_INS_CRCLR
-                // above for why this reads plain .reg, not .crx.reg.
-                auto trackedFlag = [](unsigned int r) -> const char * {
-                    if (r == PPC_REG_CR0LT) return "ctx->cr0_lt";
-                    if (r == PPC_REG_CR0GT) return "ctx->cr0_gt";
-                    if (r == PPC_REG_CR0EQ) return "ctx->cr0_eq";
-                    return nullptr;
-                };
-                const char *bt = trackedFlag(ppc.operands[0].reg);
-                const char *ba = trackedFlag(ppc.operands[1].reg);
-                const char *bb = insn.id == PPC_INS_CRMOVE && ppc.op_count == 2 ? ba : trackedFlag(ppc.operands[2].reg);
-                if (bt && ba && bb) {
+                // same way here). Real, any tracked bit across all real
+                // CR0-CR7 fields (see cr_bit_expr's own comment) -- see
+                // PPC_INS_CRCLR above for why this reads plain .reg, not
+                // .crx.reg.
+                std::string bt = cr_bit_expr(ppc.operands[0].reg);
+                std::string ba = cr_bit_expr(ppc.operands[1].reg);
+                std::string bb = insn.id == PPC_INS_CRMOVE && ppc.op_count == 2 ? ba : cr_bit_expr(ppc.operands[2].reg);
+                if (!bt.empty() && !ba.empty() && !bb.empty()) {
                     out << "  " << bt << " = (" << ba << " || " << bb << ");\n";
                 } else {
                     out << "  /* cror/crmove involving an untracked CR bit -- no-op */\n";
@@ -965,13 +983,18 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_MCRF: {
-                // Copies one whole CR field to another. Always a no-op
-                // here: copying *out of* CR0 into some other (untracked)
-                // field can't do anything useful since nothing reads that
-                // field back, and copying *into* CR0 from some other
-                // (untracked, always-zero-in-this-model) field would
-                // incorrectly clobber real CR0 state with nothing.
-                out << "  /* mcrf -- CR fields other than CR0 aren't tracked, no-op */\n";
+                // Copies one whole real CR field to another. Real, all 8
+                // CR fields tracked now (see PpcContext's own comment).
+                int dst_field = (int)(ppc.operands[0].reg - PPC_REG_CR0);
+                int src_field = (int)(ppc.operands[1].reg - PPC_REG_CR0);
+                std::string dst_lt = dst_field == 0 ? "ctx->cr0_lt" : ("ctx->cr_lt[" + std::to_string(dst_field) + "]");
+                std::string dst_gt = dst_field == 0 ? "ctx->cr0_gt" : ("ctx->cr_gt[" + std::to_string(dst_field) + "]");
+                std::string dst_eq = dst_field == 0 ? "ctx->cr0_eq" : ("ctx->cr_eq[" + std::to_string(dst_field) + "]");
+                std::string src_lt = src_field == 0 ? "ctx->cr0_lt" : ("ctx->cr_lt[" + std::to_string(src_field) + "]");
+                std::string src_gt = src_field == 0 ? "ctx->cr0_gt" : ("ctx->cr_gt[" + std::to_string(src_field) + "]");
+                std::string src_eq = src_field == 0 ? "ctx->cr0_eq" : ("ctx->cr_eq[" + std::to_string(src_field) + "]");
+                out << "  " << dst_lt << " = " << src_lt << "; " << dst_gt << " = " << src_gt << "; "
+                    << dst_eq << " = " << src_eq << ";\n";
                 break;
             }
             case PPC_INS_NOP: {
@@ -991,6 +1014,37 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // above), so reading it back is direct.
                 int rD = reg_idx(ppc.operands[0].reg);
                 out << "  " << reg(rD) << " = ctx->ctr;\n";
+                break;
+            }
+            case PPC_INS_MTSPR:
+            case PPC_INS_MFSPR: {
+                // Real, confirmed against a direct real-Capstone probe (not
+                // guessed): the SPR field is a plain immediate operand
+                // (`.imm`, the real SPR number, e.g. 912), not a named
+                // register -- Capstone has no PPC_REG_GQR* enum at all.
+                // Only the real GQR bank (SPR 912-919, GQR0-GQR7 -- see
+                // PpcContext::gqr's own comment) is tracked; any other real
+                // SPR real-fails loudly rather than silently no-op'ing
+                // (matching this file's established "don't guess" pattern
+                // -- an untracked SPR write real code actually depends on
+                // reading back would otherwise be a silent miscompile).
+                bool is_mtspr = insn.id == PPC_INS_MTSPR;
+                uint32_t spr = is_mtspr ? (uint32_t)ppc.operands[0].imm : (uint32_t)ppc.operands[1].imm;
+                if (spr < 912u || spr > 919u) {
+                    out << "#error \"" << (is_mtspr ? "mtspr" : "mfspr") << " on untracked SPR " << spr << " at 0x"
+                        << std::hex << insn.address << std::dec << " in function " << func.name
+                        << " -- only the real GQR bank (912-919) is tracked, see PPC_INS_MTSPR's codegen.cpp comment\"\n";
+                    unhandled.push_back(insn.mnemonic);
+                    break;
+                }
+                uint32_t gqr_idx = spr - 912u;
+                if (is_mtspr) {
+                    int rS = reg_idx(ppc.operands[1].reg);
+                    out << "  ctx->gqr[" << gqr_idx << "] = " << reg(rS) << ";\n";
+                } else {
+                    int rD = reg_idx(ppc.operands[0].reg);
+                    out << "  " << reg(rD) << " = ctx->gqr[" << gqr_idx << "];\n";
+                }
                 break;
             }
             case PPC_INS_BCTRL: {
@@ -1120,24 +1174,19 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // practice (confirmed zero non-cr0 instances found
                 // disassembling this project's own Skylanders target and
                 // two other real, different, legally-obtained open-source
-                // Wii U binaries -- unlike cmpw/branches, where the
-                // non-cr0 form turned out to be real and common). Guarded
-                // anyway for the same real reason as those: this runtime
-                // only tracks cr0 (`ctx->cr0_lt`/`gt`/`eq`), so silently
-                // computing into it regardless of the real requested
-                // field would be a silent miscompile, same class of bug
-                // already fixed for cmpw/branches, if real code ever does
-                // use a non-cr0 field here.
-                if (ppc.operands[0].reg != PPC_REG_CR0) {
-                    out << "#error \"fcmpu on non-cr0 field (cr" << (ppc.operands[0].reg - PPC_REG_CR0) << ") at 0x"
-                        << std::hex << insn.address << std::dec << " in function " << func.name
-                        << " -- not modeled, see PPC_INS_FCMPU's codegen.cpp comment\"\n";
-                    unhandled.push_back(insn.mnemonic);
-                    break;
-                }
+                // Wii U binaries). Real CR1-CR7 fields are now tracked
+                // (see PpcContext::cr_lt's own comment and ppc_fcmpu_cr
+                // above) -- routes to the real per-field variant for an
+                // explicit non-cr0 field, instead of erroring, same
+                // reasoning as cmpw/branches. */
+                int cr_field = (int)(ppc.operands[0].reg - PPC_REG_CR0);
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fB = freg_idx(ppc.operands[2].reg);
-                out << "  ppc_fcmpu(ctx, " << freg(fA) << ", " << freg(fB) << ");\n";
+                if (cr_field == 0) {
+                    out << "  ppc_fcmpu(ctx, " << freg(fA) << ", " << freg(fB) << ");\n";
+                } else {
+                    out << "  ppc_fcmpu_cr(ctx, " << cr_field << ", " << freg(fA) << ", " << freg(fB) << ");\n";
+                }
                 break;
             }
             case PPC_INS_FMR: {
@@ -1546,9 +1595,20 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // Conditional call (branch-and-link) -- the bl-flavored
                 // counterpart to beq/bne, resolved through the same
                 // call_relocs/addr_to_name/import_trampolines paths bl
-                // itself uses below, just wrapped in the condition.
-                std::string cond = insn.id == PPC_INS_BEQL ? "ctx->cr0_eq" : "!ctx->cr0_eq";
-                uint32_t target = (uint32_t)ppc.operands[0].imm;
+                // itself uses below, just wrapped in the condition. Real,
+                // same explicit-non-cr0-field support as the plain
+                // conditional branches above -- previously always read
+                // operands[0] as the target unconditionally, a real
+                // latent misread risk if an explicit CR operand were
+                // ever present (same class of bug the plain-branch case
+                // above already had and fixed), addressed here too for
+                // consistency even though no real instance of this exact
+                // combination (conditional *call*) has been found yet. */
+                bool has_cr_operand = ppc.op_count >= 2;
+                int cr_field = has_cr_operand ? (int)(ppc.operands[0].reg - PPC_REG_CR0) : 0;
+                std::string eq = cr_field == 0 ? "ctx->cr0_eq" : ("ctx->cr_eq[" + std::to_string(cr_field) + "]");
+                std::string cond = insn.id == PPC_INS_BEQL ? eq : ("!" + eq);
+                uint32_t target = (uint32_t)ppc.operands[has_cr_operand ? 1 : 0].imm;
                 std::string call_stmt = resolve_call_stmt(img, addr_to_name, insn.address, target);
                 if (call_stmt.empty()) {
                     out << "#error \"unresolved call at 0x" << std::hex << insn.address << std::dec
@@ -1804,13 +1864,19 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                                              ? base_expr(m.base)
                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
                 if (gqr_i != 0) {
-                    // GQR-selected quantized (non-float) formats aren't
-                    // modeled -- no GQR register state tracked by this
-                    // runtime. Left as an honest gap rather than a silent
-                    // wrong decode; not seen in practice yet.
-                    out << "#error \"psq_l/psq_lu with non-zero quantization type (I=" << gqr_i << ") at 0x"
-                        << std::hex << insn.address << std::dec << " in function " << func.name << "\"\n";
-                    unhandled.push_back(insn.mnemonic);
+                    // Real GQR-selected quantized (non-float) load -- see
+                    // ppc_psq_load_quantized's own comment for the real
+                    // bit layout/dispatch. `ctx->gqr[gqr_i]` real-tracked
+                    // via mtspr now (see PPC_INS_MTSPR above); real
+                    // hardware's own real zero-reset default (FLOAT, no
+                    // quantization) applies whenever nothing has written
+                    // it, an honest real default, not a guess.
+                    out << "  { double _ps0, _ps1 = 1.0; ppc_psq_load_quantized(ctx, " << addr_expr << ", &_ps0, &_ps1, ctx->gqr["
+                        << gqr_i << "], " << (w != 0 ? 1 : 0) << "); " << freg(fD) << " = _ps0; ctx->ps1[" << fD
+                        << "] = (float)_ps1; }\n";
+                    if (insn.id == PPC_INS_BRAMBLE_PSQ_LU) {
+                        out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                    }
                     break;
                 }
                 out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << addr_expr << ");\n";
@@ -1836,9 +1902,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                                              ? base_expr(m.base)
                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
                 if (gqr_i != 0) {
-                    out << "#error \"psq_st/psq_stu with non-zero quantization type (I=" << gqr_i << ") at 0x"
-                        << std::hex << insn.address << std::dec << " in function " << func.name << "\"\n";
-                    unhandled.push_back(insn.mnemonic);
+                    // Real GQR-selected quantized (non-float) store -- see
+                    // ppc_psq_store_quantized's own comment for the real
+                    // bit layout/dispatch, same real reasoning as the
+                    // psq_l/psq_lu case above.
+                    out << "  ppc_psq_store_quantized(ctx, " << addr_expr << ", " << freg(fS) << ", (double)ctx->ps1["
+                        << fS << "], ctx->gqr[" << gqr_i << "], " << (w != 0 ? 1 : 0) << ");\n";
+                    if (insn.id == PPC_INS_BRAMBLE_PSQ_STU) {
+                        out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                    }
                     break;
                 }
                 out << "  ppc_store_f32(ctx, " << addr_expr << ", " << freg(fS) << ");\n";

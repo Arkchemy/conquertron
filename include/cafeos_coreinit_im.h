@@ -27,7 +27,7 @@
  * below is file-scope `static`, so it won't share state correctly if
  * this header is included from more than one compiled .c file.
  */
-static int g_ppc_im_dim_enabled = 1; /* real hardware default is dimming enabled */
+extern int g_ppc_im_dim_enabled; /* real definition in cafeos_state.c -- see its own file comment */
 
 static inline void ppc_import_coreinit_IMEnableDim(PpcContext *ctx) {
     (void)ctx;

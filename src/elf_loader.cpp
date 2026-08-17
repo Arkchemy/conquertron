@@ -65,6 +65,38 @@ std::string sanitize_c_identifier(const std::string &name) {
     return out;
 }
 
+// Real, previously-undiscovered bug fixed here: a real RPL cross-library
+// import's own `.fimport_<library>` section name preserves the real
+// Wii U shared-library file's own real name verbatim, including a
+// literal `.rpl` extension for the real libraries that have one (e.g.
+// `.fimport_nsyshid.rpl`, `.fimport_vpad.rpl` -- confirmed directly
+// against the real Skylanders binary's own real section names) --
+// unlike e.g. `coreinit`/`gx2`, which have no such suffix at all. Every
+// `ppc_import_<library>_<function>` identifier this project's own real,
+// hand-written CafeOS shim headers use is named *without* that suffix
+// (`cafeos_nsyshid.h`'s real functions are `ppc_import_nsyshid_...`,
+// not `ppc_import_nsyshid_rpl_...` or the literally-invalid
+// `ppc_import_nsyshid.rpl_...`) -- a real mismatch never caught before
+// now because no earlier real test happened to recompile a call site
+// or generate the full forward-declaration list for one of the two
+// real libraries (`nsyshid.rpl`, `vpad.rpl`) that actually have this
+// suffix in the same build. Stripping it here, once, at the real
+// source of the library name, keeps every downstream use (forward
+// declarations in main.cpp, real call-site codegen in codegen.cpp)
+// consistent with the shim headers' own already-established real
+// naming convention, instead of just sanitizing the literal `.`
+// character into a `_` (which would still produce a real, genuine
+// mismatch -- `nsyshid_rpl` vs. the real `nsyshid` the shim headers
+// actually use).
+std::string strip_rpl_suffix(const std::string &library) {
+    constexpr const char *kRplSuffix = ".rpl";
+    constexpr size_t kRplSuffixLen = 4;
+    if (library.size() > kRplSuffixLen && library.compare(library.size() - kRplSuffixLen, kRplSuffixLen, kRplSuffix) == 0) {
+        return library.substr(0, library.size() - kRplSuffixLen);
+    }
+    return library;
+}
+
 constexpr int STT_FUNC = 2;
 constexpr uint32_t SHT_NOBITS = 8;
 constexpr uint32_t SHT_RELA = 4;
@@ -359,7 +391,7 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
                 // "memcpy"-named helper too).
                 if (sym_types[r_sym] == STT_FUNC && sym_section_names[r_sym].rfind(kImportSectionPrefix, 0) == 0) {
                     ImportTrampoline it;
-                    it.library = sym_section_names[r_sym].substr(sizeof(kImportSectionPrefix) - 1);
+                    it.library = strip_rpl_suffix(sym_section_names[r_sym].substr(sizeof(kImportSectionPrefix) - 1));
                     it.function = all_sym_names[r_sym];
                     out.import_trampolines[r_offset] = it;
                 } else {
@@ -385,7 +417,7 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
                     // is_function case below since import symbols are also
                     // STT_FUNC, just not local code.
                     dr.is_import = true;
-                    dr.import_library = dr.section.substr(sizeof(kImportSectionPrefix) - 1);
+                    dr.import_library = strip_rpl_suffix(dr.section.substr(sizeof(kImportSectionPrefix) - 1));
                     dr.import_function = all_sym_names[r_sym];
                 } else if (sym_types[r_sym] == STT_FUNC) {
                     // &function idiom (e.g. building a function-pointer
