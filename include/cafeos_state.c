@@ -48,6 +48,7 @@
 #endif
 
 ppc_unhandled_log_fn g_ppc_unhandled_log = NULL;
+ppc_debug_watch_fn g_ppc_debug_watch = NULL;
 
 ppc_fs_open_log_fn g_ppc_fs_open_log = NULL;
 

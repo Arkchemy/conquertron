@@ -686,6 +686,23 @@ static inline void ppc_unhandled_stub(PpcContext *ctx, const char *what) {
     if (g_ppc_unhandled_log) g_ppc_unhandled_log(what);
 }
 
+/* Real, general-purpose, ad hoc debug watchpoint -- not called anywhere
+ * by default (no codegen support needed): a one-off call to
+ * ppc_debug_watch() can be hand-inserted directly into a specific
+ * generated_*.c file (machine-generated, gitignored, safe to hand-edit
+ * for one debugging session -- regenerate.sh overwrites it back to
+ * clean output next real run) at whatever exact real PPC instruction
+ * address needs a live register/memory value confirmed on real
+ * hardware, without needing new codegen support or a full regenerate +
+ * rebuild cycle for something this targeted. Same real extern/shared-
+ * definition pattern as everything else here -- see cafeos_state.c. */
+typedef void (*ppc_debug_watch_fn)(uint32_t pc, uint32_t value);
+extern ppc_debug_watch_fn g_ppc_debug_watch;
+static inline void ppc_set_debug_watch(ppc_debug_watch_fn fn) { g_ppc_debug_watch = fn; }
+static inline void ppc_debug_watch(uint32_t pc, uint32_t value) {
+    if (g_ppc_debug_watch) g_ppc_debug_watch(pc, value);
+}
+
 /* lswi rD, rA, NB: loads NB bytes (1-32; 0 means 32) from memory starting
  * at EA into consecutive GPRs starting at rD, wrapping r31 -> r0. Each
  * register is packed MSB-first (byte 0 of the copy goes in the top byte
