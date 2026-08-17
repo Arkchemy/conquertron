@@ -52,6 +52,14 @@ FILE *g_ppc_fs_files[BRAMBLE_FS_MAX_HANDLES];
 DIR *g_ppc_fs_dirs[BRAMBLE_FS_MAX_DIR_HANDLES];
 int g_ppc_im_dim_enabled = 1; /* real hardware default is dimming enabled */
 
+#ifdef __SWITCH__
+char g_bramble_fs_content_root[256] = "sdmc:/switch/Bramble/content";
+char g_bramble_fs_save_root[256] = "sdmc:/switch/Bramble/save";
+#else
+char g_bramble_fs_content_root[256] = "content";
+char g_bramble_fs_save_root[256] = "save";
+#endif
+
 BrambleThreadEntry g_bramble_threads[BRAMBLE_THREAD_TABLE_SIZE];
 pthread_mutex_t g_bramble_thread_table_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_key_t g_bramble_current_thread_key;

@@ -36,21 +36,13 @@
  *    here -- every call always just returns its FSStatus in r3.
  *  - Path translation: real Wii U FS paths are relative to a mounted
  *    volume (game content, save data, ...), not a host filesystem path.
- *    This shim passes the path straight through to fopen()/etc as-is, no
- *    "content:/" or similar prefix handling -- correct behavior once
- *    there's a real decision about where extracted game content lives on
- *    a Switch build, not before.
- *  - Not yet safe to include from more than one compiled .c file in the
- *    same program: the handle table and last-error state below are
- *    file-scope `static`, so each translation unit that includes this
- *    header gets its own disconnected copy rather than sharing real
- *    state -- fine for a single-file build/test (today's usage), wrong
- *    the moment a multi-object build (see recomp's --extern-globals)
- *    includes this header more than once. Fixing that means splitting
- *    this into an `extern`-declaring header plus one real .c definition
- *    file compiled exactly once, matching how a normal C library would
- *    do it -- not done yet since nothing exercises multi-file FS calls
- *    to catch it being wrong.
+ *    ppc_fs_translate_path() (below) now handles this: it recognizes the
+ *    real Wii U mount prefixes (/vol/content/, content:/, /vol/save/,
+ *    save:/) and any bare relative path (real game code commonly assumes
+ *    its current directory is already the content mount) and rewrites
+ *    them onto BRAMBLE_FS_CONTENT_ROOT / BRAMBLE_FS_SAVE_ROOT on the SD
+ *    card -- see that function's own comment for the exact rules and the
+ *    real reasoning behind picking these two roots specifically.
  *  - Only ever reports the most recent error (a single global, not
  *    tracked per-FSClient the way real hardware does).
  */
@@ -83,6 +75,60 @@ static inline void ppc_fs_read_cstr(const PpcContext *ctx, uint32_t addr, char *
         out[i] = (char)b;
     }
     out[i] = '\0';
+}
+
+/* Where a real, user-extracted game dump's content and save-data
+ * directories live on the SD card -- deliberately not under this .nro's
+ * own switch/Bramble/ log directory, since this is the user's own
+ * legally-dumped game data, not something this project generates or
+ * distributes (see LICENSE section 6). Not `const` so a future real
+ * settings/setup screen can point this at wherever the user actually put
+ * their dump instead. */
+extern char g_bramble_fs_content_root[256]; /* real definition in cafeos_state.c -- see its own file comment */
+extern char g_bramble_fs_save_root[256]; /* real definition in cafeos_state.c -- see its own file comment */
+
+/* Rewrites a real Wii U guest FS path onto a real host path under the
+ * roots above. Real Wii U game code addresses files through one of a
+ * small number of mounted volumes, most commonly the read-only content
+ * mount (paths seen in the wild as either "/vol/content/..." or
+ * "content:/...") and the per-title save mount ("/vol/save/..." or
+ * "save:/..."); this shim doesn't emulate FSMount/FSBindMount's own real
+ * volume-table bookkeeping, just recognizes these fixed, well-known
+ * prefixes directly. A path with neither prefix is treated as already
+ * relative to the content mount -- real game code frequently opens files
+ * with bare relative paths (e.g. "data/foo.szs"), assuming its current
+ * directory already is the content volume, which real hardware sets up
+ * before the game's own code ever runs. `out` must be at least
+ * `out_size` bytes; truncates rather than overflowing if a real path
+ * turns out to be pathological. */
+static inline void ppc_fs_translate_path(const char *guest_path, char *out, size_t out_size) {
+    const char *root = g_bramble_fs_content_root;
+    const char *rest = guest_path;
+    if (strncmp(guest_path, "/vol/content/", 13) == 0) {
+        rest = guest_path + 13;
+    } else if (strncmp(guest_path, "content:/", 9) == 0) {
+        rest = guest_path + 9;
+    } else if (strncmp(guest_path, "/vol/save/", 10) == 0) {
+        root = g_bramble_fs_save_root;
+        rest = guest_path + 10;
+    } else if (strncmp(guest_path, "save:/", 6) == 0) {
+        root = g_bramble_fs_save_root;
+        rest = guest_path + 6;
+    } else if (guest_path[0] == '/') {
+        /* An absolute path under some other/unrecognized real mount --
+         * pass it through unchanged rather than guessing; a real fopen()
+         * against it will just cleanly fail with "not found", same as
+         * this shim's prior always-passthrough behavior did for every
+         * path. */
+        snprintf(out, out_size, "%s", guest_path);
+        return;
+    }
+    while (rest[0] == '/') rest++;
+    if (rest[0] == '\0') {
+        snprintf(out, out_size, "%s", root);
+    } else {
+        snprintf(out, out_size, "%s/%s", root, rest);
+    }
 }
 
 /* 1-based handles (0 reserved so a zeroed-out FSFileHandle reads as
@@ -189,11 +235,12 @@ static inline void ppc_import_coreinit_FSIsEof(PpcContext *ctx) {
  *                      const char *mode, FSFileHandle *handle, FSErrorFlag errorMask);
  * r3=client r4=block r5=path r6=mode r7=out_handle r8=errorMask */
 static inline void ppc_import_coreinit_FSOpenFile(PpcContext *ctx) {
-    char path[512], mode[8];
-    ppc_fs_read_cstr(ctx, ctx->r[5], path, sizeof(path));
+    char guest_path[512], real_path[512], mode[8];
+    ppc_fs_read_cstr(ctx, ctx->r[5], guest_path, sizeof(guest_path));
     ppc_fs_read_cstr(ctx, ctx->r[6], mode, sizeof(mode));
+    ppc_fs_translate_path(guest_path, real_path, sizeof(real_path));
 
-    FILE *f = fopen(path, mode);
+    FILE *f = fopen(real_path, mode);
     if (!f) {
         g_ppc_fs_last_error = BRAMBLE_FS_STATUS_NOT_FOUND;
         ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
@@ -349,9 +396,10 @@ static inline void ppc_fs_free_dir_handle(uint32_t handle) {
 /* FSStatus FSOpenDir(FSClient*, FSCmdBlock*, const char *path, FSDirectoryHandle*, FSErrorFlag);
  * r3=client r4=block r5=path r6=out_handle r7=errorMask */
 static inline void ppc_import_coreinit_FSOpenDir(PpcContext *ctx) {
-    char path[512];
-    ppc_fs_read_cstr(ctx, ctx->r[5], path, sizeof(path));
-    DIR *d = opendir(path);
+    char guest_path[512], real_path[512];
+    ppc_fs_read_cstr(ctx, ctx->r[5], guest_path, sizeof(guest_path));
+    ppc_fs_translate_path(guest_path, real_path, sizeof(real_path));
+    DIR *d = opendir(real_path);
     if (!d) {
         ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
         return;
@@ -425,8 +473,9 @@ static inline void ppc_import_coreinit_FSReadDir(PpcContext *ctx) {
 /* FSStatus FSMakeDir(FSClient*, FSCmdBlock*, const char *path, FSErrorFlag);
  * r3=client r4=block r5=path r6=errorMask */
 static inline void ppc_import_coreinit_FSMakeDir(PpcContext *ctx) {
-    char path[512];
-    ppc_fs_read_cstr(ctx, ctx->r[5], path, sizeof(path));
+    char guest_path[512], path[512];
+    ppc_fs_read_cstr(ctx, ctx->r[5], guest_path, sizeof(guest_path));
+    ppc_fs_translate_path(guest_path, path, sizeof(path));
 #ifdef _WIN32
     int rc = mkdir(path);
 #else
@@ -442,8 +491,9 @@ static inline void ppc_import_coreinit_FSMakeDir(PpcContext *ctx) {
 /* FSStatus FSRemove(FSClient*, FSCmdBlock*, const char *path, FSErrorFlag);
  * r3=client r4=block r5=path r6=errorMask */
 static inline void ppc_import_coreinit_FSRemove(PpcContext *ctx) {
-    char path[512];
-    ppc_fs_read_cstr(ctx, ctx->r[5], path, sizeof(path));
+    char guest_path[512], path[512];
+    ppc_fs_read_cstr(ctx, ctx->r[5], guest_path, sizeof(guest_path));
+    ppc_fs_translate_path(guest_path, path, sizeof(path));
     if (remove(path) != 0) {
         ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
         return;
