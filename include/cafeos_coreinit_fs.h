@@ -131,6 +131,18 @@ static inline void ppc_fs_translate_path(const char *guest_path, char *out, size
     }
 }
 
+/* Real, optional logging hook for FSOpenFile -- same real reasoning and
+ * pattern as ppc_runtime.h's own ppc_set_unhandled_log: a real,
+ * first-ever run of the actual game against a real player-supplied dump
+ * is exactly when knowing *what the game actually tried to open, and
+ * whether it found it* matters most, and there's no other way to see
+ * that short of this. `extern`, not `static`, for the same real
+ * multi-translation-unit reason as everything else in this header --
+ * shared, single definition lives in cafeos_state.c. */
+typedef void (*ppc_fs_open_log_fn)(const char *guest_path, const char *real_path, int found);
+extern ppc_fs_open_log_fn g_ppc_fs_open_log; /* real definition in cafeos_state.c -- see its own file comment */
+static inline void ppc_fs_set_open_log(ppc_fs_open_log_fn fn) { g_ppc_fs_open_log = fn; }
+
 /* 1-based handles (0 reserved so a zeroed-out FSFileHandle reads as
  * invalid, matching the convention real code's error paths rely on). */
 static inline uint32_t ppc_fs_alloc_handle(FILE *f) {
@@ -241,6 +253,7 @@ static inline void ppc_import_coreinit_FSOpenFile(PpcContext *ctx) {
     ppc_fs_translate_path(guest_path, real_path, sizeof(real_path));
 
     FILE *f = fopen(real_path, mode);
+    if (g_ppc_fs_open_log) g_ppc_fs_open_log(guest_path, real_path, f != NULL);
     if (!f) {
         g_ppc_fs_last_error = BRAMBLE_FS_STATUS_NOT_FOUND;
         ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;

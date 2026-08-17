@@ -613,7 +613,20 @@ static inline void ppc_trap(void) { abort(); }
  * one," consistent with this project's own established shader/draw-
  * call no-op precedent (see cafeos_gx2.h's own comment on that). */
 typedef void (*ppc_unhandled_log_fn)(const char *);
-static ppc_unhandled_log_fn g_ppc_unhandled_log = NULL;
+/* extern, not `static` -- this same header is included by every one of
+ * a real many-file build's separately-compiled translation units (see
+ * switch/game/'s own 213 generated_*.c files), and the actual
+ * ppc_unhandled_stub() calls this sink almost always happen inside one
+ * of *those* files, not the one file (main.c) that calls
+ * ppc_set_unhandled_log() to register it. A `static` copy here would
+ * mean every one of those 213 files gets its own, separate, never-set
+ * NULL copy -- real bug found and fixed this way (same root cause as
+ * cafeos_state.c's own g_bramble_gx2 and friends): logging would
+ * silently never fire for any real unhandled-instruction hit inside
+ * the actual recompiled game code, only from a hit in main.c itself
+ * (which has none). Real, single, shared definition lives in
+ * cafeos_state.c alongside everything else that needed this fix. */
+extern ppc_unhandled_log_fn g_ppc_unhandled_log;
 static inline void ppc_set_unhandled_log(ppc_unhandled_log_fn fn) { g_ppc_unhandled_log = fn; }
 static inline void ppc_unhandled_stub(PpcContext *ctx, const char *what) {
     (void)ctx;

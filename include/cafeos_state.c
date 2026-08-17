@@ -47,6 +47,10 @@
 #include "cafeos_gx2.h"
 #endif
 
+ppc_unhandled_log_fn g_ppc_unhandled_log = NULL;
+
+ppc_fs_open_log_fn g_ppc_fs_open_log = NULL;
+
 int32_t g_ppc_fs_last_error = BRAMBLE_FS_STATUS_OK;
 FILE *g_ppc_fs_files[BRAMBLE_FS_MAX_HANDLES];
 DIR *g_ppc_fs_dirs[BRAMBLE_FS_MAX_DIR_HANDLES];
