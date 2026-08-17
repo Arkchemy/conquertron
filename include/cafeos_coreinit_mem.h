@@ -162,8 +162,16 @@ static inline void ppc_mem_set_alloc_fail_log(ppc_mem_alloc_fail_log_fn fn) { g_
 static inline void ppc_import_coreinit_MEMCreateExpHeapEx(PpcContext *ctx) {
     /* MEMHeapHandle MEMCreateExpHeapEx(void *heap, uint32_t size, uint16_t flags) */
     uint32_t result = bramble_mem_heap_create(ctx->r[3], ctx->r[4]);
-    if (result == 0 && g_ppc_mem_alloc_fail_log) {
-        g_ppc_mem_alloc_fail_log("MEMCreateExpHeapEx (out of heap table slots)", ctx->r[4], ctx->r[3], 0, 0);
+    /* Always logged (success or fail), not throttled the way real-alloc
+     * failures are -- real heap creation is naturally rare (at most a
+     * handful of real calls for the whole game), unlike real individual
+     * allocations, so there's no real flood risk. Answers a real,
+     * specific question: does the real game ever actually create the
+     * heap whose handle a later real allocation call fails against, and
+     * if so, in what order relative to that failure. */
+    if (g_ppc_mem_alloc_fail_log) {
+        g_ppc_mem_alloc_fail_log(result == 0 ? "MEMCreateExpHeapEx FAILED (out of heap table slots)" : "MEMCreateExpHeapEx ok",
+                                  ctx->r[4], ctx->r[3], result, 0);
     }
     ctx->r[3] = result;
 }
@@ -265,6 +273,12 @@ static inline void ppc_import_coreinit_MEMGetBaseHeapHandle(PpcContext *ctx) {
         uint32_t base = (idx == 0) ? BRAMBLE_MEM1_BASE : (idx == 1) ? BRAMBLE_MEM2_BASE : BRAMBLE_FG_BASE;
         uint32_t size = (idx == 0) ? BRAMBLE_MEM1_SIZE : (idx == 1) ? BRAMBLE_MEM2_SIZE : BRAMBLE_FG_SIZE;
         g_bramble_base_heap_handle[idx] = bramble_mem_heap_create(base, size);
+        /* Rare (at most 3 real calls total, one per base heap type) --
+         * see MEMCreateExpHeapEx's own comment on why this is safe to
+         * always log. */
+        if (g_ppc_mem_alloc_fail_log) {
+            g_ppc_mem_alloc_fail_log("MEMGetBaseHeapHandle lazy-create", type, base, size, g_bramble_base_heap_handle[idx]);
+        }
     }
     ctx->r[3] = g_bramble_base_heap_handle[idx];
 }
