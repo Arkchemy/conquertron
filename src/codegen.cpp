@@ -14,6 +14,34 @@ int reg_idx(unsigned int capstone_reg) {
     return (int)capstone_reg - PPC_REG_R0;
 }
 
+// Real, confirmed bug fixed here (found running against the real game
+// binary's own real lwarx/stwcx. atomic singleton-init sequences, not
+// hypothetical): per the PPC ISA, RA==0 in a base-register position
+// (either a d(RA) displacement form or an X-form rD,RA,RB indexed form)
+// means literal 0, not "read GPR r0" -- base_expr() below already
+// handles this, but only for a base register index of plain `0`.
+// Capstone represents this "RA encoded as 0" case two different ways
+// depending on the operand kind: a memory operand's own `.mem.base`
+// field reports it as literal capstone value 0 directly (so
+// reg_idx(0) = 0 - PPC_REG_R0's own value correctly happens to look
+// like -PPC_REG_R0, NOT what base_expr checks for) -- while a plain
+// register operand (`.reg`, used by X-form instructions like
+// lwarx/stwcx.) reports the same real "RA=0" case with that *same* raw
+// capstone value 0 too. Either way, naively feeding that raw 0 through
+// reg_idx() (which subtracts PPC_REG_R0, i.e. 87) produces a wildly
+// out-of-range negative index (`ctx->r[-87]`, confirmed exactly this
+// value in real generated output) instead of base_expr()'s expected
+// "0 means literal zero" sentinel. This wrapper normalizes both real
+// capstone conventions (raw 0, and the normal PPC_REG_R0 enum value)
+// to reg_idx's own "0" sentinel before reg_idx's blind subtraction
+// ever runs, so base_expr()'s existing check works as intended for
+// every base-register source, not just the ones that happened not to
+// hit this.
+int base_reg_idx(unsigned int capstone_reg) {
+    if (capstone_reg == 0 || capstone_reg == PPC_REG_R0) return 0;
+    return reg_idx(capstone_reg);
+}
+
 int freg_idx(unsigned int capstone_reg) {
     return (int)capstone_reg - PPC_REG_F0;
 }
@@ -64,7 +92,7 @@ struct MemOp {
     int32_t disp;
 };
 
-MemOp mem_operand(const cs_ppc_op &op) { return {reg_idx(op.mem.base), op.mem.disp}; }
+MemOp mem_operand(const cs_ppc_op &op) { return {base_reg_idx(op.mem.base), op.mem.disp}; }
 
 std::string base_expr(int base_reg) {
     // Per the PPC ISA, rA==0 in a d(rA) form means literal 0, not the value
@@ -409,7 +437,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // implied rA=0, which capstone already reports as the
                 // separate 2-operand PPC_INS_LIS case above).
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 auto it = img.data_relocs.find(insn.address);
                 if (it != img.data_relocs.end() && it->second.type == DataReloc::HA) {
                     if (it->second.is_function) {
@@ -455,7 +483,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_ADDI: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 if (is_synthetic_addr_lo_reloc(img, insn.address)) {
                     // lis+addi computing a global's address for later
                     // (usually indexed) use -- rA already holds the
@@ -770,28 +798,28 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_LWZX: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
                 break;
             }
             case PPC_INS_STWX: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  ppc_store_u32(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << reg(rD) << ");\n";
                 break;
             }
             case PPC_INS_LBZX: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ppc_load_u8(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
                 break;
             }
             case PPC_INS_STBX: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  ppc_store_u8(ctx, " << base_expr(rA) << " + " << reg(rB) << ", (uint8_t)" << reg(rD)
                     << ");\n";
@@ -799,14 +827,14 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_LHZX: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ppc_load_u16(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
                 break;
             }
             case PPC_INS_STHX: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  ppc_store_u16(ctx, " << base_expr(rA) << " + " << reg(rB) << ", (uint16_t)" << reg(rD)
                     << ");\n";
@@ -1181,7 +1209,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_STFIWX: {
                 int fD = freg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  ppc_store_f64_low32(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << freg(fD)
                     << ");\n";
@@ -1343,7 +1371,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_LWARX: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
                 break;
@@ -1356,7 +1384,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // Correct for the single-threaded case this runtime
                 // actually executes; not real multi-core contention.
                 int rS = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  ppc_store_u32(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << reg(rS) << ");\n";
                 out << "  ctx->cr0_lt = 0; ctx->cr0_gt = 0; ctx->cr0_eq = 1;\n";
@@ -1420,7 +1448,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_LFSX: {
                 int fD = freg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << base_expr(rA) << " + " << reg(rB)
                     << ");\n";
@@ -1428,7 +1456,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_STFSX: {
                 int fD = freg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  ppc_store_f32(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << freg(fD) << ");\n";
                 break;
@@ -1467,7 +1495,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_LHAX: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)ppc_load_u16(ctx, " << base_expr(rA)
                     << " + " << reg(rB) << ");\n";
@@ -1577,7 +1605,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_LWBRX: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ppc_load_u32_brx(ctx, " << base_expr(rA) << " + " << reg(rB)
                     << ");\n";
@@ -1585,7 +1613,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_LHBRX: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ppc_load_u16_brx(ctx, " << base_expr(rA) << " + " << reg(rB)
                     << ");\n";
@@ -1644,7 +1672,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_STFDX: {
                 int fD = freg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  ppc_store_f64(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << freg(fD) << ");\n";
                 break;
@@ -1665,7 +1693,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_LFDX: {
                 int fD = freg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << freg(fD) << " = ppc_load_f64(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
                 break;
@@ -1706,14 +1734,14 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_LSWI: {
                 int rD = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 uint32_t nb = (uint32_t)ppc.operands[2].imm;
                 out << "  ppc_lswi(ctx, " << rD << "u, " << base_expr(rA) << ", " << nb << "u);\n";
                 break;
             }
             case PPC_INS_STSWI: {
                 int rS = reg_idx(ppc.operands[0].reg);
-                int rA = reg_idx(ppc.operands[1].reg);
+                int rA = base_reg_idx(ppc.operands[1].reg);
                 uint32_t nb = (uint32_t)ppc.operands[2].imm;
                 out << "  ppc_stswi(ctx, " << rS << "u, " << base_expr(rA) << ", " << nb << "u);\n";
                 break;
