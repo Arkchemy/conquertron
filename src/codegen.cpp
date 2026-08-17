@@ -473,6 +473,11 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0 --
+                // same real "add." record-form gap, same fix.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_AND:
@@ -489,6 +494,20 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     default: break;
                 }
                 out << "  " << reg(rD) << " = " << reg(rA) << " " << op << " " << reg(rB) << ";\n";
+                // Real, severe bug found and fixed here (confirmed live
+                // against the real game binary -- a real "or. r31, r4,
+                // r4" left CR0 completely unset, so a `beq` right after
+                // it branched on stale, unrelated condition-register
+                // state instead of the real "is r31 zero" check it's
+                // supposed to gate, sending a real function into a
+                // genuine infinite loop instead of taking its intended
+                // fast-path branch). ppc.update_cr0 is Capstone's real
+                // Rc-bit flag -- and./or./xor. are real, common GHS-
+                // compiler idioms for fusing a compute with a "compare
+                // against zero", not a hypothetical case.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_ANDC: {
@@ -496,6 +515,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = " << reg(rA) << " & ~" << reg(rB) << ";\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_EQV: {
@@ -503,12 +526,20 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ~(" << reg(rA) << " ^ " << reg(rB) << ");\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_CNTLZW: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
                 out << "  " << reg(rD) << " = ppc_cntlzw(" << reg(rA) << ");\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_SUBFIC: {
@@ -523,12 +554,20 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ~(" << reg(rA) << " | " << reg(rB) << ");\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_NEG: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
                 out << "  " << reg(rD) << " = (uint32_t)(-(int32_t)" << reg(rA) << ");\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_SLWI: {
@@ -567,6 +606,12 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 uint32_t mask = ppc_mask(mb, me);
                 std::string rotated = sh == 0 ? reg(rA) : ("ppc_rotl32(" + reg(rA) + ", " + std::to_string(sh) + ")");
                 out << "  " << reg(rD) << " = " << rotated << " & " << mask << "u;\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0
+                // -- rlwinm. is a real, common idiom too (e.g. extracting
+                // and testing a single bit field in one instruction).
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_RLWIMI: {
@@ -611,6 +656,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = " << reg(rB) << " - " << reg(rA) << ";\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_MULLI: {
@@ -640,6 +689,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = (uint32_t)((int32_t)" << reg(rA) << " / (int32_t)" << reg(rB)
                     << ");\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_DIVWU: {
@@ -647,6 +700,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = " << reg(rA) << " / " << reg(rB) << ";\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_MULLW: {
@@ -654,6 +711,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = " << reg(rA) << " * " << reg(rB) << ";\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_CMPWI:
@@ -1307,6 +1368,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = (" << reg(rB) << " & 0x20u) ? 0u : (" << reg(rA) << " << (" << reg(rB)
                     << " & 0x1Fu));\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_SRW: {
@@ -1315,6 +1380,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = (" << reg(rB) << " & 0x20u) ? 0u : (" << reg(rA) << " >> (" << reg(rB)
                     << " & 0x1Fu));\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_SUBFC: {
@@ -1458,6 +1527,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ppc_sraw(ctx, (int32_t)" << reg(rA) << ", " << reg(rB) << ");\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_LWZUX: {
@@ -1667,6 +1740,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = " << reg(rA) << " | ~" << reg(rB) << ";\n";
+                // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_ANDIS: {
