@@ -22,6 +22,37 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Real, always-on, cheap "where is execution right now" tracker: codegen.cpp
+ * emits a one-line write to this at the start of every real recompiled
+ * function (see its own comment there), so a diagnostic log (or a debugger)
+ * can see which real PPC function address is currently executing without
+ * any per-instruction tracing. Real problem this specific form solves: this
+ * header is included by every one of a real many-file build's separately-
+ * compiled translation units (switch/game/'s 213 generated_*.c files), each
+ * of which needs to update and a single *shared* value that switch/game/'s
+ * own main.c (yet another, different translation unit) can read -- the
+ * usual fix for that elsewhere in this project (extern here + one real
+ * definition in cafeos_state.c) would mean every one of this project's much
+ * smaller single-translation-unit programs (switch/native/, switch/gx2_test/,
+ * and every tools/verify.sh test harness) would also need to link
+ * cafeos_state.c just to satisfy this one symbol, for no real benefit to
+ * them. `__attribute__((weak))` sidesteps that: every translation unit gets
+ * its own real, tentative definition, and the linker coalesces all of them
+ * that end up in the same final binary into exactly one shared instance
+ * automatically -- correct, single-instance behavior in a real multi-file
+ * build, and just as correct (trivially, since there's only one TU to
+ * coalesce) in a single-file one, with no separate definition file needed
+ * either way. Supported by every real toolchain this project's own builds
+ * already depend on (GNU ld via devkitA64, and clang/lld via zig cc). */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_current_pc = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint64_t g_ppc_fn_call_count = 0;
+
 /*
  * Minimal PowerPC execution context used by recompiler-generated C code.
  *

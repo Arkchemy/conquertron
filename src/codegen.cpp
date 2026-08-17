@@ -217,6 +217,13 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
     }
 
     out << "void ppc_" << func.name << "(PpcContext *ctx) {\n";
+    // Real, cheap "current PC" tracker (see ppc_runtime.h's own comment on
+    // g_ppc_current_pc) -- lets a real hardware run's diagnostic log show
+    // which real function is actually executing, found necessary after a
+    // real 10-minute smoke test run produced zero FSOpenFile/unhandled-stub
+    // log lines, leaving no way to tell whether the game thread was making
+    // real progress through unrelated code or genuinely stuck in one place.
+    out << "  g_ppc_current_pc = 0x" << std::hex << func.addr << std::dec << "u; g_ppc_fn_call_count++;\n";
 
     for (size_t i = 0; i < insns.size(); i++) {
         const cs_insn &insn = insns[i];
