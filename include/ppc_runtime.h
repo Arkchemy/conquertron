@@ -160,9 +160,7 @@ typedef struct PpcContext {
      * but points `shared` at the same block. A single-threaded program
      * (everything so far) just points its one `PpcContext` at its own
      * privately-owned `PpcSharedMemory` -- behaviorally identical to the
-     * old inline array, see `PPC_MEM_SIZE` below for the size (unchanged
-     * at 4MB, still an arbitrary, generous, documented placeholder, not
-     * a claim this matches real Wii U game scale).
+     * old inline array, see `PPC_MEM_SIZE` below for the size.
      *
      * Every existing `PpcContext` consumer (tools/gen_harness*.c,
      * switch/native/source/main.c) already used `static` storage
@@ -177,7 +175,31 @@ typedef struct PpcContext {
     struct PpcSharedMemory *shared;
 } PpcContext;
 
-#define PPC_MEM_SIZE (4 * 1024 * 1024)
+/* Real, found-the-hard-way sizing: the previous 4MB was "an arbitrary,
+ * generous, documented placeholder, not a claim this matches real Wii U
+ * game scale" -- turned out to be a real, severe bug once actually
+ * exercised against the real, complete Skylanders: Spyro's Adventure
+ * binary. `assign_global_addrs` (elf_loader.cpp) lays out that real
+ * game's own .data/.bss/.rodata globals starting at 0x2000, and for
+ * this specific real binary that region runs all the way out to
+ * 0x670b00 (~6.75MB, confirmed by direct instrumentation, not
+ * estimated) -- already bigger than the entire old 4MB guest address
+ * space by itself, before any heap or stack. Every guest memory access
+ * masks its address with `& (PPC_MEM_SIZE - 1)` (see ppc_load_u32 and
+ * friends below), so with the old 4MB size, large stretches of the
+ * real game's own global variables were silently wrapping around and
+ * aliasing on top of *each other*, and on top of the small fixed-
+ * address heap regions cafeos_coreinit_mem.h reserves -- real,
+ * ongoing memory corruption from the moment the game's own static
+ * initializers ran, long before any of its own code had a chance to
+ * misbehave on its own. 128MB gives real breathing room for this
+ * specific game's ~6.75MB of globals, cafeos_coreinit_mem.h's own
+ * MEM1/MEM2 heap regions (see that header's own layout comment), and a
+ * real stack -- still an arbitrary, chosen-for-this-game placeholder,
+ * not a claim this matches real Wii U MEM1/MEM2 scale (which is far
+ * larger), but grounded in this real binary's own measured needs
+ * rather than picked blind. */
+#define PPC_MEM_SIZE (128u * 1024u * 1024u)
 
 typedef struct PpcSharedMemory {
     uint8_t mem[PPC_MEM_SIZE];

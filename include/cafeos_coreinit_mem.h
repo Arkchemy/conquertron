@@ -79,13 +79,38 @@ extern BrambleMemHeap g_bramble_mem_heaps[BRAMBLE_MEM_MAX_HEAPS];
  * [2]=FG; 0 means "not yet lazily created". */
 extern uint32_t g_bramble_base_heap_handle[3];
 
-#define BRAMBLE_MEM1_BASE 0x8000u
-#define BRAMBLE_MEM1_SIZE 0x3000u
-#define BRAMBLE_MEM2_BASE 0xB000u
-#define BRAMBLE_MEM2_SIZE 0x3000u
-#define BRAMBLE_FG_BASE   0x2000u /* FG (foreground/overlay) arena: tiny, rarely used real region */
-#define BRAMBLE_FG_SIZE   0x0800u
-#define BRAMBLE_ERRNO_ADDR 0xE000u
+/* Real layout, found necessary the hard way: these addresses used to sit
+ * at 0x8000/0xB000/0x2000 -- fine as "well clear of both the 0x2000+
+ * global range and the stack-top region" *only* for the tiny test
+ * programs this was originally sized for. Against the real, complete
+ * Skylanders: Spyro's Adventure binary, `assign_global_addrs`
+ * (elf_loader.cpp) actually lays real game globals out from 0x2000 all
+ * the way to 0x670b00 (~6.75MB, confirmed by direct instrumentation) --
+ * so those old fixed addresses sat *inside* the real game's own global
+ * variables, and every real MEM1/MEM2 allocation was silently
+ * corrupting them (and vice versa). See ppc_runtime.h's own
+ * PPC_MEM_SIZE comment for the matching guest-address-space size
+ * increase this real bug also required. New layout, with real headroom
+ * past that measured 0x670b00 global extent:
+ *   0x000000 - 0x700000  (paired 1:1 with the real 0x2000-0x670b00
+ *                          global range, plus safety margin) -- globals
+ *   0x800000 - 0x802000  FG (foreground/overlay) arena -- tiny, rarely used
+ *   0x802000             __gh_errno_ptr's real backing address
+ *   0x1000000 - 0x2000000  MEM1 (16MB)
+ *   0x2000000 - 0x6000000  MEM2 (64MB) -- real code's main/largest heap
+ *   0x6000000 - 0x8000000  unreserved -- real guest stack space (see
+ *                          switch/game/source/main.c's own r[1] init)
+ * Still real, chosen-for-this-specific-game placeholders, not a claim
+ * this matches real Wii U MEM1/MEM2 scale (which is far larger) --
+ * grounded in this real binary's own measured global-region size,
+ * unlike the old values which were never checked against it. */
+#define BRAMBLE_FG_BASE    0x800000u
+#define BRAMBLE_FG_SIZE    0x2000u
+#define BRAMBLE_ERRNO_ADDR 0x802000u
+#define BRAMBLE_MEM1_BASE 0x1000000u
+#define BRAMBLE_MEM1_SIZE 0x1000000u
+#define BRAMBLE_MEM2_BASE 0x2000000u
+#define BRAMBLE_MEM2_SIZE 0x4000000u
 
 static inline BrambleMemHeap *bramble_mem_heap_find(uint32_t handle) {
     int i;
