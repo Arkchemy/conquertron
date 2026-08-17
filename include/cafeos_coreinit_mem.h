@@ -146,9 +146,26 @@ static inline uint32_t bramble_align_up(uint32_t v, uint32_t align) {
     return (v + (align - 1)) & ~(align - 1);
 }
 
+/* Real, optional logging hook -- fires on a real MEMCreateExpHeapEx or
+ * MEMAllocFromExpHeapEx failure only (not every call, which would be far
+ * too frequent to be useful -- see cafeos_coreinit_fs.h's own FSOpenFile
+ * log for the same reasoning, applied here to answer a different real
+ * question: is the real game's own memory-pool code spinning because of
+ * genuine, real out-of-memory against this shim's fixed-size heaps, or
+ * something else). `extern`, not `static`, for the same real multi-
+ * translation-unit reason as everything else in this project -- shared,
+ * single definition lives in cafeos_state.c. */
+typedef void (*ppc_mem_alloc_fail_log_fn)(const char *what, uint32_t requested, uint32_t heap_base, uint32_t heap_size, uint32_t heap_used);
+extern ppc_mem_alloc_fail_log_fn g_ppc_mem_alloc_fail_log; /* real definition in cafeos_state.c -- see its own file comment */
+static inline void ppc_mem_set_alloc_fail_log(ppc_mem_alloc_fail_log_fn fn) { g_ppc_mem_alloc_fail_log = fn; }
+
 static inline void ppc_import_coreinit_MEMCreateExpHeapEx(PpcContext *ctx) {
     /* MEMHeapHandle MEMCreateExpHeapEx(void *heap, uint32_t size, uint16_t flags) */
-    ctx->r[3] = bramble_mem_heap_create(ctx->r[3], ctx->r[4]);
+    uint32_t result = bramble_mem_heap_create(ctx->r[3], ctx->r[4]);
+    if (result == 0 && g_ppc_mem_alloc_fail_log) {
+        g_ppc_mem_alloc_fail_log("MEMCreateExpHeapEx (out of heap table slots)", ctx->r[4], ctx->r[3], 0, 0);
+    }
+    ctx->r[3] = result;
 }
 
 static inline void ppc_import_coreinit_MEMDestroyExpHeap(PpcContext *ctx) {
@@ -165,10 +182,20 @@ static inline void ppc_import_coreinit_MEMAllocFromExpHeapEx(PpcContext *ctx) {
     int32_t alignment = (int32_t)ctx->r[5];
     uint32_t align = alignment < 0 ? (uint32_t)(-alignment) : (uint32_t)alignment;
     uint32_t addr, end;
-    if (h == NULL) { ctx->r[3] = 0; return; }
+    if (h == NULL) {
+        if (g_ppc_mem_alloc_fail_log) g_ppc_mem_alloc_fail_log("MEMAllocFromExpHeapEx (unknown heap handle)", size, ctx->r[3], 0, 0);
+        ctx->r[3] = 0;
+        return;
+    }
     addr = bramble_align_up(h->bump + 4, align); /* +4: room for the private size header */
     end = addr + size;
-    if (end > h->base + h->size) { ctx->r[3] = 0; return; } /* real OOM behavior: NULL */
+    if (end > h->base + h->size) { /* real OOM behavior: NULL */
+        if (g_ppc_mem_alloc_fail_log) {
+            g_ppc_mem_alloc_fail_log("MEMAllocFromExpHeapEx (out of space)", size, h->base, h->size, h->bump - h->base);
+        }
+        ctx->r[3] = 0;
+        return;
+    }
     ppc_store_u32(ctx, addr - 4, size);
     h->bump = end;
     ctx->r[3] = addr;

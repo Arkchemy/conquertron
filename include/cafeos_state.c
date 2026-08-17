@@ -70,6 +70,7 @@ pthread_key_t g_bramble_current_thread_key;
 pthread_once_t g_bramble_thread_tls_once = PTHREAD_ONCE_INIT;
 
 BrambleMemHeap g_bramble_mem_heaps[BRAMBLE_MEM_MAX_HEAPS];
+ppc_mem_alloc_fail_log_fn g_ppc_mem_alloc_fail_log = NULL;
 uint32_t g_bramble_base_heap_handle[3];
 
 BrambleMutexEntry g_bramble_mutexes[BRAMBLE_SYNC_TABLE_SIZE];
