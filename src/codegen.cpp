@@ -1160,6 +1160,32 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // C function call at codegen time. ppc_dispatch (emitted in
                 // main.cpp, which has the full function address table)
                 // looks the address up and calls the matching ppc_<name>.
+                //
+                // Real bug found and fixed 2026-08-20, chasing a real,
+                // non-deterministic hang (a different static initializer
+                // hung on two separate identical hardware runs -- the
+                // classic signature of code branching on uninitialized/
+                // stale data): real PPC bctrl always sets LR to the real
+                // return address (the next instruction) as part of the
+                // same instruction that branches -- this recompiler's own
+                // `bl` handling never needed to model that explicitly
+                // (the call becomes a real C function call, so the actual
+                // return is handled by the host C call stack, not by
+                // jumping to ctx->lr), but any real code that legitimately
+                // *reads* LR after an indirect call for something other
+                // than simple save-before/restore-after a nested call
+                // (e.g. a real GHS/PPC EABI position-independent-code
+                // idiom computing a base address from the current PC, or
+                // a real C++ adjustor-thunk pattern -- this project's own
+                // README already documents real adjustor thunks existing
+                // in this exact binary) would silently read whatever
+                // stale value an unrelated, earlier real `mtlr` happened
+                // to leave there instead. ctx->lr was never being set at
+                // all for this call form, so it was pure leftover garbage
+                // from wherever execution had been before -- explaining
+                // real, non-deterministic behavior that depends on
+                // whatever happened to run earlier.
+                out << "  ctx->lr = 0x" << std::hex << (insn.address + 4) << std::dec << "u;\n";
                 out << "  ppc_dispatch(ctx, ctx->ctr);\n";
                 break;
             }
@@ -1172,6 +1198,13 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     unhandled.push_back(insn.mnemonic);
                     break;
                 }
+                // Same real gap as PPC_INS_BCTRL's own comment -- real
+                // `bl` always sets LR to the real return address too.
+                // Not needed for the call itself (a real C function
+                // call/return handles that correctly on its own), only
+                // for real guest code that legitimately reads LR after a
+                // call for something other than simple save/restore.
+                out << "  ctx->lr = 0x" << std::hex << (insn.address + 4) << std::dec << "u;\n";
                 out << "  " << call_stmt << "\n";
                 break;
             }
@@ -1734,7 +1767,12 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     unhandled.push_back(insn.mnemonic);
                     break;
                 }
-                out << "  if (" << cond << ") { " << call_stmt << " }\n";
+                // Same real gap as PPC_INS_BL/PPC_INS_BCTRL's own
+                // comments -- the "L" in beql/bnel means real hardware
+                // sets LR here too, conditionally on the call actually
+                // happening.
+                out << "  if (" << cond << ") { ctx->lr = 0x" << std::hex << (insn.address + 4) << std::dec
+                    << "u; " << call_stmt << " }\n";
                 break;
             }
             case PPC_INS_TWU:
