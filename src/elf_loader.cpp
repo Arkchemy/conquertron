@@ -219,6 +219,7 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         const uint8_t *sh = shdr(i);
         uint32_t name_off = rd_be32(sh + 0);
         uint32_t sh_type = rd_be32(sh + 4);
+        uint32_t sh_addr = rd_be32(sh + 12);
         uint32_t sh_size = rd_be32(sh + 20);
         std::string name = secname(name_off);
         if (name == ".text") text_idx = i;
@@ -236,6 +237,7 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         // derived from section_bytes.
         if (sh_type != 0 && !name.empty()) {
             out.section_sizes[name] = sh_size;
+            out.section_real_addr[name] = sh_addr;
         }
     }
 
@@ -416,7 +418,38 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
                           : (r_type == R_PPC_ADDR16_HI) ? DataReloc::HI
                                                          : DataReloc::HA;
                 dr.section = sym_section_names[r_sym];
-                dr.addend = r_addend;
+                // Real, severe bug found and fixed 2026-08-20, confirmed by
+                // directly inspecting the real symbol table: r_addend alone
+                // is only the correct section-relative offset when r_sym is
+                // a real STT_SECTION symbol (whose own st_value is the
+                // section's own base, contributing nothing extra). This
+                // binary's real relocations instead target real, named
+                // STT_OBJECT symbols directly (confirmed: e.g. a real
+                // `__gGlobalMem` FMOD global at real address 0x10172524 and
+                // a real, completely unrelated `__mallocInfo` heap-control
+                // struct at real address 0x100ee258, both referenced with
+                // r_addend=0) -- silently discarding each symbol's own real
+                // st_value collapsed every such symbol referenced at its
+                // own offset 0 onto the exact same synthetic address,
+                // aliasing genuinely unrelated globals on top of each
+                // other (confirmed as the real, direct cause of a real
+                // heap-corruption hang: the FMOD global and malloc's own
+                // heap struct landing at the same address, ~528KB apart on
+                // real hardware). st_value - the section's own real sh_addr
+                // (section_real_addr; 0 for a relocatable .o, where
+                // st_value is already section-relative on its own, making
+                // this a no-op) gives the real, correct section-relative
+                // offset in both cases -- for a genuine section symbol,
+                // st_value equals the section's own real base, so this
+                // formula still correctly reduces to plain r_addend there
+                // too, same real result as before for the (apparently
+                // common) case that was already working.
+                {
+                    uint32_t sec_real_base = 0;
+                    auto sec_addr_it = out.section_real_addr.find(dr.section);
+                    if (sec_addr_it != out.section_real_addr.end()) sec_real_base = sec_addr_it->second;
+                    dr.addend = (int32_t)(sym_values[r_sym] - sec_real_base) + r_addend;
+                }
                 if (sym_types[r_sym] == STT_FUNC && dr.section.rfind(kImportSectionPrefix, 0) == 0) {
                     // RPL cross-library import (e.g. a coreinit function
                     // called via a linker-synthesized trampoline stub) --

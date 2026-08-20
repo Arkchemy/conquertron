@@ -48,7 +48,9 @@
 #endif
 
 ppc_unhandled_log_fn g_ppc_unhandled_log = NULL;
-ppc_debug_watch_fn g_ppc_debug_watch = NULL;
+/* g_ppc_debug_watch is now a weak default in ppc_runtime.h itself -- see
+   its own comment there for why (ppc_store_u32 now references it
+   unconditionally, unlike before). */
 
 ppc_fs_open_log_fn g_ppc_fs_open_log = NULL;
 

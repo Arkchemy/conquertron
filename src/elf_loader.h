@@ -112,6 +112,16 @@ struct ElfImage {
     // on top of each other.
     std::map<std::string, uint32_t> section_sizes;
 
+    // Real declared sh_addr of every named section -- 0 for a relocatable
+    // .o (addresses aren't assigned until link time, so symbol st_value
+    // there is already section-relative on its own), a real absolute
+    // virtual address for an already-linked binary like the actual
+    // Skylanders .rpx. Needed to correctly normalize a *named object*
+    // symbol's own st_value (see the real bug this fixed, 2026-08-20,
+    // in the DataReloc-construction code in load_elf): st_value - this
+    // gives the real, correct section-relative offset in both cases.
+    std::map<std::string, uint32_t> section_real_addr;
+
     // Synthetic base address (an offset into PpcContext::mem) assigned to
     // each *mutable* section referenced by a DataReloc (typically .data or
     // .bss) -- read-only sections (.rodata*) don't need one, since codegen

@@ -747,10 +747,24 @@ static inline void ppc_unhandled_stub(PpcContext *ctx, const char *what) {
  * clean output next real run) at whatever exact real PPC instruction
  * address needs a live register/memory value confirmed on real
  * hardware, without needing new codegen support or a full regenerate +
- * rebuild cycle for something this targeted. Same real extern/shared-
- * definition pattern as everything else here -- see cafeos_state.c. */
+ * rebuild cycle for something this targeted.
+ *
+ * Weak, not plain extern (real regression found and fixed 2026-08-20):
+ * this used to only ever get referenced by a translation unit that had
+ * an explicit, hand-inserted ppc_debug_watch() call, so small single-
+ * file test programs (tools/gen_harness*.c) never needed a real shared
+ * definition from cafeos_state.c. That stopped being true once
+ * ppc_store_u32 itself started calling this unconditionally (see
+ * g_ppc_watch_store_addr above) -- now every single program using
+ * ppc_store_u32 at all references it, including every one of those
+ * small test harnesses, which broke tools/verify.sh with a real
+ * "undefined reference to g_ppc_debug_watch" link error. Same weak-
+ * symbol pattern as g_ppc_current_pc above fixes it the same way. */
 typedef void (*ppc_debug_watch_fn)(uint32_t pc, uint32_t value);
-extern ppc_debug_watch_fn g_ppc_debug_watch;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+ppc_debug_watch_fn g_ppc_debug_watch = NULL;
 static inline void ppc_set_debug_watch(ppc_debug_watch_fn fn) { g_ppc_debug_watch = fn; }
 static inline void ppc_debug_watch(uint32_t pc, uint32_t value) {
     if (g_ppc_debug_watch) g_ppc_debug_watch(pc, value);
