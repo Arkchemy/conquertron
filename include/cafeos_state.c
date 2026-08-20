@@ -45,6 +45,7 @@
 #include "cafeos_snd_core.h"
 #ifdef __SWITCH__
 #include "cafeos_gx2.h"
+#include "cafeos_vpad.h"
 #endif
 
 ppc_unhandled_log_fn g_ppc_unhandled_log = NULL;
@@ -88,4 +89,5 @@ int g_bramble_ax_voice_used[BRAMBLE_AXVOICE_MAX];
 
 #ifdef __SWITCH__
 BrambleGx2State g_bramble_gx2;
+BrambleVpadState g_bramble_vpad;
 #endif
