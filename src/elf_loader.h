@@ -77,6 +77,40 @@ struct ImportTrampoline {
     std::string function;  // e.g. "FSFlushFile"
 };
 
+// A real Cafe OS "data import" -- a memory slot (an ordinary global, not
+// a real local function) that the real RPL loader fills in at load time
+// with a real function's actual address, so a real `lwz` from that slot
+// followed by `mtctr`+`bctrl` calls straight into it -- architecturally
+// different from a `.fimport_*` trampoline (a real, local `bl` target
+// this project already resolves directly). Confirmed real and not
+// hypothetical: found 2026-08-20 tracing a real hang -- Green Hills
+// libc's own real sbrk() calls through exactly one of these
+// (coreinit's MEMAllocFromDefaultHeapEx) to grow the heap, and this
+// project's runtime had no mechanism at all for populating such a slot
+// with anything real, so the indirect call silently dispatched nowhere.
+// Detected during load_elf against a small, explicit, curated allowlist
+// of real Cafe OS function names this project's own shim can actually
+// provide (see elf_loader.cpp) -- deliberately not "every symbol in a
+// .dimport_* section", since the same real sections also carry genuine
+// *data* symbols (errno, environ, _iob, __OSCurrentThread, ...) that
+// must stay ordinary memory, never routed through ppc_dispatch.
+struct DataImportSymbol {
+    std::string library;
+    std::string function;
+    std::string section;  // e.g. ".dimport_coreinit"
+    uint32_t st_value = 0; // symbol's own real st_value (absolute addr for an already-linked binary)
+};
+
+// A resolved data import: fake_addr is a real, reserved, synthetic
+// "function address" (never colliding with any real .text address in
+// this binary) that ppc_init_globals writes into the slot's own real
+// synthetic address (this map's key) and that ppc_dispatch recognizes,
+// routing a real bctrl through that slot to ppc_import_<library>_<function>.
+struct DataImport {
+    uint32_t fake_addr = 0;
+    ImportTrampoline target;
+};
+
 struct ElfImage {
     std::vector<uint8_t> text;
     uint32_t text_addr = 0;  // sh_addr of .text (usually 0 for a relocatable .o)
@@ -132,6 +166,18 @@ struct ElfImage {
     // array). Computed once, after load_elf finishes parsing relocations,
     // by assign_global_addrs below.
     std::map<std::string, uint32_t> global_section_base;
+
+    // Real data-import symbols found during load_elf (see DataImportSymbol's
+    // own comment), not yet resolved to real synthetic addresses -- that
+    // needs global_section_base, which doesn't exist until after
+    // assign_global_addrs runs. resolve_data_imports below does that,
+    // populating data_imports.
+    std::vector<DataImportSymbol> data_import_symbols;
+
+    // Resolved data imports, keyed by each slot's own real synthetic
+    // address -- see DataImport's own comment. Populated by
+    // resolve_data_imports after assign_global_addrs.
+    std::map<uint32_t, DataImport> data_imports;
 };
 
 // Assigns global_section_base entries for every mutable section referenced
@@ -149,6 +195,15 @@ void assign_global_addrs(ElfImage &img);
 // Harmless no-op on objects with no RPL imports (ordinary relocatable
 // .o test objects, for instance).
 void find_import_trampolines(ElfImage &img);
+
+// Resolves img.data_import_symbols (found during load_elf, see
+// DataImportSymbol's own comment) to real synthetic addresses and
+// assigns each a real, reserved "fake function address", populating
+// img.data_imports. Call once after assign_global_addrs (needs each
+// symbol's own section to already have a synthetic base) -- order
+// relative to find_import_trampolines doesn't matter. Harmless no-op
+// on objects with no recognized data imports.
+void resolve_data_imports(ElfImage &img);
 
 // Loads a big-endian, 32-bit ELF relocatable object (as produced by
 // `zig cc -target powerpc-freestanding-eabi -c`) and extracts its .text

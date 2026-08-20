@@ -283,6 +283,45 @@ static inline void ppc_import_coreinit_MEMGetBaseHeapHandle(PpcContext *ctx) {
     ctx->r[3] = g_bramble_base_heap_handle[idx];
 }
 
+/* Real Cafe OS convenience wrappers around the real default (MEM1) app
+ * heap -- confirmed real and not hypothetical: Green Hills libc's own
+ * real sbrk() calls through MEMAllocFromDefaultHeapEx specifically (via
+ * a real Cafe OS "data import" -- see recomp's DataImport/
+ * resolve_data_imports for the mechanism that makes an indirect call
+ * through this real symbol route here at all) whenever malloc's own
+ * free list can't satisfy a request and needs to grow the heap.
+ * MEM1 is lazily created the same way MEMGetBaseHeapHandle already
+ * does for it, since this can legitimately be the very first real call
+ * that needs it -- confirmed real signatures against devkitPro/wut's
+ * coreinit/memdefaultheap.h. */
+static inline void ppc_import_coreinit_MEMAllocFromDefaultHeapEx(PpcContext *ctx) {
+    /* void *MEMAllocFromDefaultHeapEx(uint32_t size, int alignment) */
+    uint32_t size = ctx->r[3];
+    int32_t alignment = (int32_t)ctx->r[4];
+    if (g_bramble_base_heap_handle[0] == 0) {
+        g_bramble_base_heap_handle[0] = bramble_mem_heap_create(BRAMBLE_MEM1_BASE, BRAMBLE_MEM1_SIZE);
+    }
+    ctx->r[3] = g_bramble_base_heap_handle[0];
+    ctx->r[4] = size;
+    ctx->r[5] = (uint32_t)alignment;
+    ppc_import_coreinit_MEMAllocFromExpHeapEx(ctx);
+}
+
+static inline void ppc_import_coreinit_MEMAllocFromDefaultHeap(PpcContext *ctx) {
+    /* void *MEMAllocFromDefaultHeap(uint32_t size) -- same as Ex with a
+     * real, fixed default alignment (4 bytes). */
+    uint32_t size = ctx->r[3];
+    ctx->r[3] = size;
+    ctx->r[4] = 4;
+    ppc_import_coreinit_MEMAllocFromDefaultHeapEx(ctx);
+}
+
+static inline void ppc_import_coreinit_MEMFreeToDefaultHeap(PpcContext *ctx) {
+    /* void MEMFreeToDefaultHeap(void *ptr) -- same documented leak as
+     * MEMFreeToExpHeap, see its own comment. */
+    (void)ctx;
+}
+
 /*
  * __gh_errno_ptr/__gh_set_errno: Green Hills libc's errno accessor pair
  * (real Wii U retail code is GHS-compiled -- see cafeos_ghs_runtime.h).

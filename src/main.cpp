@@ -66,6 +66,7 @@ int main(int argc, char **argv) {
     }
     recomp::assign_global_addrs(img);
     recomp::find_import_trampolines(img);
+    recomp::resolve_data_imports(img);
 
     if (extern_globals && !img.global_section_base.empty()) {
         std::cerr << "error: --extern-globals was passed, but this object has its own "
@@ -167,6 +168,21 @@ int main(int argc, char **argv) {
                 << entry.second.function << " -- not implemented, needs the CafeOS runtime shim */\n";
         }
     }
+    // Real Cafe OS "data imports" (see DataImport's own comment) --
+    // routed through the exact same ppc_import_<library>_<function>
+    // naming convention as the trampoline imports above, so a shim
+    // header implementing one automatically covers both real call
+    // shapes (a local `bl` to a `.fimport_*` trampoline, or an
+    // indirect `bctrl` through a real `.dimport_*` function-pointer
+    // slot) with the same one function.
+    for (const auto &entry : img.data_imports) {
+        const std::string key = entry.second.target.library + "_" + entry.second.target.function;
+        if (declared_imports.insert(key).second) {
+            out << "void ppc_import_" << key << "(PpcContext *ctx); /* Cafe OS data import: "
+                << entry.second.target.library << "." << entry.second.target.function
+                << " -- not implemented, needs the CafeOS runtime shim */\n";
+        }
+    }
     out << "void ppc_dispatch(PpcContext *ctx, uint32_t addr);\n";
     out << "\n";
 
@@ -190,6 +206,18 @@ int main(int argc, char **argv) {
                 out << "  ppc_store_u8(ctx, " << (entry.second + (uint32_t)i) << "u, " << (unsigned)bytes[i]
                     << ");\n";
             }
+        }
+        // Real Cafe OS data imports (see DataImport's own comment) -- on
+        // real hardware, the RPL loader itself writes each of these
+        // real function pointers into its slot before the game's own
+        // code ever runs; this is that same real job, writing this
+        // project's own real, reserved dispatchable fake_addr instead
+        // of the real function's own real address (which doesn't exist
+        // here -- there's no real linked .fimport_*-style local copy of
+        // it, only a shim).
+        for (const auto &entry : img.data_imports) {
+            out << "  ppc_store_u32(ctx, " << entry.first << "u, " << entry.second.fake_addr << "u); /* data import: "
+                << entry.second.target.library << "." << entry.second.target.function << " */\n";
         }
         out << "}\n\n";
 
@@ -258,6 +286,18 @@ int main(int argc, char **argv) {
         for (const auto &fn : img.functions) {
             if (!dispatched_addrs.insert(fn.addr).second) continue;
             out << "    case " << fn.addr << "u: ppc_" << fn.name << "(ctx); return;\n";
+        }
+        // Real Cafe OS data imports (see DataImport's own comment) -- a
+        // real bctrl through a slot ppc_init_globals just initialized to
+        // one of these fake_addr values routes here, same as any other
+        // indirect call. Multiple real slots can resolve to the exact
+        // same fake_addr (the same real function imported via more than
+        // one real symbol) -- dedup the same way real function aliasing
+        // above already has to.
+        for (const auto &entry : img.data_imports) {
+            if (!dispatched_addrs.insert(entry.second.fake_addr).second) continue;
+            out << "    case " << entry.second.fake_addr << "u: ppc_import_" << entry.second.target.library << "_"
+                << entry.second.target.function << "(ctx); return;\n";
         }
         out << "  }\n";
         out << "}\n\n";

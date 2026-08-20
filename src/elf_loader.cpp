@@ -98,6 +98,22 @@ std::string strip_rpl_suffix(const std::string &library) {
     return library;
 }
 
+// Real, curated allowlist of Cafe OS "data import" symbols this
+// project's own shim can actually provide a real, callable
+// implementation for -- see DataImportSymbol's own comment on why this
+// is deliberately narrow (a `.dimport_<library>` section also carries
+// genuine *data* symbols -- errno, environ, _iob, __OSCurrentThread,
+// ... -- that must never be routed through ppc_dispatch). Confirmed
+// real names via this project's own symbol-table inspection,
+// 2026-08-20. Extend this list (and add the matching
+// ppc_import_<library>_<function> shim) whenever a new real hang is
+// traced to another one of these.
+bool is_known_data_import_function(const std::string &library, const std::string &function) {
+    if (library != "coreinit") return false;
+    return function == "MEMAllocFromDefaultHeap" || function == "MEMAllocFromDefaultHeapEx" ||
+           function == "MEMFreeToDefaultHeap";
+}
+
 constexpr int STT_FUNC = 2;
 constexpr uint32_t SHT_NOBITS = 8;
 constexpr uint32_t SHT_RELA = 4;
@@ -293,6 +309,21 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         }
         sym_types[i] = st_info & 0xf;
         sym_values[i] = st_value;
+
+        // Real data-import detection (see DataImportSymbol's own comment)
+        // -- must run before the .text-only filter below, since these
+        // real symbols live in a completely different section.
+        if (sym_section_names[i].rfind(".dimport_", 0) == 0) {
+            std::string lib = strip_rpl_suffix(sym_section_names[i].substr(sizeof(".dimport_") - 1));
+            if (is_known_data_import_function(lib, all_sym_names[i])) {
+                DataImportSymbol dis;
+                dis.library = lib;
+                dis.function = all_sym_names[i];
+                dis.section = sym_section_names[i];
+                dis.st_value = st_value;
+                out.data_import_symbols.push_back(dis);
+            }
+        }
 
         int type = st_info & 0xf;
         if (st_shndx != (uint16_t)text_idx) continue;
@@ -573,6 +604,42 @@ void find_import_trampolines(ElfImage &img) {
         if (is_lis && is_lo_half && is_mtctr && is_bctr) {
             img.import_trampolines[addr] = {reloc.import_library, reloc.import_function};
         }
+    }
+}
+
+void resolve_data_imports(ElfImage &img) {
+    // Real, reserved sentinel range for "fake" dispatchable function
+    // addresses -- see DataImport's own comment. Chosen well above any
+    // real address this project's own real targets use (.text tops out
+    // in the low tens of megabytes for the actual Skylanders binary;
+    // 0xD1000000 has no real, plausible chance of colliding with a real
+    // .text function address in any binary this project targets).
+    uint32_t next_fake_addr = 0xD1000000u;
+    std::map<std::string, uint32_t> assigned;  // "library_function" -> already-assigned fake_addr
+    for (const auto &sym : img.data_import_symbols) {
+        auto base_it = img.global_section_base.find(sym.section);
+        if (base_it == img.global_section_base.end()) continue;  // section never referenced elsewhere
+        uint32_t sec_real_base = 0;
+        auto addr_it = img.section_real_addr.find(sym.section);
+        if (addr_it != img.section_real_addr.end()) sec_real_base = addr_it->second;
+        uint32_t slot_addr = base_it->second + (sym.st_value - sec_real_base);
+
+        std::string key = sym.library + "_" + sym.function;
+        uint32_t fake_addr;
+        auto assigned_it = assigned.find(key);
+        if (assigned_it != assigned.end()) {
+            fake_addr = assigned_it->second;
+        } else {
+            fake_addr = next_fake_addr;
+            next_fake_addr += 4;
+            assigned[key] = fake_addr;
+        }
+
+        DataImport di;
+        di.fake_addr = fake_addr;
+        di.target.library = sym.library;
+        di.target.function = sym.function;
+        img.data_imports[slot_addr] = di;
     }
 }
 
