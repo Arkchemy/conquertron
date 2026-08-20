@@ -219,6 +219,7 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         const uint8_t *sh = shdr(i);
         uint32_t name_off = rd_be32(sh + 0);
         uint32_t sh_type = rd_be32(sh + 4);
+        uint32_t sh_size = rd_be32(sh + 20);
         std::string name = secname(name_off);
         if (name == ".text") text_idx = i;
         if (sh_type == 2 /* SHT_SYMTAB */) symtab_idx = i;
@@ -229,6 +230,12 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         // lookups can read constants directly out of e.g. .rodata.cst4.
         if (sh_type != 0 && sh_type != SHT_NOBITS && !name.empty()) {
             out.section_bytes[name] = section_data[i];
+        }
+        // Real declared size of every named section, .bss included -- see
+        // ElfImage::section_sizes' own comment on why this can't just be
+        // derived from section_bytes.
+        if (sh_type != 0 && !name.empty()) {
+            out.section_sizes[name] = sh_size;
         }
     }
 
@@ -461,9 +468,31 @@ void assign_global_addrs(ElfImage &img) {
         if (img.global_section_base.count(section)) continue;
 
         img.global_section_base[section] = next_addr;
+        // Real bug, found 2026-08-20 debugging a real hang: section_bytes
+        // is deliberately empty for .bss (SHT_NOBITS has no file content
+        // to copy -- see load_elf), so sizing purely off it silently gave
+        // every .bss-only section just the 256-byte placeholder minimum
+        // below, no matter how big it actually declared itself in the
+        // section header. A real, complex GHS-compiled game's .bss is
+        // nowhere near that small (confirmed: this project's own
+        // Skylanders target has a real, ~622KB .bss) -- every global that
+        // didn't fit was silently aliasing on top of another, corrupting
+        // real cached state (e.g. a lazily-cached heap handle read back as
+        // 0/garbage) without ever touching a single genuinely-unhandled
+        // instruction or a bounds check, so it never surfaced as a
+        // compile error or a crash, only as wrong runtime behavior. Now
+        // uses the section's real, declared sh_size (section_sizes,
+        // populated for every named section including .bss) as the real
+        // size, falling back to section_bytes/256 only for a section this
+        // real binary's own section headers never declared at all.
         size_t sz = 256;
-        auto it = img.section_bytes.find(section);
-        if (it != img.section_bytes.end() && it->second.size() > sz) sz = it->second.size();
+        auto sz_it = img.section_sizes.find(section);
+        if (sz_it != img.section_sizes.end() && sz_it->second > sz) {
+            sz = sz_it->second;
+        } else {
+            auto it = img.section_bytes.find(section);
+            if (it != img.section_bytes.end() && it->second.size() > sz) sz = it->second.size();
+        }
         next_addr += (uint32_t)((sz + 15) & ~15u); // round up to 16
     }
 }

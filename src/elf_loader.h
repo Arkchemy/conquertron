@@ -102,6 +102,16 @@ struct ElfImage {
     // read the actual constant a DataReloc points at.
     std::map<std::string, std::vector<uint8_t>> section_bytes;
 
+    // Real, declared sh_size of every named section, including SHT_NOBITS
+    // (.bss) -- section_bytes above is deliberately empty for .bss (it has
+    // no file content to copy), so this is the only place its true real
+    // size is ever recorded. assign_global_addrs needs this: relying on
+    // section_bytes[section].size() alone silently gives every .bss-only
+    // section just the 256-byte placeholder minimum regardless of its real
+    // size, aliasing every real global inside a section bigger than that
+    // on top of each other.
+    std::map<std::string, uint32_t> section_sizes;
+
     // Synthetic base address (an offset into PpcContext::mem) assigned to
     // each *mutable* section referenced by a DataReloc (typically .data or
     // .bss) -- read-only sections (.rodata*) don't need one, since codegen
