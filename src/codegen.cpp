@@ -262,7 +262,9 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
     // within it) precisely, not just "some caller of this helper".
     out << "  g_ppc_last_caller_lr = ctx->lr;\n";
     out << "  g_ppc_current_pc = 0x" << std::hex << func.addr << std::dec << "u; g_ppc_fn_call_count++;\n";
-    out << "  if (g_ppc_current_pc == g_ppc_watch_pc) { g_ppc_watch_r3 = ctx->r[3]; g_ppc_watch_r4 = ctx->r[4]; g_ppc_watch_r5 = ctx->r[5]; g_ppc_watch_r6 = ctx->r[6]; }\n";
+    out << "  for (int __w = 0; __w < BRAMBLE_WATCH_SLOTS; __w++) { if (g_ppc_current_pc == g_ppc_watch[__w].pc) { "
+           "g_ppc_watch[__w].r3 = ctx->r[3]; g_ppc_watch[__w].r4 = ctx->r[4]; g_ppc_watch[__w].r5 = ctx->r[5]; g_ppc_watch[__w].r6 = ctx->r[6]; "
+           "g_ppc_watch[__w].hit_count++; g_ppc_watch[__w].last_hit_call_count = g_ppc_fn_call_count; } }\n";
 
     for (size_t i = 0; i < insns.size(); i++) {
         const cs_insn &insn = insns[i];

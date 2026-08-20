@@ -87,20 +87,37 @@ volatile uint32_t g_ppc_last_caller_lr = 0;
  * this one has no internal call to any other traced function (a pure
  * pointer-chase loop over its own hash-bucket linked list), so nothing
  * else in the existing diagnostic set can show the real 'this'/item/
- * bucket-index values it's looping on. Set g_ppc_watch_pc to the real
- * target function's address; codegen.cpp's function prologue compares
- * against it on every call and snapshots r3-r6 when it matches. Cheap
- * enough (one comparison per real function call) to leave compiled in
- * permanently rather than special-cased per hunt, like g_ppc_current_pc
- * itself. */
+ * bucket-index values it's looping on. codegen.cpp's function prologue
+ * checks every one of BRAMBLE_WATCH_SLOTS real addresses on every real
+ * function call and snapshots r3-r6 (plus the real g_ppc_fn_call_count
+ * at that moment, and a running hit count) into whichever slot's own
+ * `pc` field matches -- cheap enough (a handful of comparisons per
+ * real function call) to leave compiled in permanently.
+ *
+ * Widened from a single watch point to 4 slots the same day, once the
+ * first hit (a NULL `this` reaching `igStringPool::remove`) raised a
+ * new, more specific question needing several real call sites'
+ * arguments correlated *together* in one real run: does
+ * `Core::igStringPool::bootstrapInitialize` (the real singleton
+ * constructor) actually run before `Core::igStringPool::getDefault`
+ * (the real accessor) is ever called, and what does getDefault() end
+ * up returning each time. */
+#define BRAMBLE_WATCH_SLOTS 4
+typedef struct {
+    volatile uint32_t pc;         /* 0xFFFFFFFF = unused/never matches */
+    volatile uint32_t r3, r4, r5, r6;
+    volatile uint32_t hit_count;
+    volatile uint64_t last_hit_call_count; /* g_ppc_fn_call_count at last hit, for ordering slots against each other */
+} BrambleWatchSlot;
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ppc_watch_pc = 0xFFFFFFFFu;
-#ifdef __GNUC__
-__attribute__((weak))
-#endif
-volatile uint32_t g_ppc_watch_r3 = 0, g_ppc_watch_r4 = 0, g_ppc_watch_r5 = 0, g_ppc_watch_r6 = 0;
+BrambleWatchSlot g_ppc_watch[BRAMBLE_WATCH_SLOTS] = {
+    {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
+    {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
+    {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
+    {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
+};
 
 /*
  * Minimal PowerPC execution context used by recompiler-generated C code.
