@@ -251,6 +251,16 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
     // real 10-minute smoke test run produced zero FSOpenFile/unhandled-stub
     // log lines, leaving no way to tell whether the game thread was making
     // real progress through unrelated code or genuinely stuck in one place.
+    // Real, cheap "who called this" tracker added 2026-08-20 alongside
+    // g_ppc_current_pc above -- found necessary hunting a real hang that
+    // froze on a tiny, universally-shared linker helper (a real register-
+    // spill routine called from hundreds of unrelated real sites): the PC
+    // alone only names *that* helper, not which of its many real callers
+    // is actually the one that hung. ctx->lr at function entry is the
+    // real return address the calling `bl` set, i.e. the exact real
+    // address to resume the *caller* at -- naming the caller (and where
+    // within it) precisely, not just "some caller of this helper".
+    out << "  g_ppc_last_caller_lr = ctx->lr;\n";
     out << "  g_ppc_current_pc = 0x" << std::hex << func.addr << std::dec << "u; g_ppc_fn_call_count++;\n";
 
     for (size_t i = 0; i < insns.size(); i++) {

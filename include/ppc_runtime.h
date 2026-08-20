@@ -70,6 +70,16 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_static_init_index = 0xFFFFFFFFu;
 
+/* Real "who called the currently-executing function" tracker -- see
+ * codegen.cpp's own comment on why g_ppc_current_pc alone isn't enough
+ * once a hang is inside a tiny, universally-shared helper (a real
+ * register-spill routine, in the specific real case this was added
+ * for) that hundreds of unrelated call sites all call identically. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_last_caller_lr = 0;
+
 /*
  * Minimal PowerPC execution context used by recompiler-generated C code.
  *
