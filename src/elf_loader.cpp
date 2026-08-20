@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 
@@ -513,19 +514,40 @@ void assign_global_addrs(ElfImage &img) {
         // real cached state (e.g. a lazily-cached heap handle read back as
         // 0/garbage) without ever touching a single genuinely-unhandled
         // instruction or a bounds check, so it never surfaced as a
-        // compile error or a crash, only as wrong runtime behavior. Now
-        // uses the section's real, declared sh_size (section_sizes,
-        // populated for every named section including .bss) as the real
-        // size, falling back to section_bytes/256 only for a section this
-        // real binary's own section headers never declared at all.
+        // compile error or a crash, only as wrong runtime behavior.
+        //
+        // Real follow-up bug, found and fixed the same day: preferring
+        // section_sizes (real declared sh_size) unconditionally over
+        // section_bytes.size() -- the fix above -- swapped which one was
+        // silently wrong. For a real RPL-zlib-compressed section (see
+        // read_section_bytes/SHF_RPL_ZLIB), sh_size is the section's real
+        // *compressed* on-disk size, not its real decompressed content
+        // size -- section_bytes[section].size() (the real, already-
+        // decompressed byte count) is the one true size there. Confirmed
+        // real and not hypothetical: this binary's real .data section
+        // declares sh_size=0xbe05 (48,645 bytes) but its real decompressed
+        // content is 106,732 bytes -- using sh_size alone under-reserved
+        // .data's synthetic space by more than half, letting its own real
+        // tail content spill into whatever section was assigned space
+        // right after it (confirmed as the real, remaining cause of a
+        // hang that survived the earlier .bss-size and DataReloc-addend
+        // fixes: a real .rodata-looking float constant, physically
+        // shaped as .data's own real tail content past where its
+        // under-sized synthetic window ended, silently overwriting part
+        // of a completely unrelated .bss struct that happened to be
+        // assigned space immediately afterward). The real, correct size
+        // for any section that has real file content is always
+        // section_bytes[section].size() -- section_sizes only needs to
+        // step in for a section like .bss that has none at all. Take
+        // whichever of the two is *larger*, not "prefer one, only fall
+        // back to the other if it's completely absent" -- that ordering
+        // is exactly what caused this bug for compressed sections that
+        // technically have *an* sh_size, just the wrong one.
         size_t sz = 256;
         auto sz_it = img.section_sizes.find(section);
-        if (sz_it != img.section_sizes.end() && sz_it->second > sz) {
-            sz = sz_it->second;
-        } else {
-            auto it = img.section_bytes.find(section);
-            if (it != img.section_bytes.end() && it->second.size() > sz) sz = it->second.size();
-        }
+        if (sz_it != img.section_sizes.end() && sz_it->second > sz) sz = sz_it->second;
+        auto bytes_it = img.section_bytes.find(section);
+        if (bytes_it != img.section_bytes.end() && bytes_it->second.size() > sz) sz = bytes_it->second.size();
         next_addr += (uint32_t)((sz + 15) & ~15u); // round up to 16
     }
 }
