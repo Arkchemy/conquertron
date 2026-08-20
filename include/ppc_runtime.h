@@ -276,6 +276,19 @@ static inline uint8_t ppc_load_u8(const PpcContext *ctx, uint32_t addr) {
 }
 
 static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
+    // Real gap found and fixed 2026-08-20: g_ppc_watch_store_addr's check
+    // only lived in ppc_store_u32, so it silently missed real writes made
+    // one byte at a time -- confirmed real, not hypothetical:
+    // ppc_init_globals (see main.cpp) copies every section's real initial
+    // byte content via exactly this function, one ppc_store_u8 call per
+    // real non-zero byte, and a watched address that only ever gets
+    // written this way would show zero hits despite genuinely holding
+    // real, non-zero initial content. Same real address, any of its 4
+    // real bytes.
+    if (addr >= g_ppc_watch_store_addr && addr < g_ppc_watch_store_addr + 4) {
+        ppc_debug_watch(0xf0000003u, ((addr - g_ppc_watch_store_addr) << 8) | val);
+        ppc_debug_watch(0xf0000004u, g_ppc_current_pc);
+    }
     ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)] = val;
 }
 
