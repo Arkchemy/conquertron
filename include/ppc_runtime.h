@@ -80,6 +80,28 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_last_caller_lr = 0;
 
+/* Generic "dump r3-r6 the instant a specific real function is entered"
+ * mechanism, added 2026-08-20 hunting a real hang inside
+ * Core::igStringPool::remove: g_ppc_current_pc alone says *that* the
+ * function was entered, not what real arguments it was called with, and
+ * this one has no internal call to any other traced function (a pure
+ * pointer-chase loop over its own hash-bucket linked list), so nothing
+ * else in the existing diagnostic set can show the real 'this'/item/
+ * bucket-index values it's looping on. Set g_ppc_watch_pc to the real
+ * target function's address; codegen.cpp's function prologue compares
+ * against it on every call and snapshots r3-r6 when it matches. Cheap
+ * enough (one comparison per real function call) to leave compiled in
+ * permanently rather than special-cased per hunt, like g_ppc_current_pc
+ * itself. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_watch_pc = 0xFFFFFFFFu;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_watch_r3 = 0, g_ppc_watch_r4 = 0, g_ppc_watch_r5 = 0, g_ppc_watch_r6 = 0;
+
 /*
  * Minimal PowerPC execution context used by recompiler-generated C code.
  *
