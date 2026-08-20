@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <set>
 #include <sstream>
+#include <vector>
 
 #include "codegen.h"
 #include "disassembler.h"
@@ -187,6 +189,40 @@ int main(int argc, char **argv) {
                 if (bytes[i] == 0) continue;  // ctx->mem starts zeroed; skip no-op stores
                 out << "  ppc_store_u8(ctx, " << (entry.second + (uint32_t)i) << "u, " << (unsigned)bytes[i]
                     << ");\n";
+            }
+        }
+        out << "}\n\n";
+
+        // Real, previously-missing piece found 2026-08-20 chasing a real
+        // hang: GHS emits one real "__sti_<len>_<sourcefile>_<hash>"
+        // function per translation unit that has C++ global/static
+        // objects needing construction (the real Skylanders binary has
+        // 114 of them) -- real Cafe OS's own process startup calls every
+        // one of these before the game's actual entry point runs, the
+        // same job libc's __libc_csu_init/.init_array walk does on other
+        // platforms. This project's own pipeline never did that at all:
+        // main.c called the game's entry point directly, so every real
+        // C++ static/global object across the whole binary was reaching
+        // gameplay code completely unconstructed -- confirmed as a real,
+        // concrete gap by hardware-tracing one specific real symptom (a
+        // lazily-cached heap handle inside Core::igMemoryContext reading
+        // back 0 with no code anywhere in the whole 19,622-function
+        // binary ever found to write it) back to this. Real, honest
+        // limitation: real cross-translation-unit static-initialization
+        // order isn't formally specified by C++ and Cafe OS's actual
+        // real link-time order isn't recovered here -- these run in
+        // address order instead, a reasonable approximation, not a
+        // guarantee of matching real behavior order-for-order.
+        out << "void ppc_run_static_initializers(PpcContext *ctx) {\n";
+        {
+            std::vector<const recomp::ElfFunction *> sti_fns;
+            for (const auto &fn : img.functions) {
+                if (fn.name.rfind("__sti_", 0) == 0) sti_fns.push_back(&fn);
+            }
+            std::sort(sti_fns.begin(), sti_fns.end(),
+                      [](const recomp::ElfFunction *a, const recomp::ElfFunction *b) { return a->addr < b->addr; });
+            for (const recomp::ElfFunction *fn : sti_fns) {
+                out << "  ppc_" << fn->name << "(ctx);\n";
             }
         }
         out << "}\n\n";
