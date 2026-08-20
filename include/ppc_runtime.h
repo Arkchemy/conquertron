@@ -237,7 +237,33 @@ static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+/* Real, general-purpose "watch every store to one specific real address"
+ * mechanism, added 2026-08-20 alongside ppc_debug_watch below (same real
+ * extern/shared-definition pattern, see cafeos_state.c) -- found
+ * necessary chasing a real, confirmed heap-corruption bug: a malloc
+ * free-list head field read back 0xFFFFFFFF instead of a real address,
+ * and grepping generated source by hand for "whoever writes this
+ * specific computed address" isn't reliable (the same real address can
+ * be split into a `lis`+offset pair in many different, equally valid
+ * ways across different real call sites -- there's no single literal
+ * string to grep for). Every 32-bit store in the entire recompiled
+ * program already goes through this one function, making it the exact
+ * right choke point: set g_ppc_watch_store_addr to the real address of
+ * interest and every write to it fires ppc_debug_watch with the value
+ * being written, tagged so it's distinguishable from other watch call
+ * sites -- reveals *who* writes a bad value somewhere in ~19,000
+ * functions without needing to guess which one to hand-instrument. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_watch_store_addr = 0xFFFFFFFFu;
+static inline void ppc_debug_watch(uint32_t pc, uint32_t value); /* real definition below */
+
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
+    if (addr == g_ppc_watch_store_addr) {
+        ppc_debug_watch(0xf0000001u, val);              /* the value being written */
+        ppc_debug_watch(0xf0000002u, g_ppc_current_pc);  /* which real function is doing it */
+    }
     uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     p[0] = (uint8_t)(val >> 24);
     p[1] = (uint8_t)(val >> 16);
