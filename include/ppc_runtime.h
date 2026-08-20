@@ -53,6 +53,23 @@ __attribute__((weak))
 #endif
 volatile uint64_t g_ppc_fn_call_count = 0;
 
+/* Same real reasoning as g_ppc_current_pc above, added 2026-08-20 for a
+ * real, specific need it doesn't cover on its own: ppc_run_static_
+ * initializers (see recomp's own main.cpp) calls up to 114 real,
+ * completely untested C++ static initializers in a flat sequence -- if
+ * one of them genuinely hangs, g_ppc_current_pc alone only shows the
+ * last *recompiled* function entered, which is often a tiny, widely-
+ * shared linker helper (e.g. a real "_savegprN"/"_restgprN"-style
+ * register-spill routine used by hundreds of unrelated call sites) that
+ * gives no clue which of the 114 initializers is actually stuck. This
+ * index is set right before each of the 114 calls, so combined with
+ * g_ppc_current_pc it answers "stuck inside initializer #N specifically"
+ * instead of just "stuck somewhere". */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_static_init_index = 0xFFFFFFFFu;
+
 /*
  * Minimal PowerPC execution context used by recompiler-generated C code.
  *

@@ -221,8 +221,15 @@ int main(int argc, char **argv) {
             }
             std::sort(sti_fns.begin(), sti_fns.end(),
                       [](const recomp::ElfFunction *a, const recomp::ElfFunction *b) { return a->addr < b->addr; });
+            // See g_ppc_static_init_index's own comment in ppc_runtime.h --
+            // set right before each call so a hang inside one of these is
+            // pinpointable by index, not just by whichever tiny, widely-
+            // shared linker helper g_ppc_current_pc happens to still show.
+            uint32_t idx = 0;
             for (const recomp::ElfFunction *fn : sti_fns) {
+                out << "  g_ppc_static_init_index = " << idx << "u; /* " << fn->name << " */\n";
                 out << "  ppc_" << fn->name << "(ctx);\n";
+                idx++;
             }
         }
         out << "}\n\n";
