@@ -1,0 +1,118 @@
+Arkchemy Free & Source-Available License v2.0
+Copyright (c) 2026 Aaron ("Aaronateataco", aaron@aaronworld.uk)
+
+This is a permission-required license: unlike a standard open-source
+license, using, copying, modifying, merging, publishing, distributing,
+or sub-licensing this Software or any derivative work built on it
+requires the express, prior permission of Aaron (aaron@aaronworld.uk),
+the owner of this project ("Arkchemy", formerly "Arkchemy", or whatever
+name it operates under at any given time), in addition to the
+conditions below. Simply finding this repository public does not
+grant permission to do any of the above.
+
+1. PERMISSION REQUIRED
+   No use, copying, modification, merging, publication, distribution,
+   or sub-licensing of the Software, in source or binary form, or of
+   any derivative/fork/port of it, is authorized without Aaron's prior,
+   express permission. Contact aaron@aaronworld.uk to request it.
+
+2. PROMINENT ATTRIBUTION
+   Where permission is granted, all copies, forks, ports, or derivative
+   works -- whether distributed in source or binary form -- must
+   prominently credit "Arkchemy" (or whatever name this project
+   operates under at the time) as the original project, and must
+   individually credit every contributor listed in this repository's
+   own CONTRIBUTORS.csv (root of the repository) alongside their
+   stated role. This credit must be clearly visible in the
+   repository's readme, the tool's "About"/"Credits" screen, or an
+   equivalent, easily accessible user-visible location.
+
+3. ABSOLUTE PROHIBITION OF SALES
+   Neither the Software nor any fork, port, or derivative work built
+   upon it may be sold, commercialized, placed behind a paywall, or
+   distributed via any mechanism that requires payment, paid
+   subscriptions, or ads-for-access. Access to the software and its
+   features must remain 100% free of charge. This applies equally to
+   any online service (e.g. "Skylanders Online" or any other
+   Arkchemy-operated mode/service) built on this Software: no feature
+   may ever be paywalled or made sponsor-exclusive.
+
+4. VOLUNTARY SUPPORT EXCEPTION
+   Notwithstanding Section 3, voluntary donation methods (a QR code in
+   an in-app/in-service lobby, GitHub Sponsors, Ko-fi/Patreon links, or
+   similar "support the project" mechanisms) are explicitly permitted
+   and confer no gameplay or feature advantage of any kind.
+
+5. SHARE-ALIKE & SOURCE AVAILABILITY (where permission is granted)
+   Any fork, port, or derivative work this license's permission is
+   granted for must itself be distributed under this exact same
+   license and must not be re-licensed. Any publicly distributed
+   binary or compiled form of the Software or its derivatives must be
+   accompanied by a publicly accessible link to its complete, unedited
+   source code.
+
+6. NO REDISTRIBUTION OF GENERATED GAME OUTPUT
+   This Software is a static recompilation tool: it transforms a
+   user's own, legally-obtained copy of copyrighted game software into
+   a form that runs on different hardware. The Software itself
+   contains no assets, code, or other content taken from any such
+   game, and no project operated under this license hosts or
+   distributes any such copyrighted game content -- it is injected
+   locally by each user from their own legal copy. Any `.nro`, ROM,
+   asset archive, or other output produced by running this Software
+   against a copyrighted game is NOT covered by this license and is
+   NOT authorized for redistribution -- doing so is copyright
+   infringement, independent of and in addition to whatever
+   restrictions the original game's copyright holder imposes, and
+   independent of and in addition to whatever separate terms the
+   relevant game publisher (e.g. Activision, for the Skylanders
+   series) imposes on its own software, which every user remains
+   separately responsible for complying with. This Software is
+   provided solely for personal, educational, and interoperability
+   purposes against games the user already legitimately owns.
+
+7. TICOHQ -- CONDITIONAL, NOT ABSOLUTE, EXCLUSION
+   The tico project (ticoverse.com), ticohq, and their members are not
+   granted permission to use, integrate, fork, or build upon this
+   Software or any derivative work of it, UNLESS ticohq's own
+   corresponding code is itself made available for others to use, with
+   credit, under terms ticohq grants with Aaron's/Arkchemy's permission
+   -- i.e. reciprocal openness is required before this exclusion is
+   lifted for ticohq specifically. This exclusion does not apply to
+   this project's own use of separately-licensed third-party emulation
+   cores or libraries, which remain governed by their own real,
+   independent licenses regardless of this section.
+
+8. THIRD-PARTY LICENSES
+   Where this Software depends on separately-licensed third-party
+   components (e.g. emulation cores, libraries), those components
+   remain governed by their own real, independent licenses, which this
+   license does not override or supersede.
+
+9. LICENSE MAY CHANGE
+   This license may be revised in the future at Aaron's/Arkchemy's
+   discretion. Continued use of the Software, or of any Arkchemy
+   project/service/mode (including fully offline modes), requires
+   agreement to whichever version of this license is current at the
+   time of use.
+
+10. LICENSE PRESERVATION
+   This complete license text must be included in all copies,
+   substantial portions, or derivative works of the Software that
+   permission has been granted for.
+
+11. CONFIDENTIAL PROJECT PLANNING MATERIAL
+   This project's internal planning documentation (currently hosted on
+   Notion) is confidential and is NOT covered by the permissions in
+   this license: no part of it may be copied, quoted, redistributed,
+   or shared outside of individuals granted direct access by Aaron,
+   regardless of how that access was granted (development team
+   membership, or a research-access invite extended to journalists or
+   Skylanders content creators/researchers). Read access does not
+   imply any right to republish or redistribute its contents. This
+   confidentiality obligation survives any change to this license
+   under Section 9 and applies independently of it.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM,
+DAMAGES, OR OTHER LIABILITY ARISING FROM USE OF THE SOFTWARE.
