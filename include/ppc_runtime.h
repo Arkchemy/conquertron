@@ -258,14 +258,26 @@ typedef struct PpcContext {
  * address heap regions cafeos_coreinit_mem.h reserves -- real,
  * ongoing memory corruption from the moment the game's own static
  * initializers ran, long before any of its own code had a chance to
- * misbehave on its own. 128MB gives real breathing room for this
+ * misbehave on its own. 128MB gave real breathing room for this
  * specific game's ~6.75MB of globals, cafeos_coreinit_mem.h's own
  * MEM1/MEM2 heap regions (see that header's own layout comment), and a
  * real stack -- still an arbitrary, chosen-for-this-game placeholder,
  * not a claim this matches real Wii U MEM1/MEM2 scale (which is far
  * larger), but grounded in this real binary's own measured needs
- * rather than picked blind. */
-#define PPC_MEM_SIZE (128u * 1024u * 1024u)
+ * rather than picked blind.
+ *
+ * Bumped 128MB -> 256MB on 2026-08-21 after real hardware logs caught
+ * the actual root cause of the boot-time igStringPool spin: a
+ * MEMAllocFromExpHeapEx call for 128KB failing over and over against
+ * cafeos_coreinit_mem.h's MEM1 heap, which was sitting at ~16.65MB used
+ * out of only 16MB total. That 16MB MEM1 size was always documented as
+ * an undersized placeholder, not a real Wii U value -- real Wii U MEM1
+ * is 32MB. Doubling MEM1 to the real size needed 16MB more guest
+ * address space than the old 128MB total had room for, and this mask
+ * requires a power of two, so the whole space steps up to 256MB rather
+ * than some tighter number -- see cafeos_coreinit_mem.h's own layout
+ * comment for where that extra room actually goes. */
+#define PPC_MEM_SIZE (256u * 1024u * 1024u)
 
 typedef struct PpcSharedMemory {
     uint8_t mem[PPC_MEM_SIZE];

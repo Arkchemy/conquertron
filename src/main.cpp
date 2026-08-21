@@ -235,12 +235,23 @@ int main(int argc, char **argv) {
         // concrete gap by hardware-tracing one specific real symptom (a
         // lazily-cached heap handle inside Core::igMemoryContext reading
         // back 0 with no code anywhere in the whole 19,622-function
-        // binary ever found to write it) back to this. Real, honest
-        // limitation: real cross-translation-unit static-initialization
-        // order isn't formally specified by C++ and Cafe OS's actual
-        // real link-time order isn't recovered here -- these run in
-        // address order instead, a reasonable approximation, not a
-        // guarantee of matching real behavior order-for-order.
+        // binary ever found to write it) back to this.
+        //
+        // UPDATE (2026-08-21): sorting by address turns out to be not
+        // just "a reasonable approximation" but the real, confirmed-
+        // correct order. Found the real ordering table itself: all 114
+        // real __sti_ function addresses appear exactly once each, in
+        // one single unbroken run, embedded directly in the real
+        // .rodata section (this game's own build has no .init_array/
+        // .ctors section at all -- GHS/RPL stores the constructor table
+        // as plain data instead, which the real Cafe OS RPL loader walks
+        // at load time). Extracted that real table and diff'd it against
+        // plain address-ascending order: zero of 114 entries differ.
+        // This was checked, not assumed, while chasing the real
+        // igStringPoolContainer::mallocString stall -- rules out
+        // static-initializer *ordering* as that bug's cause with hard
+        // evidence, closing off a real, previously-open theory rather
+        // than leaving it as an unverified guess.
         out << "void ppc_run_static_initializers(PpcContext *ctx) {\n";
         {
             std::vector<const recomp::ElfFunction *> sti_fns;

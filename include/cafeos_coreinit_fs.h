@@ -139,7 +139,7 @@ static inline void ppc_fs_translate_path(const char *guest_path, char *out, size
  * that short of this. `extern`, not `static`, for the same real
  * multi-translation-unit reason as everything else in this header --
  * shared, single definition lives in cafeos_state.c. */
-typedef void (*ppc_fs_open_log_fn)(const char *guest_path, const char *real_path, int found);
+typedef void (*ppc_fs_open_log_fn)(const char *guest_path, const char *real_path, const char *mode, int found, uint32_t handle, uint32_t handles_in_use);
 extern ppc_fs_open_log_fn g_ppc_fs_open_log; /* real definition in cafeos_state.c -- see its own file comment */
 static inline void ppc_fs_set_open_log(ppc_fs_open_log_fn fn) { g_ppc_fs_open_log = fn; }
 
@@ -153,6 +153,18 @@ static inline uint32_t ppc_fs_alloc_handle(FILE *f) {
         }
     }
     return 0;
+}
+
+/* Diagnostic only -- lets a log line show whether a failed alloc was
+ * really pool exhaustion (BRAMBLE_FS_MAX_HANDLES all in use, e.g. from
+ * real game code that never calls FSCloseFile on some path) versus
+ * something else. */
+static inline uint32_t ppc_fs_handles_in_use(void) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < BRAMBLE_FS_MAX_HANDLES; i++) {
+        if (g_ppc_fs_files[i]) n++;
+    }
+    return n;
 }
 
 static inline FILE *ppc_fs_get_handle(uint32_t handle) {
@@ -253,20 +265,22 @@ static inline void ppc_import_coreinit_FSOpenFile(PpcContext *ctx) {
     ppc_fs_translate_path(guest_path, real_path, sizeof(real_path));
 
     FILE *f = fopen(real_path, mode);
-    if (g_ppc_fs_open_log) g_ppc_fs_open_log(guest_path, real_path, f != NULL);
     if (!f) {
+        if (g_ppc_fs_open_log) g_ppc_fs_open_log(guest_path, real_path, mode, 0, 0, ppc_fs_handles_in_use());
         g_ppc_fs_last_error = BRAMBLE_FS_STATUS_NOT_FOUND;
         ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
         return;
     }
     uint32_t handle = ppc_fs_alloc_handle(f);
     if (handle == 0) {
+        if (g_ppc_fs_open_log) g_ppc_fs_open_log(guest_path, real_path, mode, 1, 0, ppc_fs_handles_in_use());
         fclose(f);
         g_ppc_fs_last_error = BRAMBLE_FS_STATUS_ACCESS_ERROR;
         ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_ACCESS_ERROR;
         return;
     }
     ppc_store_u32(ctx, ctx->r[7], handle);
+    if (g_ppc_fs_open_log) g_ppc_fs_open_log(guest_path, real_path, mode, 1, handle, ppc_fs_handles_in_use());
     g_ppc_fs_last_error = BRAMBLE_FS_STATUS_OK;
     ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
 }
