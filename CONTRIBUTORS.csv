@@ -1,12 +1,12 @@
-name,role,contact,discord_id,github_url,element,repos
-Aaronateataco,Founder & Lead Developer,n/a,1534947437880279085,https://github.com/Aaronateataco,Light,4
-Claude,"AI Development Assistant (code, research, testing/debugging support)",n/a,n/a,https://github.com/claude,n/a,4
-NefariousTechSupport,Community Research -- Alchemy Engine Reverse Engineering,n/a,508375441267228673,n/a,n/a,2
-winnernombre,Community Research & Project Direction,n/a,350989977460408321,n/a,Tech,2
-gutterbeasts,Special Thanks -- Community Research,n/a,1267971835413401664,n/a,Magic,1
-bonesinmysoup,Special Thanks -- Community Research,n/a,731587862423797762,n/a,n/a,1
-supersamus02,Special Thanks -- Community Research,n/a,402569493747990528,https://github.com/SuperSamus,n/a,1
-jensj56,Special Thanks -- Community Research,n/a,368385351078772736,n/a,n/a,1
-jackthebloke,Special Thanks -- Community Research,n/a,1035213830579568650,n/a,n/a,1
-LG-RZ,Special Thanks -- Community Research,n/a,n/a,https://github.com/LG-RZ,n/a,1
-retexcraft,Special Thanks -- Community Research,n/a,718520146460803145,n/a,n/a,1
+name,role,contact,discord_id,github_url,element,repos,section
+Aaronateataco,Founder & Lead Developer,n/a,1534947437880279085,https://github.com/Aaronateataco,Light,4,n/a
+Claude,"AI Development Assistant (code, research, testing/debugging support)",n/a,n/a,https://github.com/claude,Air,4,n/a
+NefariousTechSupport,Community Research -- Alchemy Engine Reverse Engineering,n/a,508375441267228673,n/a,n/a,2,special-thanks
+winnernombre,Community Research & Project Direction,n/a,350989977460408321,n/a,Tech,2,special-thanks
+gutterbeasts,Special Thanks -- Community Research,n/a,1267971835413401664,n/a,Magic,1,n/a
+bonesinmysoup,Special Thanks -- Community Research,n/a,731587862423797762,n/a,n/a,1,n/a
+supersamus02,Special Thanks -- Community Research,n/a,402569493747990528,https://github.com/SuperSamus,n/a,1,n/a
+jensj56,Special Thanks -- Community Research,n/a,368385351078772736,n/a,n/a,1,n/a
+jackthebloke,Special Thanks -- Community Research,n/a,1035213830579568650,n/a,n/a,1,n/a
+LG-RZ,Special Thanks -- Community Research,n/a,n/a,https://github.com/LG-RZ,n/a,1,n/a
+retexcraft,Special Thanks -- Community Research,n/a,718520146460803145,n/a,n/a,1,n/a
