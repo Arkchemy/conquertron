@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_GHS_RUNTIME_H
-#define BRAMBLE_CAFEOS_GHS_RUNTIME_H
+#ifndef ARKCHEMY_CAFEOS_GHS_RUNTIME_H
+#define ARKCHEMY_CAFEOS_GHS_RUNTIME_H
 
 #include "ppc_runtime.h"
 
@@ -76,7 +76,7 @@ static inline void ppc___dotsyscall(PpcContext *ctx) {
 /*
  * __cpp_exception_init: real GHS C++ runtime primitive, called once
  * during real program startup (confirmed: this project's own real
- * `ppc_bramble_game_entry` -- the actual game's real entry point --
+ * `ppc_arkchemy_game_entry` -- the actual game's real entry point --
  * calls it directly, early, during its own startup sequence) to set up
  * the compiler's internal C++ exception-handling tables. This
  * project's own recompiled code has no real C++ exception model at
@@ -93,4 +93,4 @@ static inline void ppc___dotsyscall(PpcContext *ctx) {
  */
 static inline void ppc___cpp_exception_init(PpcContext *ctx) { (void)ctx; }
 
-#endif /* BRAMBLE_CAFEOS_GHS_RUNTIME_H */
+#endif /* ARKCHEMY_CAFEOS_GHS_RUNTIME_H */

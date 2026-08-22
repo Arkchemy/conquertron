@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_VPAD_H
-#define BRAMBLE_CAFEOS_VPAD_H
+#ifndef ARKCHEMY_CAFEOS_VPAD_H
+#define ARKCHEMY_CAFEOS_VPAD_H
 
 #include "ppc_runtime.h"
 
@@ -58,14 +58,14 @@
 typedef struct {
     uint32_t held;
     float stick_lx, stick_ly, stick_rx, stick_ry;
-} BrambleVpadState;
-extern BrambleVpadState g_bramble_vpad;
+} ArkchemyVpadState;
+extern ArkchemyVpadState g_arkchemy_vpad;
 
 /* Called once per frame by main.c's own main loop, right after its
  * existing padUpdate(&pad) call -- keeps this shim's real button/stick
  * state current without needing its own separate PadState (main.c
  * already owns and updates one). Deliberately not mutex-protected
- * against ppc_import_vpad_VPADRead's own read of g_bramble_vpad below
+ * against ppc_import_vpad_VPADRead's own read of g_arkchemy_vpad below
  * (called from the separate game thread) -- a torn or one-frame-stale
  * read of a handful of plain integers/floats is the same accepted,
  * low-severity raciness already used elsewhere in this runtime (e.g.
@@ -73,7 +73,7 @@ extern BrambleVpadState g_bramble_vpad;
  * correctness risk like the console's own shared *rendering* state was
  * (see main.c's g_console_mutex fix for why that one genuinely needed
  * one). */
-static inline void bramble_vpad_update(const PadState *pad) {
+static inline void arkchemy_vpad_update(const PadState *pad) {
     u64 k = padGetButtons(pad);
     uint32_t held = 0;
     if (k & HidNpadButton_A) held |= 0x8000u;          /* VPAD_BUTTON_A */
@@ -92,14 +92,14 @@ static inline void bramble_vpad_update(const PadState *pad) {
     if (k & HidNpadButton_Minus) held |= 0x0004u;      /* VPAD_BUTTON_MINUS */
     if (k & HidNpadButton_StickR) held |= 0x00020000u; /* VPAD_BUTTON_STICK_R */
     if (k & HidNpadButton_StickL) held |= 0x00040000u; /* VPAD_BUTTON_STICK_L */
-    g_bramble_vpad.held = held;
+    g_arkchemy_vpad.held = held;
 
     HidAnalogStickState ls = padGetStickPos(pad, 0);
     HidAnalogStickState rs = padGetStickPos(pad, 1);
-    g_bramble_vpad.stick_lx = (float)ls.x / 32767.0f;
-    g_bramble_vpad.stick_ly = (float)ls.y / 32767.0f;
-    g_bramble_vpad.stick_rx = (float)rs.x / 32767.0f;
-    g_bramble_vpad.stick_ry = (float)rs.y / 32767.0f;
+    g_arkchemy_vpad.stick_lx = (float)ls.x / 32767.0f;
+    g_arkchemy_vpad.stick_ly = (float)ls.y / 32767.0f;
+    g_arkchemy_vpad.stick_rx = (float)rs.x / 32767.0f;
+    g_arkchemy_vpad.stick_ry = (float)rs.y / 32767.0f;
 }
 #endif /* __SWITCH__ */
 
@@ -121,10 +121,10 @@ static inline void ppc_import_vpad_VPADRead(PpcContext *ctx) {
      * backlog of multiple distinct samples to report, same reasoning
      * KPADRead's own comment already gives for "no samples" elsewhere.
      * `trigger`/`release` need the *previous* call's held state, kept
-     * here (not in g_bramble_vpad, which is real "current" state, not
+     * here (not in g_arkchemy_vpad, which is real "current" state, not
      * "last read") since only VPADRead's own real semantics need it. */
     static uint32_t s_prev_held = 0;
-    uint32_t held = g_bramble_vpad.held;
+    uint32_t held = g_arkchemy_vpad.held;
     uint32_t trigger = held & ~s_prev_held;
     uint32_t release = s_prev_held & ~held;
     s_prev_held = held;
@@ -137,10 +137,10 @@ static inline void ppc_import_vpad_VPADRead(PpcContext *ctx) {
     ppc_store_u32(ctx, buffers_addr + 0x00, held);    /* hold */
     ppc_store_u32(ctx, buffers_addr + 0x04, trigger);
     ppc_store_u32(ctx, buffers_addr + 0x08, release);
-    ppc_store_f32(ctx, buffers_addr + 0x0C, g_bramble_vpad.stick_lx);
-    ppc_store_f32(ctx, buffers_addr + 0x10, g_bramble_vpad.stick_ly);
-    ppc_store_f32(ctx, buffers_addr + 0x14, g_bramble_vpad.stick_rx);
-    ppc_store_f32(ctx, buffers_addr + 0x18, g_bramble_vpad.stick_ry);
+    ppc_store_f32(ctx, buffers_addr + 0x0C, g_arkchemy_vpad.stick_lx);
+    ppc_store_f32(ctx, buffers_addr + 0x10, g_arkchemy_vpad.stick_ly);
+    ppc_store_f32(ctx, buffers_addr + 0x14, g_arkchemy_vpad.stick_rx);
+    ppc_store_f32(ctx, buffers_addr + 0x18, g_arkchemy_vpad.stick_ry);
 
     if (ctx->r[6] != 0) ppc_store_u32(ctx, ctx->r[6], 0); /* VPAD_READ_SUCCESS */
     ctx->r[3] = 1;
@@ -163,4 +163,4 @@ static inline void ppc_import_vpad_VPADGetTPCalibratedPoint(PpcContext *ctx) {
     ppc_store_u16(ctx, calibrated_addr + 0x6, ppc_load_u16(ctx, raw_addr + 0x6)); /* validity */
 }
 
-#endif /* BRAMBLE_CAFEOS_VPAD_H */
+#endif /* ARKCHEMY_CAFEOS_VPAD_H */

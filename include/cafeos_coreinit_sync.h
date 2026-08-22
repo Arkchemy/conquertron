@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_SYNC_H
-#define BRAMBLE_CAFEOS_COREINIT_SYNC_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_SYNC_H
+#define ARKCHEMY_CAFEOS_COREINIT_SYNC_H
 
 /* ppc_runtime.h must come first, before <pthread.h>/<time.h> below --
  * it's what defines _POSIX_C_SOURCE (needed for clock_gettime/nanosleep/
@@ -19,9 +19,9 @@
  * further down this file -- moved up here since it's now needed before
  * those. See those functions' own comments for the full story. */
 enum {
-    BRAMBLE_ESPRESSO_CORE_CLOCK = 1243125000,
-    BRAMBLE_ESPRESSO_BUS_CLOCK = 248625000,
-    BRAMBLE_ESPRESSO_TIMER_CLOCK = BRAMBLE_ESPRESSO_BUS_CLOCK / 4,
+    ARKCHEMY_ESPRESSO_CORE_CLOCK = 1243125000,
+    ARKCHEMY_ESPRESSO_BUS_CLOCK = 248625000,
+    ARKCHEMY_ESPRESSO_TIMER_CLOCK = ARKCHEMY_ESPRESSO_BUS_CLOCK / 4,
 };
 
 /*
@@ -76,17 +76,17 @@ enum {
  * for both OSSignalEvent and OSSignalEventAll in AUTO mode.
  */
 
-#define BRAMBLE_SYNC_TABLE_SIZE 64
+#define ARKCHEMY_SYNC_TABLE_SIZE 64
 
 /* --- OSMutex (real, recursive) --- */
 typedef struct {
     uint32_t guest_addr;
     int active;
     pthread_mutex_t mutex;
-} BrambleMutexEntry;
+} ArkchemyMutexEntry;
 /* Real definitions in cafeos_state.c -- see its own file comment. */
-extern BrambleMutexEntry g_bramble_mutexes[BRAMBLE_SYNC_TABLE_SIZE];
-extern pthread_mutex_t g_bramble_mutex_table_lock;
+extern ArkchemyMutexEntry g_arkchemy_mutexes[ARKCHEMY_SYNC_TABLE_SIZE];
+extern pthread_mutex_t g_arkchemy_mutex_table_lock;
 
 /* Finds (or, if requested, lazily creates) the real pthread_mutex_t
  * backing a given guest OSMutex address. Lazy creation on first use
@@ -95,36 +95,36 @@ extern pthread_mutex_t g_bramble_mutex_table_lock;
  * if that assumption is ever violated, at the cost of never resetting
  * an already-initialized entry's state (fine: real OSInitMutex on an
  * address already in use would be a real game bug regardless). */
-static inline pthread_mutex_t *bramble_mutex_get(uint32_t addr) {
+static inline pthread_mutex_t *arkchemy_mutex_get(uint32_t addr) {
     int i, free_slot = -1;
     pthread_mutex_t *result = NULL;
-    pthread_mutex_lock(&g_bramble_mutex_table_lock);
-    for (i = 0; i < BRAMBLE_SYNC_TABLE_SIZE; i++) {
-        if (g_bramble_mutexes[i].active && g_bramble_mutexes[i].guest_addr == addr) {
-            result = &g_bramble_mutexes[i].mutex;
+    pthread_mutex_lock(&g_arkchemy_mutex_table_lock);
+    for (i = 0; i < ARKCHEMY_SYNC_TABLE_SIZE; i++) {
+        if (g_arkchemy_mutexes[i].active && g_arkchemy_mutexes[i].guest_addr == addr) {
+            result = &g_arkchemy_mutexes[i].mutex;
             break;
         }
-        if (free_slot < 0 && !g_bramble_mutexes[i].active) free_slot = i;
+        if (free_slot < 0 && !g_arkchemy_mutexes[i].active) free_slot = i;
     }
     if (result == NULL && free_slot >= 0) {
         pthread_mutexattr_t attr;
         pthread_mutexattr_init(&attr);
         pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-        pthread_mutex_init(&g_bramble_mutexes[free_slot].mutex, &attr);
+        pthread_mutex_init(&g_arkchemy_mutexes[free_slot].mutex, &attr);
         pthread_mutexattr_destroy(&attr);
-        g_bramble_mutexes[free_slot].guest_addr = addr;
-        g_bramble_mutexes[free_slot].active = 1;
-        result = &g_bramble_mutexes[free_slot].mutex;
+        g_arkchemy_mutexes[free_slot].guest_addr = addr;
+        g_arkchemy_mutexes[free_slot].active = 1;
+        result = &g_arkchemy_mutexes[free_slot].mutex;
     }
-    pthread_mutex_unlock(&g_bramble_mutex_table_lock);
+    pthread_mutex_unlock(&g_arkchemy_mutex_table_lock);
     return result;
 }
 
-static inline void ppc_import_coreinit_OSInitMutex(PpcContext *ctx) { (void)bramble_mutex_get(ctx->r[3]); }
-static inline void ppc_import_coreinit_OSLockMutex(PpcContext *ctx) { pthread_mutex_lock(bramble_mutex_get(ctx->r[3])); }
-static inline void ppc_import_coreinit_OSUnlockMutex(PpcContext *ctx) { pthread_mutex_unlock(bramble_mutex_get(ctx->r[3])); }
+static inline void ppc_import_coreinit_OSInitMutex(PpcContext *ctx) { (void)arkchemy_mutex_get(ctx->r[3]); }
+static inline void ppc_import_coreinit_OSLockMutex(PpcContext *ctx) { pthread_mutex_lock(arkchemy_mutex_get(ctx->r[3])); }
+static inline void ppc_import_coreinit_OSUnlockMutex(PpcContext *ctx) { pthread_mutex_unlock(arkchemy_mutex_get(ctx->r[3])); }
 static inline void ppc_import_coreinit_OSTryLockMutex(PpcContext *ctx) {
-    ctx->r[3] = (pthread_mutex_trylock(bramble_mutex_get(ctx->r[3])) == 0) ? 1u : 0u;
+    ctx->r[3] = (pthread_mutex_trylock(arkchemy_mutex_get(ctx->r[3])) == 0) ? 1u : 0u;
 }
 
 /* --- OSEvent (real, manual/auto-reset) --- */
@@ -137,24 +137,24 @@ typedef struct {
     int mode; /* 0 = OS_EVENT_MODE_MANUAL, 1 = OS_EVENT_MODE_AUTO */
     uint64_t epoch;
     int waiting_count;
-} BrambleEventEntry;
+} ArkchemyEventEntry;
 /* Real definitions in cafeos_state.c -- see its own file comment. */
-extern BrambleEventEntry g_bramble_events[BRAMBLE_SYNC_TABLE_SIZE];
-extern pthread_mutex_t g_bramble_event_table_lock;
+extern ArkchemyEventEntry g_arkchemy_events[ARKCHEMY_SYNC_TABLE_SIZE];
+extern pthread_mutex_t g_arkchemy_event_table_lock;
 
-static inline BrambleEventEntry *bramble_event_get(uint32_t addr, int create_with_value, int create_with_mode) {
+static inline ArkchemyEventEntry *arkchemy_event_get(uint32_t addr, int create_with_value, int create_with_mode) {
     int i, free_slot = -1;
-    BrambleEventEntry *result = NULL;
-    pthread_mutex_lock(&g_bramble_event_table_lock);
-    for (i = 0; i < BRAMBLE_SYNC_TABLE_SIZE; i++) {
-        if (g_bramble_events[i].active && g_bramble_events[i].guest_addr == addr) {
-            result = &g_bramble_events[i];
+    ArkchemyEventEntry *result = NULL;
+    pthread_mutex_lock(&g_arkchemy_event_table_lock);
+    for (i = 0; i < ARKCHEMY_SYNC_TABLE_SIZE; i++) {
+        if (g_arkchemy_events[i].active && g_arkchemy_events[i].guest_addr == addr) {
+            result = &g_arkchemy_events[i];
             break;
         }
-        if (free_slot < 0 && !g_bramble_events[i].active) free_slot = i;
+        if (free_slot < 0 && !g_arkchemy_events[i].active) free_slot = i;
     }
     if (result == NULL && free_slot >= 0) {
-        BrambleEventEntry *e = &g_bramble_events[free_slot];
+        ArkchemyEventEntry *e = &g_arkchemy_events[free_slot];
         pthread_mutex_init(&e->lock, NULL);
         pthread_cond_init(&e->cond, NULL);
         e->guest_addr = addr;
@@ -165,7 +165,7 @@ static inline BrambleEventEntry *bramble_event_get(uint32_t addr, int create_wit
         e->waiting_count = 0;
         result = e;
     }
-    pthread_mutex_unlock(&g_bramble_event_table_lock);
+    pthread_mutex_unlock(&g_arkchemy_event_table_lock);
     return result;
 }
 
@@ -174,7 +174,7 @@ static inline void ppc_import_coreinit_OSInitEvent(PpcContext *ctx) {
     uint32_t addr = ctx->r[3];
     int value = (int)(ctx->r[4] != 0);
     int mode = (int)ctx->r[5];
-    BrambleEventEntry *e = bramble_event_get(addr, value, mode);
+    ArkchemyEventEntry *e = arkchemy_event_get(addr, value, mode);
     /* Re-initializing an address already in this table (a real Init
      * called twice) resets its state -- matches real hardware, which
      * always fully re-initializes the struct. */
@@ -186,7 +186,7 @@ static inline void ppc_import_coreinit_OSInitEvent(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSSignalEvent(PpcContext *ctx) {
-    BrambleEventEntry *e = bramble_event_get(ctx->r[3], 0, 1 /* AUTO default if never Init'd */);
+    ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1 /* AUTO default if never Init'd */);
     pthread_mutex_lock(&e->lock);
     if (!e->signaled) {
         if (e->mode == 1 /* AUTO */) {
@@ -206,7 +206,7 @@ static inline void ppc_import_coreinit_OSSignalEvent(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSSignalEventAll(PpcContext *ctx) {
-    BrambleEventEntry *e = bramble_event_get(ctx->r[3], 0, 1);
+    ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
     pthread_mutex_lock(&e->lock);
     if (!e->signaled) {
         if (e->mode == 1 /* AUTO */) {
@@ -226,14 +226,14 @@ static inline void ppc_import_coreinit_OSSignalEventAll(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSResetEvent(PpcContext *ctx) {
-    BrambleEventEntry *e = bramble_event_get(ctx->r[3], 0, 1);
+    ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
     pthread_mutex_lock(&e->lock);
     e->signaled = 0;
     pthread_mutex_unlock(&e->lock);
 }
 
 static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
-    BrambleEventEntry *e = bramble_event_get(ctx->r[3], 0, 1);
+    ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
     pthread_mutex_lock(&e->lock);
     if (e->signaled) {
         if (e->mode == 1 /* AUTO */) e->signaled = 0;
@@ -254,10 +254,10 @@ static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) {
      * timeout is a real relative duration in timer ticks (confirmed via
      * Cemu's real HLE: ConvertNsToTimerTicks), not an absolute deadline.
      * Converted to real wall-clock time via the same confirmed
-     * BRAMBLE_ESPRESSO_TIMER_CLOCK this file's OSSleepTicks already
+     * ARKCHEMY_ESPRESSO_TIMER_CLOCK this file's OSSleepTicks already
      * uses. Returns real TRUE if actually signaled, FALSE on a real
      * timeout -- not the old "always true, never times out" stand-in. */
-    BrambleEventEntry *e = bramble_event_get(ctx->r[3], 0, 1);
+    ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
     int64_t timeout_ticks = ((int64_t)ctx->r[4] << 32) | (int64_t)ctx->r[5];
     int woke_signaled = 1;
     pthread_mutex_lock(&e->lock);
@@ -267,7 +267,7 @@ static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) {
         woke_signaled = 0; /* zero/negative timeout, not yet signaled -- immediate timeout */
     } else {
         struct timespec deadline;
-        int64_t ns = (timeout_ticks * 1000000000LL) / BRAMBLE_ESPRESSO_TIMER_CLOCK;
+        int64_t ns = (timeout_ticks * 1000000000LL) / ARKCHEMY_ESPRESSO_TIMER_CLOCK;
         clock_gettime(CLOCK_REALTIME, &deadline);
         deadline.tv_sec += (time_t)(ns / 1000000000LL);
         deadline.tv_nsec += (long)(ns % 1000000000LL);
@@ -333,24 +333,24 @@ typedef struct {
     pthread_mutex_t lock;
     pthread_cond_t cond;
     int32_t count;
-} BrambleSemEntry;
+} ArkchemySemEntry;
 /* Real definitions in cafeos_state.c -- see its own file comment. */
-extern BrambleSemEntry g_bramble_sems[BRAMBLE_SYNC_TABLE_SIZE];
-extern pthread_mutex_t g_bramble_sem_table_lock;
+extern ArkchemySemEntry g_arkchemy_sems[ARKCHEMY_SYNC_TABLE_SIZE];
+extern pthread_mutex_t g_arkchemy_sem_table_lock;
 
-static inline BrambleSemEntry *bramble_sem_get(uint32_t addr, int create_with_count) {
+static inline ArkchemySemEntry *arkchemy_sem_get(uint32_t addr, int create_with_count) {
     int i, free_slot = -1;
-    BrambleSemEntry *result = NULL;
-    pthread_mutex_lock(&g_bramble_sem_table_lock);
-    for (i = 0; i < BRAMBLE_SYNC_TABLE_SIZE; i++) {
-        if (g_bramble_sems[i].active && g_bramble_sems[i].guest_addr == addr) {
-            result = &g_bramble_sems[i];
+    ArkchemySemEntry *result = NULL;
+    pthread_mutex_lock(&g_arkchemy_sem_table_lock);
+    for (i = 0; i < ARKCHEMY_SYNC_TABLE_SIZE; i++) {
+        if (g_arkchemy_sems[i].active && g_arkchemy_sems[i].guest_addr == addr) {
+            result = &g_arkchemy_sems[i];
             break;
         }
-        if (free_slot < 0 && !g_bramble_sems[i].active) free_slot = i;
+        if (free_slot < 0 && !g_arkchemy_sems[i].active) free_slot = i;
     }
     if (result == NULL && free_slot >= 0) {
-        BrambleSemEntry *s = &g_bramble_sems[free_slot];
+        ArkchemySemEntry *s = &g_arkchemy_sems[free_slot];
         pthread_mutex_init(&s->lock, NULL);
         pthread_cond_init(&s->cond, NULL);
         s->guest_addr = addr;
@@ -358,13 +358,13 @@ static inline BrambleSemEntry *bramble_sem_get(uint32_t addr, int create_with_co
         s->count = create_with_count;
         result = s;
     }
-    pthread_mutex_unlock(&g_bramble_sem_table_lock);
+    pthread_mutex_unlock(&g_arkchemy_sem_table_lock);
     return result;
 }
 
 static inline void ppc_import_coreinit_OSInitSemaphore(PpcContext *ctx) {
     /* void OSInitSemaphore(OSSemaphore*, int32_t count) */
-    BrambleSemEntry *s = bramble_sem_get(ctx->r[3], (int32_t)ctx->r[4]);
+    ArkchemySemEntry *s = arkchemy_sem_get(ctx->r[3], (int32_t)ctx->r[4]);
     pthread_mutex_lock(&s->lock);
     s->count = (int32_t)ctx->r[4]; /* re-Init on an already-used address resets it, matching real hardware */
     pthread_mutex_unlock(&s->lock);
@@ -372,7 +372,7 @@ static inline void ppc_import_coreinit_OSInitSemaphore(PpcContext *ctx) {
 static inline void ppc_import_coreinit_OSInitSemaphoreEx(PpcContext *ctx) { ppc_import_coreinit_OSInitSemaphore(ctx); }
 
 static inline void ppc_import_coreinit_OSSignalSemaphore(PpcContext *ctx) {
-    BrambleSemEntry *s = bramble_sem_get(ctx->r[3], 0);
+    ArkchemySemEntry *s = arkchemy_sem_get(ctx->r[3], 0);
     int32_t prev;
     pthread_mutex_lock(&s->lock);
     prev = s->count;
@@ -383,7 +383,7 @@ static inline void ppc_import_coreinit_OSSignalSemaphore(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSWaitSemaphore(PpcContext *ctx) {
-    BrambleSemEntry *s = bramble_sem_get(ctx->r[3], 0);
+    ArkchemySemEntry *s = arkchemy_sem_get(ctx->r[3], 0);
     int32_t prev;
     pthread_mutex_lock(&s->lock);
     while (s->count <= 0) {
@@ -396,7 +396,7 @@ static inline void ppc_import_coreinit_OSWaitSemaphore(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSTryWaitSemaphore(PpcContext *ctx) {
-    BrambleSemEntry *s = bramble_sem_get(ctx->r[3], 0);
+    ArkchemySemEntry *s = arkchemy_sem_get(ctx->r[3], 0);
     int32_t prev;
     pthread_mutex_lock(&s->lock);
     prev = s->count;
@@ -406,7 +406,7 @@ static inline void ppc_import_coreinit_OSTryWaitSemaphore(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSGetSemaphoreCount(PpcContext *ctx) {
-    BrambleSemEntry *s = bramble_sem_get(ctx->r[3], 0);
+    ArkchemySemEntry *s = arkchemy_sem_get(ctx->r[3], 0);
     int32_t count;
     pthread_mutex_lock(&s->lock);
     count = s->count;
@@ -465,21 +465,21 @@ static inline void ppc_import_coreinit_OSGetSemaphoreCount(PpcContext *ctx) {
  * years-since-1900 vs. `OSCalendarTime`'s real full-AD-year convention
  * (+1900 to convert).
  */
-#define BRAMBLE_OSTIME_EPOCH_OFFSET_SECONDS 946684800LL /* 2000-01-01 minus 1970-01-01 */
-#define BRAMBLE_OSSYSTEMINFO_ADDR 0xE008u /* right after cafeos_coreinit_mem.h's 4-byte errno slot at 0xE000 */
+#define ARKCHEMY_OSTIME_EPOCH_OFFSET_SECONDS 946684800LL /* 2000-01-01 minus 1970-01-01 */
+#define ARKCHEMY_OSSYSTEMINFO_ADDR 0xE008u /* right after cafeos_coreinit_mem.h's 4-byte errno slot at 0xE000 */
 
 static inline void ppc_import_coreinit_OSGetSystemInfo(PpcContext *ctx) {
-    ppc_store_u32(ctx, BRAMBLE_OSSYSTEMINFO_ADDR + 0x00, (uint32_t)BRAMBLE_ESPRESSO_BUS_CLOCK);
-    ppc_store_u32(ctx, BRAMBLE_OSSYSTEMINFO_ADDR + 0x04, (uint32_t)BRAMBLE_ESPRESSO_CORE_CLOCK);
-    ppc_store_u32(ctx, BRAMBLE_OSSYSTEMINFO_ADDR + 0x08, 0); /* baseTime hi */
-    ppc_store_u32(ctx, BRAMBLE_OSSYSTEMINFO_ADDR + 0x0c, 0); /* baseTime lo */
-    ctx->r[3] = BRAMBLE_OSSYSTEMINFO_ADDR;
+    ppc_store_u32(ctx, ARKCHEMY_OSSYSTEMINFO_ADDR + 0x00, (uint32_t)ARKCHEMY_ESPRESSO_BUS_CLOCK);
+    ppc_store_u32(ctx, ARKCHEMY_OSSYSTEMINFO_ADDR + 0x04, (uint32_t)ARKCHEMY_ESPRESSO_CORE_CLOCK);
+    ppc_store_u32(ctx, ARKCHEMY_OSSYSTEMINFO_ADDR + 0x08, 0); /* baseTime hi */
+    ppc_store_u32(ctx, ARKCHEMY_OSSYSTEMINFO_ADDR + 0x0c, 0); /* baseTime lo */
+    ctx->r[3] = ARKCHEMY_OSSYSTEMINFO_ADDR;
 }
 
 static inline void ppc_import_coreinit_OSSleepTicks(PpcContext *ctx) {
     int64_t ticks = ((int64_t)ctx->r[3] << 32) | (int64_t)ctx->r[4];
     if (ticks > 0) {
-        int64_t ns = (ticks * 1000000000LL) / BRAMBLE_ESPRESSO_TIMER_CLOCK;
+        int64_t ns = (ticks * 1000000000LL) / ARKCHEMY_ESPRESSO_TIMER_CLOCK;
         struct timespec ts;
         ts.tv_sec = (time_t)(ns / 1000000000LL);
         ts.tv_nsec = (long)(ns % 1000000000LL);
@@ -490,12 +490,12 @@ static inline void ppc_import_coreinit_OSSleepTicks(PpcContext *ctx) {
 static inline void ppc_import_coreinit_OSTicksToCalendarTime(PpcContext *ctx) {
     int64_t ticks = ((int64_t)ctx->r[3] << 32) | (int64_t)ctx->r[4];
     uint32_t out_addr = ctx->r[5];
-    int64_t total_seconds = ticks / BRAMBLE_ESPRESSO_TIMER_CLOCK;
-    int64_t remainder_ticks = ticks % BRAMBLE_ESPRESSO_TIMER_CLOCK;
-    if (remainder_ticks < 0) { remainder_ticks += BRAMBLE_ESPRESSO_TIMER_CLOCK; total_seconds -= 1; }
-    int64_t microseconds = (remainder_ticks * 1000000LL) / BRAMBLE_ESPRESSO_TIMER_CLOCK;
+    int64_t total_seconds = ticks / ARKCHEMY_ESPRESSO_TIMER_CLOCK;
+    int64_t remainder_ticks = ticks % ARKCHEMY_ESPRESSO_TIMER_CLOCK;
+    if (remainder_ticks < 0) { remainder_ticks += ARKCHEMY_ESPRESSO_TIMER_CLOCK; total_seconds -= 1; }
+    int64_t microseconds = (remainder_ticks * 1000000LL) / ARKCHEMY_ESPRESSO_TIMER_CLOCK;
 
-    time_t unix_time = (time_t)(total_seconds + BRAMBLE_OSTIME_EPOCH_OFFSET_SECONDS);
+    time_t unix_time = (time_t)(total_seconds + ARKCHEMY_OSTIME_EPOCH_OFFSET_SECONDS);
     struct tm tm_result;
     gmtime_r(&unix_time, &tm_result);
 
@@ -511,4 +511,4 @@ static inline void ppc_import_coreinit_OSTicksToCalendarTime(PpcContext *ctx) {
     ppc_store_u32(ctx, out_addr + 0x24, (uint32_t)(microseconds % 1000));
 }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_SYNC_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_SYNC_H */

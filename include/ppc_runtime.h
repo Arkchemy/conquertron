@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_PPC_RUNTIME_H
-#define BRAMBLE_PPC_RUNTIME_H
+#ifndef ARKCHEMY_PPC_RUNTIME_H
+#define ARKCHEMY_PPC_RUNTIME_H
 
 /* Some cafeos_*.h shims (e.g. cafeos_coreinit_sync.h's real pthread-
  * backed OSMutex/OSEvent/OSSemaphore) need POSIX APIs (clock_gettime,
@@ -88,7 +88,7 @@ volatile uint32_t g_ppc_last_caller_lr = 0;
  * pointer-chase loop over its own hash-bucket linked list), so nothing
  * else in the existing diagnostic set can show the real 'this'/item/
  * bucket-index values it's looping on. codegen.cpp's function prologue
- * checks every one of BRAMBLE_WATCH_SLOTS real addresses on every real
+ * checks every one of ARKCHEMY_WATCH_SLOTS real addresses on every real
  * function call and snapshots r3-r6 (plus the real g_ppc_fn_call_count
  * at that moment, and a running hit count) into whichever slot's own
  * `pc` field matches -- cheap enough (a handful of comparisons per
@@ -102,17 +102,17 @@ volatile uint32_t g_ppc_last_caller_lr = 0;
  * constructor) actually run before `Core::igStringPool::getDefault`
  * (the real accessor) is ever called, and what does getDefault() end
  * up returning each time. */
-#define BRAMBLE_WATCH_SLOTS 4
+#define ARKCHEMY_WATCH_SLOTS 4
 typedef struct {
     volatile uint32_t pc;         /* 0xFFFFFFFF = unused/never matches */
     volatile uint32_t r3, r4, r5, r6;
     volatile uint32_t hit_count;
     volatile uint64_t last_hit_call_count; /* g_ppc_fn_call_count at last hit, for ordering slots against each other */
-} BrambleWatchSlot;
+} ArkchemyWatchSlot;
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-BrambleWatchSlot g_ppc_watch[BRAMBLE_WATCH_SLOTS] = {
+ArkchemyWatchSlot g_ppc_watch[ARKCHEMY_WATCH_SLOTS] = {
     {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
     {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
     {0xFFFFFFFFu, 0, 0, 0, 0, 0, 0},
@@ -791,7 +791,7 @@ typedef void (*ppc_unhandled_log_fn)(const char *);
  * ppc_set_unhandled_log() to register it. A `static` copy here would
  * mean every one of those 213 files gets its own, separate, never-set
  * NULL copy -- real bug found and fixed this way (same root cause as
- * cafeos_state.c's own g_bramble_gx2 and friends): logging would
+ * cafeos_state.c's own g_arkchemy_gx2 and friends): logging would
  * silently never fire for any real unhandled-instruction hit inside
  * the actual recompiled game code, only from a hit in main.c itself
  * (which has none). Real, single, shared definition lives in
@@ -906,4 +906,4 @@ static inline double ppc_frsp(double val) { return (double)(float)val; }
  */
 void ppc_dispatch(PpcContext *ctx, uint32_t addr);
 
-#endif /* BRAMBLE_PPC_RUNTIME_H */
+#endif /* ARKCHEMY_PPC_RUNTIME_H */

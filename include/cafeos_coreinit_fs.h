@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_FS_H
-#define BRAMBLE_CAFEOS_COREINIT_FS_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_FS_H
+#define ARKCHEMY_CAFEOS_COREINIT_FS_H
 
 #include <dirent.h>
 #include <stdio.h>
@@ -40,7 +40,7 @@
  *    real Wii U mount prefixes (/vol/content/, content:/, /vol/save/,
  *    save:/) and any bare relative path (real game code commonly assumes
  *    its current directory is already the content mount) and rewrites
- *    them onto BRAMBLE_FS_CONTENT_ROOT / BRAMBLE_FS_SAVE_ROOT on the SD
+ *    them onto ARKCHEMY_FS_CONTENT_ROOT / ARKCHEMY_FS_SAVE_ROOT on the SD
  *    card -- see that function's own comment for the exact rules and the
  *    real reasoning behind picking these two roots specifically.
  *  - Only ever reports the most recent error (a single global, not
@@ -48,20 +48,20 @@
  */
 
 enum {
-    BRAMBLE_FS_STATUS_OK = 0,
-    BRAMBLE_FS_STATUS_CANCELLED = -1,
-    BRAMBLE_FS_STATUS_END = -2,
-    BRAMBLE_FS_STATUS_ALREADY_OPEN = -4,
-    BRAMBLE_FS_STATUS_EXISTS = -5,
-    BRAMBLE_FS_STATUS_NOT_FOUND = -6,
-    BRAMBLE_FS_STATUS_NOT_FILE = -7,
-    BRAMBLE_FS_STATUS_NOT_DIR = -8,
-    BRAMBLE_FS_STATUS_ACCESS_ERROR = -9,
+    ARKCHEMY_FS_STATUS_OK = 0,
+    ARKCHEMY_FS_STATUS_CANCELLED = -1,
+    ARKCHEMY_FS_STATUS_END = -2,
+    ARKCHEMY_FS_STATUS_ALREADY_OPEN = -4,
+    ARKCHEMY_FS_STATUS_EXISTS = -5,
+    ARKCHEMY_FS_STATUS_NOT_FOUND = -6,
+    ARKCHEMY_FS_STATUS_NOT_FILE = -7,
+    ARKCHEMY_FS_STATUS_NOT_DIR = -8,
+    ARKCHEMY_FS_STATUS_ACCESS_ERROR = -9,
 };
 
-#define BRAMBLE_FS_MAX_HANDLES 64
+#define ARKCHEMY_FS_MAX_HANDLES 64
 
-extern FILE *g_ppc_fs_files[BRAMBLE_FS_MAX_HANDLES]; /* real definition in cafeos_state.c -- see its own file comment */
+extern FILE *g_ppc_fs_files[ARKCHEMY_FS_MAX_HANDLES]; /* real definition in cafeos_state.c -- see its own file comment */
 extern int32_t g_ppc_fs_last_error; /* real definition in cafeos_state.c -- see its own file comment */
 
 /* Reads a NUL-terminated string out of the guest's synthetic memory --
@@ -79,13 +79,13 @@ static inline void ppc_fs_read_cstr(const PpcContext *ctx, uint32_t addr, char *
 
 /* Where a real, user-extracted game dump's content and save-data
  * directories live on the SD card -- deliberately not under this .nro's
- * own switch/Bramble/ log directory, since this is the user's own
+ * own switch/Jouster/ log directory, since this is the user's own
  * legally-dumped game data, not something this project generates or
  * distributes (see LICENSE section 6). Not `const` so a future real
  * settings/setup screen can point this at wherever the user actually put
  * their dump instead. */
-extern char g_bramble_fs_content_root[256]; /* real definition in cafeos_state.c -- see its own file comment */
-extern char g_bramble_fs_save_root[256]; /* real definition in cafeos_state.c -- see its own file comment */
+extern char g_arkchemy_fs_content_root[256]; /* real definition in cafeos_state.c -- see its own file comment */
+extern char g_arkchemy_fs_save_root[256]; /* real definition in cafeos_state.c -- see its own file comment */
 
 /* Rewrites a real Wii U guest FS path onto a real host path under the
  * roots above. Real Wii U game code addresses files through one of a
@@ -102,17 +102,17 @@ extern char g_bramble_fs_save_root[256]; /* real definition in cafeos_state.c --
  * `out_size` bytes; truncates rather than overflowing if a real path
  * turns out to be pathological. */
 static inline void ppc_fs_translate_path(const char *guest_path, char *out, size_t out_size) {
-    const char *root = g_bramble_fs_content_root;
+    const char *root = g_arkchemy_fs_content_root;
     const char *rest = guest_path;
     if (strncmp(guest_path, "/vol/content/", 13) == 0) {
         rest = guest_path + 13;
     } else if (strncmp(guest_path, "content:/", 9) == 0) {
         rest = guest_path + 9;
     } else if (strncmp(guest_path, "/vol/save/", 10) == 0) {
-        root = g_bramble_fs_save_root;
+        root = g_arkchemy_fs_save_root;
         rest = guest_path + 10;
     } else if (strncmp(guest_path, "save:/", 6) == 0) {
-        root = g_bramble_fs_save_root;
+        root = g_arkchemy_fs_save_root;
         rest = guest_path + 6;
     } else if (guest_path[0] == '/') {
         /* An absolute path under some other/unrecognized real mount --
@@ -146,7 +146,7 @@ static inline void ppc_fs_set_open_log(ppc_fs_open_log_fn fn) { g_ppc_fs_open_lo
 /* 1-based handles (0 reserved so a zeroed-out FSFileHandle reads as
  * invalid, matching the convention real code's error paths rely on). */
 static inline uint32_t ppc_fs_alloc_handle(FILE *f) {
-    for (uint32_t i = 0; i < BRAMBLE_FS_MAX_HANDLES; i++) {
+    for (uint32_t i = 0; i < ARKCHEMY_FS_MAX_HANDLES; i++) {
         if (!g_ppc_fs_files[i]) {
             g_ppc_fs_files[i] = f;
             return i + 1;
@@ -156,24 +156,24 @@ static inline uint32_t ppc_fs_alloc_handle(FILE *f) {
 }
 
 /* Diagnostic only -- lets a log line show whether a failed alloc was
- * really pool exhaustion (BRAMBLE_FS_MAX_HANDLES all in use, e.g. from
+ * really pool exhaustion (ARKCHEMY_FS_MAX_HANDLES all in use, e.g. from
  * real game code that never calls FSCloseFile on some path) versus
  * something else. */
 static inline uint32_t ppc_fs_handles_in_use(void) {
     uint32_t n = 0;
-    for (uint32_t i = 0; i < BRAMBLE_FS_MAX_HANDLES; i++) {
+    for (uint32_t i = 0; i < ARKCHEMY_FS_MAX_HANDLES; i++) {
         if (g_ppc_fs_files[i]) n++;
     }
     return n;
 }
 
 static inline FILE *ppc_fs_get_handle(uint32_t handle) {
-    if (handle == 0 || handle > BRAMBLE_FS_MAX_HANDLES) return NULL;
+    if (handle == 0 || handle > ARKCHEMY_FS_MAX_HANDLES) return NULL;
     return g_ppc_fs_files[handle - 1];
 }
 
 static inline void ppc_fs_free_handle(uint32_t handle) {
-    if (handle == 0 || handle > BRAMBLE_FS_MAX_HANDLES) return;
+    if (handle == 0 || handle > ARKCHEMY_FS_MAX_HANDLES) return;
     g_ppc_fs_files[handle - 1] = NULL;
 }
 
@@ -185,12 +185,12 @@ static inline void ppc_fs_free_handle(uint32_t handle) {
 static inline void ppc_import_coreinit_FSInit(PpcContext *ctx) {
     (void)ctx;
     memset(g_ppc_fs_files, 0, sizeof(g_ppc_fs_files));
-    g_ppc_fs_last_error = BRAMBLE_FS_STATUS_OK;
+    g_ppc_fs_last_error = ARKCHEMY_FS_STATUS_OK;
 }
 
 static inline void ppc_import_coreinit_FSShutdown(PpcContext *ctx) {
     (void)ctx;
-    for (uint32_t i = 0; i < BRAMBLE_FS_MAX_HANDLES; i++) {
+    for (uint32_t i = 0; i < ARKCHEMY_FS_MAX_HANDLES; i++) {
         if (g_ppc_fs_files[i]) {
             fclose(g_ppc_fs_files[i]);
             g_ppc_fs_files[i] = NULL;
@@ -203,8 +203,8 @@ static inline void ppc_import_coreinit_FSShutdown(PpcContext *ctx) {
  * FSClient is opaque -- this shim never touches its contents, so both are
  * unconditional successes (real hardware can fail these on resource
  * exhaustion; not modeled, no known real code path here that hits it). */
-static inline void ppc_import_coreinit_FSAddClient(PpcContext *ctx) { ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK; }
-static inline void ppc_import_coreinit_FSDelClient(PpcContext *ctx) { ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK; }
+static inline void ppc_import_coreinit_FSAddClient(PpcContext *ctx) { ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK; }
+static inline void ppc_import_coreinit_FSDelClient(PpcContext *ctx) { ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK; }
 
 /* void FSInitCmdBlock(FSCmdBlock *block); -- FSCmdBlock is opaque too, and
  * this shim runs every FS call synchronously (no real async command-queue
@@ -243,16 +243,16 @@ static inline void ppc_import_coreinit_FSSetStateChangeNotification(PpcContext *
 static inline void ppc_import_coreinit_FSIsEof(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(ctx->r[5]);
     if (!f) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     int c = fgetc(f);
     if (c == EOF) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_END;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_END;
         return;
     }
     ungetc(c, f);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /* FSStatus FSOpenFile(FSClient *client, FSCmdBlock *block, const char *path,
@@ -267,22 +267,22 @@ static inline void ppc_import_coreinit_FSOpenFile(PpcContext *ctx) {
     FILE *f = fopen(real_path, mode);
     if (!f) {
         if (g_ppc_fs_open_log) g_ppc_fs_open_log(guest_path, real_path, mode, 0, 0, ppc_fs_handles_in_use());
-        g_ppc_fs_last_error = BRAMBLE_FS_STATUS_NOT_FOUND;
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        g_ppc_fs_last_error = ARKCHEMY_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     uint32_t handle = ppc_fs_alloc_handle(f);
     if (handle == 0) {
         if (g_ppc_fs_open_log) g_ppc_fs_open_log(guest_path, real_path, mode, 1, 0, ppc_fs_handles_in_use());
         fclose(f);
-        g_ppc_fs_last_error = BRAMBLE_FS_STATUS_ACCESS_ERROR;
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_ACCESS_ERROR;
+        g_ppc_fs_last_error = ARKCHEMY_FS_STATUS_ACCESS_ERROR;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_ACCESS_ERROR;
         return;
     }
     ppc_store_u32(ctx, ctx->r[7], handle);
     if (g_ppc_fs_open_log) g_ppc_fs_open_log(guest_path, real_path, mode, 1, handle, ppc_fs_handles_in_use());
-    g_ppc_fs_last_error = BRAMBLE_FS_STATUS_OK;
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    g_ppc_fs_last_error = ARKCHEMY_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /* FSStatus FSCloseFile(FSClient*, FSCmdBlock*, FSFileHandle handle, FSErrorFlag);
@@ -290,12 +290,12 @@ static inline void ppc_import_coreinit_FSOpenFile(PpcContext *ctx) {
 static inline void ppc_import_coreinit_FSCloseFile(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(ctx->r[5]);
     if (!f) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     fclose(f);
     ppc_fs_free_handle(ctx->r[5]);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /* FSStatus FSReadFile(FSClient*, FSCmdBlock*, uint8_t *buffer, uint32_t size,
@@ -307,7 +307,7 @@ static inline void ppc_import_coreinit_FSCloseFile(PpcContext *ctx) {
 static inline void ppc_import_coreinit_FSReadFile(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(ctx->r[8]);
     if (!f) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     uint32_t buffer_addr = ctx->r[5];
@@ -346,12 +346,12 @@ static inline void ppc_import_coreinit_FSReadFile(PpcContext *ctx) {
 static inline void ppc_import_coreinit_FSGetPosFile(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(ctx->r[5]);
     if (!f) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     long pos = ftell(f);
     ppc_store_u32(ctx, ctx->r[6], (uint32_t)pos);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /* FSStatus FSSetPosFile(FSClient*, FSCmdBlock*, FSFileHandle, uint32_t pos, FSErrorFlag);
@@ -359,11 +359,11 @@ static inline void ppc_import_coreinit_FSGetPosFile(PpcContext *ctx) {
 static inline void ppc_import_coreinit_FSSetPosFile(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(ctx->r[5]);
     if (!f) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     fseek(f, (long)ctx->r[6], SEEK_SET);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /* FSStatus FSGetStatFile(FSClient*, FSCmdBlock*, FSFileHandle, FSStat*, FSErrorFlag);
@@ -380,7 +380,7 @@ static inline void ppc_import_coreinit_FSSetPosFile(PpcContext *ctx) {
 static inline void ppc_import_coreinit_FSGetStatFile(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(ctx->r[5]);
     if (!f) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     long cur = ftell(f);
@@ -391,17 +391,17 @@ static inline void ppc_import_coreinit_FSGetStatFile(PpcContext *ctx) {
     uint32_t stat_addr = ctx->r[6];
     for (uint32_t i = 0; i < 0x64; i += 4) ppc_store_u32(ctx, stat_addr + i, 0);
     ppc_store_u32(ctx, stat_addr + 0x10, (uint32_t)size);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /* Directory operations -- same handle-table pattern as the file ones
  * above, just a second table since FSFileHandle and FSDirectoryHandle
  * are numbered independently on real hardware. */
-#define BRAMBLE_FS_MAX_DIR_HANDLES 32
-extern DIR *g_ppc_fs_dirs[BRAMBLE_FS_MAX_DIR_HANDLES]; /* real definition in cafeos_state.c -- see its own file comment */
+#define ARKCHEMY_FS_MAX_DIR_HANDLES 32
+extern DIR *g_ppc_fs_dirs[ARKCHEMY_FS_MAX_DIR_HANDLES]; /* real definition in cafeos_state.c -- see its own file comment */
 
 static inline uint32_t ppc_fs_alloc_dir_handle(DIR *d) {
-    for (uint32_t i = 0; i < BRAMBLE_FS_MAX_DIR_HANDLES; i++) {
+    for (uint32_t i = 0; i < ARKCHEMY_FS_MAX_DIR_HANDLES; i++) {
         if (!g_ppc_fs_dirs[i]) {
             g_ppc_fs_dirs[i] = d;
             return i + 1;
@@ -411,12 +411,12 @@ static inline uint32_t ppc_fs_alloc_dir_handle(DIR *d) {
 }
 
 static inline DIR *ppc_fs_get_dir_handle(uint32_t handle) {
-    if (handle == 0 || handle > BRAMBLE_FS_MAX_DIR_HANDLES) return NULL;
+    if (handle == 0 || handle > ARKCHEMY_FS_MAX_DIR_HANDLES) return NULL;
     return g_ppc_fs_dirs[handle - 1];
 }
 
 static inline void ppc_fs_free_dir_handle(uint32_t handle) {
-    if (handle == 0 || handle > BRAMBLE_FS_MAX_DIR_HANDLES) return;
+    if (handle == 0 || handle > ARKCHEMY_FS_MAX_DIR_HANDLES) return;
     g_ppc_fs_dirs[handle - 1] = NULL;
 }
 
@@ -428,17 +428,17 @@ static inline void ppc_import_coreinit_FSOpenDir(PpcContext *ctx) {
     ppc_fs_translate_path(guest_path, real_path, sizeof(real_path));
     DIR *d = opendir(real_path);
     if (!d) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     uint32_t handle = ppc_fs_alloc_dir_handle(d);
     if (handle == 0) {
         closedir(d);
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_ACCESS_ERROR;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_ACCESS_ERROR;
         return;
     }
     ppc_store_u32(ctx, ctx->r[6], handle);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /* FSStatus FSCloseDir(FSClient*, FSCmdBlock*, FSDirectoryHandle, FSErrorFlag);
@@ -446,12 +446,12 @@ static inline void ppc_import_coreinit_FSOpenDir(PpcContext *ctx) {
 static inline void ppc_import_coreinit_FSCloseDir(PpcContext *ctx) {
     DIR *d = ppc_fs_get_dir_handle(ctx->r[5]);
     if (!d) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     closedir(d);
     ppc_fs_free_dir_handle(ctx->r[5]);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /* FSStatus FSReadDir(FSClient*, FSCmdBlock*, FSDirectoryHandle, FSDirectoryEntry*, FSErrorFlag);
@@ -467,7 +467,7 @@ static inline void ppc_import_coreinit_FSCloseDir(PpcContext *ctx) {
 static inline void ppc_import_coreinit_FSReadDir(PpcContext *ctx) {
     DIR *d = ppc_fs_get_dir_handle(ctx->r[5]);
     if (!d) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     /* Real Cafe OS directory listings don't include self/parent entries
@@ -479,7 +479,7 @@ static inline void ppc_import_coreinit_FSReadDir(PpcContext *ctx) {
         de = readdir(d);
     } while (de && (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0));
     if (!de) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_END;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_END;
         return;
     }
     uint32_t entry_addr = ctx->r[6];
@@ -494,7 +494,7 @@ static inline void ppc_import_coreinit_FSReadDir(PpcContext *ctx) {
     size_t i = 0;
     for (; de->d_name[i] && i + 1 < 256; i++) ppc_store_u8(ctx, name_addr + (uint32_t)i, (uint8_t)de->d_name[i]);
     ppc_store_u8(ctx, name_addr + (uint32_t)i, 0);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /* FSStatus FSMakeDir(FSClient*, FSCmdBlock*, const char *path, FSErrorFlag);
@@ -509,10 +509,10 @@ static inline void ppc_import_coreinit_FSMakeDir(PpcContext *ctx) {
     int rc = mkdir(path, 0777);
 #endif
     if (rc != 0) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_EXISTS;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_EXISTS;
         return;
     }
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /* FSStatus FSRemove(FSClient*, FSCmdBlock*, const char *path, FSErrorFlag);
@@ -522,10 +522,10 @@ static inline void ppc_import_coreinit_FSRemove(PpcContext *ctx) {
     ppc_fs_read_cstr(ctx, ctx->r[5], guest_path, sizeof(guest_path));
     ppc_fs_translate_path(guest_path, path, sizeof(path));
     if (remove(path) != 0) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 /*
@@ -584,7 +584,7 @@ static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(handle);
     int32_t result;
     if (!f) {
-        result = BRAMBLE_FS_STATUS_NOT_FOUND;
+        result = ARKCHEMY_FS_STATUS_NOT_FOUND;
     } else if (size == 0 || count == 0) {
         result = 0;
     } else {
@@ -604,7 +604,7 @@ static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
         result = (int32_t)elements_read;
     }
     ppc_fs_invoke_async_callback(ctx, async_data_addr, client, block, result);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 static inline void ppc_import_coreinit_FSWriteFileWithPosAsync(PpcContext *ctx) {
@@ -614,7 +614,7 @@ static inline void ppc_import_coreinit_FSWriteFileWithPosAsync(PpcContext *ctx) 
     FILE *f = ppc_fs_get_handle(handle);
     int32_t result;
     if (!f) {
-        result = BRAMBLE_FS_STATUS_NOT_FOUND;
+        result = ARKCHEMY_FS_STATUS_NOT_FOUND;
     } else if (size == 0 || count == 0) {
         result = 0;
     } else {
@@ -634,7 +634,7 @@ static inline void ppc_import_coreinit_FSWriteFileWithPosAsync(PpcContext *ctx) 
         result = (int32_t)elements_written;
     }
     ppc_fs_invoke_async_callback(ctx, async_data_addr, client, block, result);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_FS_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_FS_H */

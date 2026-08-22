@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CODEGEN_H
-#define BRAMBLE_CODEGEN_H
+#ifndef ARKCHEMY_CODEGEN_H
+#define ARKCHEMY_CODEGEN_H
 
 #include <map>
 #include <ostream>
@@ -33,4 +33,4 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
 
 }  // namespace recomp
 
-#endif  // BRAMBLE_CODEGEN_H
+#endif  // ARKCHEMY_CODEGEN_H

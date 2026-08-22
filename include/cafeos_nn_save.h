@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_NN_SAVE_H
-#define BRAMBLE_CAFEOS_NN_SAVE_H
+#ifndef ARKCHEMY_CAFEOS_NN_SAVE_H
+#define ARKCHEMY_CAFEOS_NN_SAVE_H
 
 #include <sys/statvfs.h>
 
@@ -51,9 +51,9 @@
  * space" checks against a real (if differently-scaled) number are more
  * honest than either a guessed constant or a hardcoded "always plenty."
  */
-static inline void ppc_import_nn_save_SAVEInit(PpcContext *ctx) { ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK; }
+static inline void ppc_import_nn_save_SAVEInit(PpcContext *ctx) { ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK; }
 static inline void ppc_import_nn_save_SAVEShutdown(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_nn_save_SAVEInitSaveDir(PpcContext *ctx) { ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK; }
+static inline void ppc_import_nn_save_SAVEInitSaveDir(PpcContext *ctx) { ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK; }
 
 static inline void ppc_import_nn_save_SAVEOpenFile(PpcContext *ctx) {
     char path[512], mode[8];
@@ -62,33 +62,33 @@ static inline void ppc_import_nn_save_SAVEOpenFile(PpcContext *ctx) {
 
     FILE *f = fopen(path, mode);
     if (!f) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
     uint32_t handle = ppc_fs_alloc_handle(f);
     if (handle == 0) {
         fclose(f);
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_ACCESS_ERROR;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_ACCESS_ERROR;
         return;
     }
     ppc_store_u32(ctx, ctx->r[8], handle);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 static inline void ppc_import_nn_save_SAVERemove(PpcContext *ctx) {
     char path[512];
     ppc_fs_read_cstr(ctx, ctx->r[6], path, sizeof(path));
     if (remove(path) != 0) {
-        ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_NOT_FOUND;
+        ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
     }
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 static inline void ppc_import_nn_save_SAVEGetStat(PpcContext *ctx) {
     uint32_t stat_addr = ctx->r[6];
     for (uint32_t i = 0; i < 0x64; i += 4) ppc_store_u32(ctx, stat_addr + i, 0);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
 static inline void ppc_import_nn_save_SAVEGetFreeSpaceSize(PpcContext *ctx) {
@@ -98,9 +98,9 @@ static inline void ppc_import_nn_save_SAVEGetFreeSpaceSize(PpcContext *ctx) {
         free_bytes = (uint64_t)vfs.f_bavail * (uint64_t)vfs.f_frsize;
     }
     ppc_store_u64(ctx, ctx->r[6], free_bytes);
-    ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
-static inline void ppc_import_nn_save_SAVEFlushQuota(PpcContext *ctx) { ctx->r[3] = (uint32_t)BRAMBLE_FS_STATUS_OK; }
+static inline void ppc_import_nn_save_SAVEFlushQuota(PpcContext *ctx) { ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK; }
 
-#endif /* BRAMBLE_CAFEOS_NN_SAVE_H */
+#endif /* ARKCHEMY_CAFEOS_NN_SAVE_H */

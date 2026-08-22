@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_NN_ACT_H
-#define BRAMBLE_CAFEOS_NN_ACT_H
+#ifndef ARKCHEMY_CAFEOS_NN_ACT_H
+#define ARKCHEMY_CAFEOS_NN_ACT_H
 
 #include "ppc_runtime.h"
 
@@ -21,4 +21,4 @@
 static inline void ppc_import_nn_act_Initialize__Q2_2nn3actFv(PpcContext *ctx) { ctx->r[3] = 0; }
 static inline void ppc_import_nn_act_GetSlotNo__Q2_2nn3actFv(PpcContext *ctx) { ctx->r[3] = 0; }
 
-#endif /* BRAMBLE_CAFEOS_NN_ACT_H */
+#endif /* ARKCHEMY_CAFEOS_NN_ACT_H */

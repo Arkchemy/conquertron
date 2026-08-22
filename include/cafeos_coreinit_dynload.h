@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_DYNLOAD_H
-#define BRAMBLE_CAFEOS_COREINIT_DYNLOAD_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_DYNLOAD_H
+#define ARKCHEMY_CAFEOS_COREINIT_DYNLOAD_H
 
 #include "ppc_runtime.h"
 
@@ -41,21 +41,21 @@
  */
 
 enum {
-    BRAMBLE_OS_DYNLOAD_OK = 0,
-    BRAMBLE_OS_DYNLOAD_MODULE_NOT_FOUND = (int32_t)0xFFFFFFFA,
+    ARKCHEMY_OS_DYNLOAD_OK = 0,
+    ARKCHEMY_OS_DYNLOAD_MODULE_NOT_FOUND = (int32_t)0xFFFFFFFA,
 };
 
 static inline void ppc_import_coreinit_OSDynLoad_Acquire(PpcContext *ctx) {
     /* OSDynLoad_Error OSDynLoad_Acquire(char const *name, OSDynLoad_Module *outModule) */
     if (ctx->r[4] != 0) ppc_store_u32(ctx, ctx->r[4], 0); /* *outModule = NULL */
-    ctx->r[3] = (uint32_t)BRAMBLE_OS_DYNLOAD_MODULE_NOT_FOUND;
+    ctx->r[3] = (uint32_t)ARKCHEMY_OS_DYNLOAD_MODULE_NOT_FOUND;
 }
 
 static inline void ppc_import_coreinit_OSDynLoad_FindExport(PpcContext *ctx) {
     /* OSDynLoad_Error OSDynLoad_FindExport(OSDynLoad_Module module,
      *   OSDynLoad_ExportType exportType, char const *name, void **outAddr) */
     if (ctx->r[6] != 0) ppc_store_u32(ctx, ctx->r[6], 0); /* *outAddr = NULL */
-    ctx->r[3] = (uint32_t)BRAMBLE_OS_DYNLOAD_MODULE_NOT_FOUND;
+    ctx->r[3] = (uint32_t)ARKCHEMY_OS_DYNLOAD_MODULE_NOT_FOUND;
 }
 
 static inline void ppc_import_coreinit_OSDynLoad_Release(PpcContext *ctx) {
@@ -63,7 +63,7 @@ static inline void ppc_import_coreinit_OSDynLoad_Release(PpcContext *ctx) {
      * hardware releasing an already-invalid/never-acquired handle isn't a
      * game-visible error condition, so this always succeeds. */
     (void)ctx;
-    ctx->r[3] = (uint32_t)BRAMBLE_OS_DYNLOAD_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_OS_DYNLOAD_OK;
 }
 
 static inline void ppc_import_coreinit_OSDynLoad_SetAllocator(PpcContext *ctx) {
@@ -72,7 +72,7 @@ static inline void ppc_import_coreinit_OSDynLoad_SetAllocator(PpcContext *ctx) {
      * accept-and-discard no-op since nothing here ever dynamically loads
      * anything to need them for. */
     (void)ctx;
-    ctx->r[3] = (uint32_t)BRAMBLE_OS_DYNLOAD_OK;
+    ctx->r[3] = (uint32_t)ARKCHEMY_OS_DYNLOAD_OK;
 }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_DYNLOAD_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_DYNLOAD_H */

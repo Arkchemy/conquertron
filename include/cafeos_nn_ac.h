@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_NN_AC_H
-#define BRAMBLE_CAFEOS_NN_AC_H
+#ifndef ARKCHEMY_CAFEOS_NN_AC_H
+#define ARKCHEMY_CAFEOS_NN_AC_H
 
 #include "ppc_runtime.h"
 
@@ -27,30 +27,30 @@
  * hits this exact same "ACConnect fails, game proceeds offline" path,
  * so any real game already has to handle it gracefully.
  */
-#define BRAMBLE_AC_RESULT_SUCCESS 0u
-#define BRAMBLE_AC_RESULT_FAILURE 1u
+#define ARKCHEMY_AC_RESULT_SUCCESS 0u
+#define ARKCHEMY_AC_RESULT_FAILURE 1u
 
-static inline void ppc_import_nn_ac_ACInitialize(PpcContext *ctx) { ctx->r[3] = BRAMBLE_AC_RESULT_SUCCESS; }
+static inline void ppc_import_nn_ac_ACInitialize(PpcContext *ctx) { ctx->r[3] = ARKCHEMY_AC_RESULT_SUCCESS; }
 static inline void ppc_import_nn_ac_ACFinalize(PpcContext *ctx) { (void)ctx; }
 
-static inline void ppc_import_nn_ac_ACConnect(PpcContext *ctx) { ctx->r[3] = BRAMBLE_AC_RESULT_FAILURE; }
-static inline void ppc_import_nn_ac_ACGetStatus(PpcContext *ctx) { ctx->r[3] = BRAMBLE_AC_RESULT_FAILURE; }
+static inline void ppc_import_nn_ac_ACConnect(PpcContext *ctx) { ctx->r[3] = ARKCHEMY_AC_RESULT_FAILURE; }
+static inline void ppc_import_nn_ac_ACGetStatus(PpcContext *ctx) { ctx->r[3] = ARKCHEMY_AC_RESULT_FAILURE; }
 
 /* ACGetAssignedAddress(ACIpAddress *addr) -- r3=out_addr. Writes 0.0.0.0
  * (no address, matching the "no connection" state) and reports failure,
  * consistent with never having connected. */
 static inline void ppc_import_nn_ac_ACGetAssignedAddress(PpcContext *ctx) {
     ppc_store_u32(ctx, ctx->r[3], 0);
-    ctx->r[3] = BRAMBLE_AC_RESULT_FAILURE;
+    ctx->r[3] = ARKCHEMY_AC_RESULT_FAILURE;
 }
 
 /* ACIsFailure(Result result) -- BOOL. The self-consistency anchor: as
  * long as this agrees with the sentinel values above, real code's own
  * "did it work?" checks come out correct regardless of whether
- * BRAMBLE_AC_RESULT_FAILURE happens to match real hardware's actual
+ * ARKCHEMY_AC_RESULT_FAILURE happens to match real hardware's actual
  * nn::Result failure encoding. */
 static inline void ppc_import_nn_ac_ACIsFailure(PpcContext *ctx) {
-    ctx->r[3] = (ctx->r[3] != BRAMBLE_AC_RESULT_SUCCESS) ? 1u : 0u;
+    ctx->r[3] = (ctx->r[3] != ARKCHEMY_AC_RESULT_SUCCESS) ? 1u : 0u;
 }
 
-#endif /* BRAMBLE_CAFEOS_NN_AC_H */
+#endif /* ARKCHEMY_CAFEOS_NN_AC_H */
