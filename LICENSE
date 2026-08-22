@@ -113,6 +113,18 @@ grant permission to do any of the above.
    confidentiality obligation survives any change to this license
    under Section 9 and applies independently of it.
 
+12. ENFORCEMENT
+   If a use, copy, fork, port, publication, or derivative work is
+   found not to comply with this license, Aaron/Arkchemy will attempt
+   to contact the responsible party -- through GitHub, GitLab, or
+   whatever platform is hosting the non-compliant use, and/or through
+   any email address linked to the accounts involved -- to request
+   compliance. If no response is received within one month of that
+   contact attempt, and the non-compliant use has not been resolved
+   by then, Aaron/Arkchemy may proceed to seek its removal from
+   GitHub, GitLab, or any other hosting platform or website, through
+   that platform's own reporting or takedown process.
+
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
 OR IMPLIED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM,
 DAMAGES, OR OTHER LIABILITY ARISING FROM USE OF THE SOFTWARE.
