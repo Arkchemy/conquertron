@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_LIBC_H
-#define BRAMBLE_CAFEOS_COREINIT_LIBC_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_LIBC_H
+#define ARKCHEMY_CAFEOS_COREINIT_LIBC_H
 
 #include <string.h>
 
@@ -46,4 +46,4 @@ static inline void ppc_import_coreinit_memset(PpcContext *ctx) {
     }
 }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_LIBC_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_LIBC_H */

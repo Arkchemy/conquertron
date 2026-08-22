@@ -262,7 +262,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
     // within it) precisely, not just "some caller of this helper".
     out << "  g_ppc_last_caller_lr = ctx->lr;\n";
     out << "  g_ppc_current_pc = 0x" << std::hex << func.addr << std::dec << "u; g_ppc_fn_call_count++;\n";
-    out << "  for (int __w = 0; __w < BRAMBLE_WATCH_SLOTS; __w++) { if (g_ppc_current_pc == g_ppc_watch[__w].pc) { "
+    out << "  for (int __w = 0; __w < ARKCHEMY_WATCH_SLOTS; __w++) { if (g_ppc_current_pc == g_ppc_watch[__w].pc) { "
            "g_ppc_watch[__w].r3 = ctx->r[3]; g_ppc_watch[__w].r4 = ctx->r[4]; g_ppc_watch[__w].r5 = ctx->r[5]; g_ppc_watch[__w].r6 = ctx->r[6]; "
            "g_ppc_watch[__w].hit_count++; g_ppc_watch[__w].last_hit_call_count = g_ppc_fn_call_count; } }\n";
 
@@ -1855,22 +1855,22 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_ADD:
-            case PPC_INS_BRAMBLE_PS_SUB:
-            case PPC_INS_BRAMBLE_PS_DIV: {
+            case PPC_INS_ARKCHEMY_PS_ADD:
+            case PPC_INS_ARKCHEMY_PS_SUB:
+            case PPC_INS_ARKCHEMY_PS_DIV: {
                 // Per-lane binary op: fD.ps0 = fA.ps0 op fB.ps0, fD.ps1 =
                 // fA.ps1 op fB.ps1. Reads both lanes of both sources into
                 // temporaries first since fD may alias fA/fB.
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fB = freg_idx(ppc.operands[2].reg);
-                char op = insn.id == PPC_INS_BRAMBLE_PS_ADD ? '+' : insn.id == PPC_INS_BRAMBLE_PS_SUB ? '-' : '/';
+                char op = insn.id == PPC_INS_ARKCHEMY_PS_ADD ? '+' : insn.id == PPC_INS_ARKCHEMY_PS_SUB ? '-' : '/';
                 out << "  { double _p0 = " << freg(fA) << " " << op << " " << freg(fB) << "; float _p1 = "
                     << ps1(fA) << " " << op << " " << ps1(fB) << "; " << freg(fD) << " = _p0; " << ps1(fD)
                     << " = _p1; }\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_MUL: {
+            case PPC_INS_ARKCHEMY_PS_MUL: {
                 // ps_mul fD, fA, fC (no frB operand -- see emit_dac).
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fA = freg_idx(ppc.operands[1].reg);
@@ -1879,42 +1879,42 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << ps1(fC) << "; " << freg(fD) << " = _p0; " << ps1(fD) << " = _p1; }\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_MULS0:
-            case PPC_INS_BRAMBLE_PS_MULS1: {
+            case PPC_INS_ARKCHEMY_PS_MULS0:
+            case PPC_INS_ARKCHEMY_PS_MULS1: {
                 // ps_muls0/1: both lanes of fA multiplied by a single
                 // broadcast lane of fC (ps0 for muls0, ps1 for muls1).
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
-                std::string c_bcast = insn.id == PPC_INS_BRAMBLE_PS_MULS0 ? freg(fC) : ("(double)" + ps1(fC));
+                std::string c_bcast = insn.id == PPC_INS_ARKCHEMY_PS_MULS0 ? freg(fC) : ("(double)" + ps1(fC));
                 out << "  { double _cb = " << c_bcast << "; double _p0 = " << freg(fA) << " * _cb; float _p1 = "
                     << ps1(fA) << " * (float)_cb; " << freg(fD) << " = _p0; " << ps1(fD) << " = _p1; }\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_RES:
-            case PPC_INS_BRAMBLE_PS_RSQRTE: {
+            case PPC_INS_ARKCHEMY_PS_RES:
+            case PPC_INS_ARKCHEMY_PS_RSQRTE: {
                 // Per-lane reciprocal / reciprocal-sqrt estimate (see
                 // ppc_frsqrte's comment: computed exactly rather than as a
                 // low-precision hardware estimate).
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fB = freg_idx(ppc.operands[1].reg);
-                bool rsqrt = insn.id == PPC_INS_BRAMBLE_PS_RSQRTE;
+                bool rsqrt = insn.id == PPC_INS_ARKCHEMY_PS_RSQRTE;
                 std::string p0 = rsqrt ? ("ppc_frsqrte(" + freg(fB) + ")") : ("1.0 / " + freg(fB));
                 std::string p1 = rsqrt ? ("1.0f / sqrtf(" + ps1(fB) + ")") : ("1.0f / " + ps1(fB));
                 out << "  { double _p0 = " << p0 << "; float _p1 = " << p1 << "; " << freg(fD) << " = _p0; "
                     << ps1(fD) << " = _p1; }\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_NEG:
-            case PPC_INS_BRAMBLE_PS_ABS:
-            case PPC_INS_BRAMBLE_PS_NABS: {
+            case PPC_INS_ARKCHEMY_PS_NEG:
+            case PPC_INS_ARKCHEMY_PS_ABS:
+            case PPC_INS_ARKCHEMY_PS_NABS: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fB = freg_idx(ppc.operands[1].reg);
                 std::string p0, p1;
-                if (insn.id == PPC_INS_BRAMBLE_PS_NEG) {
+                if (insn.id == PPC_INS_ARKCHEMY_PS_NEG) {
                     p0 = "-" + freg(fB);
                     p1 = "-" + ps1(fB);
-                } else if (insn.id == PPC_INS_BRAMBLE_PS_ABS) {
+                } else if (insn.id == PPC_INS_ARKCHEMY_PS_ABS) {
                     p0 = "ppc_fabs(" + freg(fB) + ")";
                     p1 = "fabsf(" + ps1(fB) + ")";
                 } else {
@@ -1925,15 +1925,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << ps1(fD) << " = _p1; }\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_MR: {
+            case PPC_INS_ARKCHEMY_PS_MR: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fB = freg_idx(ppc.operands[1].reg);
                 out << "  { double _p0 = " << freg(fB) << "; float _p1 = " << ps1(fB) << "; " << freg(fD)
                     << " = _p0; " << ps1(fD) << " = _p1; }\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_SUM0:
-            case PPC_INS_BRAMBLE_PS_SUM1: {
+            case PPC_INS_ARKCHEMY_PS_SUM0:
+            case PPC_INS_ARKCHEMY_PS_SUM1: {
                 // ps_sum0 fD,fA,fC,fB: fD.ps0 = fA.ps0+fB.ps1; fD.ps1 = fC.ps1
                 // ps_sum1 fD,fA,fC,fB: fD.ps0 = fC.ps0;        fD.ps1 = fA.ps0+fB.ps1
                 int fD = freg_idx(ppc.operands[0].reg);
@@ -1941,27 +1941,27 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
                 std::string sum = "(" + freg(fA) + " + (double)" + ps1(fB) + ")";
-                std::string p0 = insn.id == PPC_INS_BRAMBLE_PS_SUM0 ? sum : freg(fC);
-                std::string p1 = insn.id == PPC_INS_BRAMBLE_PS_SUM0 ? ps1(fC) : ("(float)" + sum);
+                std::string p0 = insn.id == PPC_INS_ARKCHEMY_PS_SUM0 ? sum : freg(fC);
+                std::string p1 = insn.id == PPC_INS_ARKCHEMY_PS_SUM0 ? ps1(fC) : ("(float)" + sum);
                 out << "  { double _p0 = " << p0 << "; float _p1 = " << p1 << "; " << freg(fD) << " = _p0; "
                     << ps1(fD) << " = _p1; }\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_MADDS0:
-            case PPC_INS_BRAMBLE_PS_MADDS1: {
+            case PPC_INS_ARKCHEMY_PS_MADDS0:
+            case PPC_INS_ARKCHEMY_PS_MADDS1: {
                 // Both lanes of fA multiplied by a broadcast lane of fC
                 // (ps0 for madds0, ps1 for madds1), then fB added per-lane.
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                std::string c_bcast = insn.id == PPC_INS_BRAMBLE_PS_MADDS0 ? freg(fC) : ("(double)" + ps1(fC));
+                std::string c_bcast = insn.id == PPC_INS_ARKCHEMY_PS_MADDS0 ? freg(fC) : ("(double)" + ps1(fC));
                 out << "  { double _cb = " << c_bcast << "; double _p0 = " << freg(fA) << " * _cb + " << freg(fB)
                     << "; float _p1 = " << ps1(fA) << " * (float)_cb + " << ps1(fB) << "; " << freg(fD)
                     << " = _p0; " << ps1(fD) << " = _p1; }\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_SEL: {
+            case PPC_INS_ARKCHEMY_PS_SEL: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
@@ -1971,16 +1971,16 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << freg(fD) << " = _p0; " << ps1(fD) << " = _p1; }\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_MSUB:
-            case PPC_INS_BRAMBLE_PS_MADD:
-            case PPC_INS_BRAMBLE_PS_NMSUB:
-            case PPC_INS_BRAMBLE_PS_NMADD: {
+            case PPC_INS_ARKCHEMY_PS_MSUB:
+            case PPC_INS_ARKCHEMY_PS_MADD:
+            case PPC_INS_ARKCHEMY_PS_NMSUB:
+            case PPC_INS_ARKCHEMY_PS_NMADD: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                bool is_add = insn.id == PPC_INS_BRAMBLE_PS_MADD || insn.id == PPC_INS_BRAMBLE_PS_NMADD;
-                bool negate = insn.id == PPC_INS_BRAMBLE_PS_NMSUB || insn.id == PPC_INS_BRAMBLE_PS_NMADD;
+                bool is_add = insn.id == PPC_INS_ARKCHEMY_PS_MADD || insn.id == PPC_INS_ARKCHEMY_PS_NMADD;
+                bool negate = insn.id == PPC_INS_ARKCHEMY_PS_NMSUB || insn.id == PPC_INS_ARKCHEMY_PS_NMADD;
                 char op = is_add ? '+' : '-';
                 std::string p0 = freg(fA) + " * " + freg(fC) + " " + op + " " + freg(fB);
                 std::string p1 = ps1(fA) + " * " + ps1(fC) + " " + op + " " + ps1(fB);
@@ -1992,10 +1992,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << ps1(fD) << " = _p1; }\n";
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_CMPU0:
-            case PPC_INS_BRAMBLE_PS_CMPO0:
-            case PPC_INS_BRAMBLE_PS_CMPU1:
-            case PPC_INS_BRAMBLE_PS_CMPO1: {
+            case PPC_INS_ARKCHEMY_PS_CMPU0:
+            case PPC_INS_ARKCHEMY_PS_CMPO0:
+            case PPC_INS_ARKCHEMY_PS_CMPU1:
+            case PPC_INS_ARKCHEMY_PS_CMPO1: {
                 // Only crfD==0 (CR0) is tracked -- matching fcmpu/cmpw's
                 // existing CR0-only convention (see ppc_runtime.h). ps0 is
                 // compared for cmp*0, ps1 for cmp*1; "ordered" (NaN-aware)
@@ -2008,7 +2008,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 }
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fB = freg_idx(ppc.operands[2].reg);
-                bool lane1 = insn.id == PPC_INS_BRAMBLE_PS_CMPU1 || insn.id == PPC_INS_BRAMBLE_PS_CMPO1;
+                bool lane1 = insn.id == PPC_INS_ARKCHEMY_PS_CMPU1 || insn.id == PPC_INS_ARKCHEMY_PS_CMPO1;
                 if (lane1) {
                     out << "  ctx->cr0_lt = " << ps1(fA) << " < " << ps1(fB) << "; ctx->cr0_gt = " << ps1(fA)
                         << " > " << ps1(fB) << "; ctx->cr0_eq = " << ps1(fA) << " == " << ps1(fB) << ";\n";
@@ -2017,8 +2017,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 }
                 break;
             }
-            case PPC_INS_BRAMBLE_PSQ_L:
-            case PPC_INS_BRAMBLE_PSQ_LU: {
+            case PPC_INS_ARKCHEMY_PSQ_L:
+            case PPC_INS_ARKCHEMY_PSQ_LU: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
                 uint32_t w = (uint32_t)ppc.operands[2].imm;
@@ -2037,7 +2037,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     out << "  { double _ps0, _ps1 = 1.0; ppc_psq_load_quantized(ctx, " << addr_expr << ", &_ps0, &_ps1, ctx->gqr["
                         << gqr_i << "], " << (w != 0 ? 1 : 0) << "); " << freg(fD) << " = _ps0; ctx->ps1[" << fD
                         << "] = (float)_ps1; }\n";
-                    if (insn.id == PPC_INS_BRAMBLE_PSQ_LU) {
+                    if (insn.id == PPC_INS_ARKCHEMY_PSQ_LU) {
                         out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                     }
                     break;
@@ -2050,13 +2050,13 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     // to 1.0, not left stale -- see the ISA note.
                     out << "  ctx->ps1[" << fD << "] = 1.0f;\n";
                 }
-                if (insn.id == PPC_INS_BRAMBLE_PSQ_LU) {
+                if (insn.id == PPC_INS_ARKCHEMY_PSQ_LU) {
                     out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 }
                 break;
             }
-            case PPC_INS_BRAMBLE_PSQ_ST:
-            case PPC_INS_BRAMBLE_PSQ_STU: {
+            case PPC_INS_ARKCHEMY_PSQ_ST:
+            case PPC_INS_ARKCHEMY_PSQ_STU: {
                 int fS = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
                 uint32_t w = (uint32_t)ppc.operands[2].imm;
@@ -2071,7 +2071,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     // psq_l/psq_lu case above.
                     out << "  ppc_psq_store_quantized(ctx, " << addr_expr << ", " << freg(fS) << ", (double)ctx->ps1["
                         << fS << "], ctx->gqr[" << gqr_i << "], " << (w != 0 ? 1 : 0) << ");\n";
-                    if (insn.id == PPC_INS_BRAMBLE_PSQ_STU) {
+                    if (insn.id == PPC_INS_ARKCHEMY_PSQ_STU) {
                         out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                     }
                     break;
@@ -2080,15 +2080,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 if (w == 0) {
                     out << "  ppc_store_f32(ctx, " << addr_expr << " + 4, (double)ctx->ps1[" << fS << "]);\n";
                 }
-                if (insn.id == PPC_INS_BRAMBLE_PSQ_STU) {
+                if (insn.id == PPC_INS_ARKCHEMY_PSQ_STU) {
                     out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 }
                 break;
             }
-            case PPC_INS_BRAMBLE_PS_MERGE00:
-            case PPC_INS_BRAMBLE_PS_MERGE01:
-            case PPC_INS_BRAMBLE_PS_MERGE10:
-            case PPC_INS_BRAMBLE_PS_MERGE11: {
+            case PPC_INS_ARKCHEMY_PS_MERGE00:
+            case PPC_INS_ARKCHEMY_PS_MERGE01:
+            case PPC_INS_ARKCHEMY_PS_MERGE10:
+            case PPC_INS_ARKCHEMY_PS_MERGE11: {
                 // ps_mergeXY: frD.ps0 = frA's laneX, frD.ps1 = frB's laneY
                 // (X/Y in {0,1} per the mnemonic's trailing digits). Reads
                 // both source lanes into temporaries before writing frD's
@@ -2096,8 +2096,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fB = freg_idx(ppc.operands[2].reg);
-                bool a_lane1 = insn.id == PPC_INS_BRAMBLE_PS_MERGE10 || insn.id == PPC_INS_BRAMBLE_PS_MERGE11;
-                bool b_lane1 = insn.id == PPC_INS_BRAMBLE_PS_MERGE01 || insn.id == PPC_INS_BRAMBLE_PS_MERGE11;
+                bool a_lane1 = insn.id == PPC_INS_ARKCHEMY_PS_MERGE10 || insn.id == PPC_INS_ARKCHEMY_PS_MERGE11;
+                bool b_lane1 = insn.id == PPC_INS_ARKCHEMY_PS_MERGE01 || insn.id == PPC_INS_ARKCHEMY_PS_MERGE11;
                 std::string ps0_src = a_lane1 ? ("(double)ctx->ps1[" + std::to_string(fA) + "]") : freg(fA);
                 std::string ps1_src = b_lane1 ? ("ctx->ps1[" + std::to_string(fB) + "]") : ("(float)" + freg(fB));
                 out << "  { double _ps0 = " << ps0_src << "; float _ps1 = " << ps1_src << "; " << freg(fD)

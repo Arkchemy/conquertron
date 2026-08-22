@@ -41,6 +41,6 @@ allocate itself — solving the real chicken-and-egg problem of needing a workin
 pool to construct the very object that sets up memory pools. That heap was never
 created anywhere in this project's recompiled output, so the constructor silently
 failed and returned unconstructed, cascading into every symptom above. Fixed by
-creating the heap directly from the boot shim (`bramble_mem_bootstrap_heap_init` in
+creating the heap directly from the boot shim (`arkchemy_mem_bootstrap_heap_init` in
 `recomp/include/cafeos_coreinit_mem.h`), called once before the real game entry point
 runs.

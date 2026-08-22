@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_THREAD_H
-#define BRAMBLE_CAFEOS_COREINIT_THREAD_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_THREAD_H
+#define ARKCHEMY_CAFEOS_COREINIT_THREAD_H
 
 #include "ppc_runtime.h"
 
@@ -56,8 +56,8 @@
  * guest memory, only passes it back into these same functions.
  */
 
-#define BRAMBLE_THREAD_TABLE_SIZE 32
-#define BRAMBLE_THREAD_SPECIFIC_SLOTS 14 /* OS_THREAD_SPECIFIC_0..13; 14/15 are wut-reserved */
+#define ARKCHEMY_THREAD_TABLE_SIZE 32
+#define ARKCHEMY_THREAD_SPECIFIC_SLOTS 14 /* OS_THREAD_SPECIFIC_0..13; 14/15 are wut-reserved */
 
 typedef struct {
     uint32_t guest_addr;
@@ -69,22 +69,22 @@ typedef struct {
     int32_t suspend_count;
     int32_t priority;
     int32_t exit_value;
-    uint32_t specific[BRAMBLE_THREAD_SPECIFIC_SLOTS];
+    uint32_t specific[ARKCHEMY_THREAD_SPECIFIC_SLOTS];
     /* Stashed at OSCreateThread time, consumed when suspend_count first reaches 0. */
     uint32_t entry_addr;
     int32_t argc;
     uint32_t argv;
     uint32_t stack_top;
     PpcSharedMemory *shared;
-} BrambleThreadEntry;
+} ArkchemyThreadEntry;
 
 /* Real definitions in cafeos_state.c -- see its own file comment. */
-extern BrambleThreadEntry g_bramble_threads[BRAMBLE_THREAD_TABLE_SIZE];
-extern pthread_mutex_t g_bramble_thread_table_lock;
-extern pthread_key_t g_bramble_current_thread_key;
-extern pthread_once_t g_bramble_thread_tls_once;
+extern ArkchemyThreadEntry g_arkchemy_threads[ARKCHEMY_THREAD_TABLE_SIZE];
+extern pthread_mutex_t g_arkchemy_thread_table_lock;
+extern pthread_key_t g_arkchemy_current_thread_key;
+extern pthread_once_t g_arkchemy_thread_tls_once;
 
-static inline void bramble_thread_tls_init(void) { pthread_key_create(&g_bramble_current_thread_key, NULL); }
+static inline void arkchemy_thread_tls_init(void) { pthread_key_create(&g_arkchemy_current_thread_key, NULL); }
 
 /* Finds an existing entry, or (if create_if_missing) lazily allocates a
  * fresh, real-but-never-Created one -- the same defensive pattern used
@@ -92,19 +92,19 @@ static inline void bramble_thread_tls_init(void) { pthread_key_create(&g_bramble
  * entry starts already "resumed" (suspend_count=0, started=1 but with
  * no real pthread of its own -- it represents a real host thread that
  * already exists by other means, e.g. the original entry thread). */
-static inline BrambleThreadEntry *bramble_thread_get(uint32_t addr, int create_if_missing) {
+static inline ArkchemyThreadEntry *arkchemy_thread_get(uint32_t addr, int create_if_missing) {
     int i, free_slot = -1;
-    BrambleThreadEntry *result = NULL;
-    pthread_mutex_lock(&g_bramble_thread_table_lock);
-    for (i = 0; i < BRAMBLE_THREAD_TABLE_SIZE; i++) {
-        if (g_bramble_threads[i].active && g_bramble_threads[i].guest_addr == addr) {
-            result = &g_bramble_threads[i];
+    ArkchemyThreadEntry *result = NULL;
+    pthread_mutex_lock(&g_arkchemy_thread_table_lock);
+    for (i = 0; i < ARKCHEMY_THREAD_TABLE_SIZE; i++) {
+        if (g_arkchemy_threads[i].active && g_arkchemy_threads[i].guest_addr == addr) {
+            result = &g_arkchemy_threads[i];
             break;
         }
-        if (free_slot < 0 && !g_bramble_threads[i].active) free_slot = i;
+        if (free_slot < 0 && !g_arkchemy_threads[i].active) free_slot = i;
     }
     if (result == NULL && create_if_missing && free_slot >= 0) {
-        BrambleThreadEntry *e = &g_bramble_threads[free_slot];
+        ArkchemyThreadEntry *e = &g_arkchemy_threads[free_slot];
         memset(e, 0, sizeof(*e));
         e->guest_addr = addr;
         e->active = 1;
@@ -113,27 +113,27 @@ static inline BrambleThreadEntry *bramble_thread_get(uint32_t addr, int create_i
         e->priority = 16; /* real Cafe OS default/mid-range priority (0=highest, 31=lowest) */
         result = e;
     }
-    pthread_mutex_unlock(&g_bramble_thread_table_lock);
+    pthread_mutex_unlock(&g_arkchemy_thread_table_lock);
     return result;
 }
 
-static inline uint32_t bramble_current_thread_addr(void) {
-    pthread_once(&g_bramble_thread_tls_once, bramble_thread_tls_init);
-    void *v = pthread_getspecific(g_bramble_current_thread_key);
+static inline uint32_t arkchemy_current_thread_addr(void) {
+    pthread_once(&g_arkchemy_thread_tls_once, arkchemy_thread_tls_init);
+    void *v = pthread_getspecific(g_arkchemy_current_thread_key);
     if (v == NULL) {
         static __thread uint32_t sentinel_storage;
         uint32_t sentinel = (uint32_t)(uintptr_t)&sentinel_storage;
-        pthread_setspecific(g_bramble_current_thread_key, (void *)(uintptr_t)sentinel);
-        (void)bramble_thread_get(sentinel, 1); /* register so lookups by this "address" succeed */
+        pthread_setspecific(g_arkchemy_current_thread_key, (void *)(uintptr_t)sentinel);
+        (void)arkchemy_thread_get(sentinel, 1); /* register so lookups by this "address" succeed */
         v = (void *)(uintptr_t)sentinel;
     }
     return (uint32_t)(uintptr_t)v;
 }
 
-static inline void *bramble_thread_trampoline(void *arg) {
-    BrambleThreadEntry *te = (BrambleThreadEntry *)arg;
-    pthread_once(&g_bramble_thread_tls_once, bramble_thread_tls_init);
-    pthread_setspecific(g_bramble_current_thread_key, (void *)(uintptr_t)te->guest_addr);
+static inline void *arkchemy_thread_trampoline(void *arg) {
+    ArkchemyThreadEntry *te = (ArkchemyThreadEntry *)arg;
+    pthread_once(&g_arkchemy_thread_tls_once, arkchemy_thread_tls_init);
+    pthread_setspecific(g_arkchemy_current_thread_key, (void *)(uintptr_t)te->guest_addr);
 
     PpcContext ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -151,7 +151,7 @@ static inline void ppc_import_coreinit_OSCreateThread(PpcContext *ctx) {
      *   int32_t argc, char *argv, void *stack, uint32_t stackSize,
      *   int32_t priority, OSThreadAttributes attributes) */
     uint32_t thread_addr = ctx->r[3];
-    BrambleThreadEntry *te = bramble_thread_get(thread_addr, 1);
+    ArkchemyThreadEntry *te = arkchemy_thread_get(thread_addr, 1);
     if (te == NULL) { ctx->r[3] = 0; return; } /* table exhausted */
     te->entry_addr = ctx->r[4];
     te->argc = (int32_t)ctx->r[5];
@@ -171,19 +171,19 @@ static inline void ppc_import_coreinit_OSCreateThread(PpcContext *ctx) {
 
 static inline void ppc_import_coreinit_OSResumeThread(PpcContext *ctx) {
     /* int32_t OSResumeThread(OSThread *thread) -- returns the PREVIOUS suspend counter */
-    BrambleThreadEntry *te = bramble_thread_get(ctx->r[3], 1);
+    ArkchemyThreadEntry *te = arkchemy_thread_get(ctx->r[3], 1);
     int32_t prev = te->suspend_count;
     if (te->suspend_count > 0) te->suspend_count--;
     if (te->suspend_count == 0 && !te->started) {
         te->started = 1;
-        pthread_create(&te->pthread, NULL, bramble_thread_trampoline, te);
+        pthread_create(&te->pthread, NULL, arkchemy_thread_trampoline, te);
     }
     ctx->r[3] = (uint32_t)prev;
 }
 
 static inline void ppc_import_coreinit_OSJoinThread(PpcContext *ctx) {
     /* BOOL OSJoinThread(OSThread *thread, int *threadResult) */
-    BrambleThreadEntry *te = bramble_thread_get(ctx->r[3], 0);
+    ArkchemyThreadEntry *te = arkchemy_thread_get(ctx->r[3], 0);
     if (te == NULL || !te->started || te->detached) { ctx->r[3] = 0; return; }
     if (!te->joined) {
         pthread_join(te->pthread, NULL);
@@ -194,24 +194,24 @@ static inline void ppc_import_coreinit_OSJoinThread(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSDetachThread(PpcContext *ctx) {
-    BrambleThreadEntry *te = bramble_thread_get(ctx->r[3], 0);
+    ArkchemyThreadEntry *te = arkchemy_thread_get(ctx->r[3], 0);
     if (te == NULL || te->detached) return;
     te->detached = 1;
     if (te->started) pthread_detach(te->pthread);
 }
 
 static inline void ppc_import_coreinit_OSGetCurrentThread(PpcContext *ctx) {
-    ctx->r[3] = bramble_current_thread_addr();
+    ctx->r[3] = arkchemy_current_thread_addr();
 }
 
 static inline void ppc_import_coreinit_OSGetThreadPriority(PpcContext *ctx) {
-    BrambleThreadEntry *te = bramble_thread_get(ctx->r[3], 1);
+    ArkchemyThreadEntry *te = arkchemy_thread_get(ctx->r[3], 1);
     ctx->r[3] = (uint32_t)te->priority;
 }
 
 static inline void ppc_import_coreinit_OSSetThreadPriority(PpcContext *ctx) {
     /* BOOL OSSetThreadPriority(OSThread *thread, int32_t priority) */
-    BrambleThreadEntry *te = bramble_thread_get(ctx->r[3], 1);
+    ArkchemyThreadEntry *te = arkchemy_thread_get(ctx->r[3], 1);
     te->priority = (int32_t)ctx->r[4];
     ctx->r[3] = 1; /* BOOL TRUE -- real host OS scheduler handles real priority, this is bookkeeping only */
 }
@@ -239,16 +239,16 @@ static inline void ppc_import_coreinit_OSGetThreadSpecific(PpcContext *ctx) {
      * *current* thread; no explicit OSThread* argument in the real
      * signature. */
     uint32_t id = ctx->r[3];
-    BrambleThreadEntry *te = bramble_thread_get(bramble_current_thread_addr(), 1);
-    ctx->r[3] = (id < BRAMBLE_THREAD_SPECIFIC_SLOTS) ? te->specific[id] : 0;
+    ArkchemyThreadEntry *te = arkchemy_thread_get(arkchemy_current_thread_addr(), 1);
+    ctx->r[3] = (id < ARKCHEMY_THREAD_SPECIFIC_SLOTS) ? te->specific[id] : 0;
 }
 
 static inline void ppc_import_coreinit_OSSetThreadSpecific(PpcContext *ctx) {
     /* void OSSetThreadSpecific(OSThreadSpecificID id, void *value) */
     uint32_t id = ctx->r[3];
     uint32_t value = ctx->r[4];
-    BrambleThreadEntry *te = bramble_thread_get(bramble_current_thread_addr(), 1);
-    if (id < BRAMBLE_THREAD_SPECIFIC_SLOTS) te->specific[id] = value;
+    ArkchemyThreadEntry *te = arkchemy_thread_get(arkchemy_current_thread_addr(), 1);
+    if (id < ARKCHEMY_THREAD_SPECIFIC_SLOTS) te->specific[id] = value;
 }
 
 static inline void ppc_import_coreinit_OSBlockThreadsOnExit(PpcContext *ctx) {
@@ -264,4 +264,4 @@ static inline void ppc_import_coreinit_OSBlockThreadsOnExit(PpcContext *ctx) {
     (void)ctx;
 }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_THREAD_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_THREAD_H */

@@ -62,10 +62,10 @@ bool try_decode_paired_single(uint32_t word, uint64_t addr, cs_insn *insn) {
         // psq_l / psq_lu / psq_st / psq_stu -- D-form (immediate
         // displacement), fields per the Gekko manual's PSQA/PSQS layout.
         switch (primary) {
-            case 56: id = PPC_INS_BRAMBLE_PSQ_L; mnemonic = "psq_l"; break;
-            case 57: id = PPC_INS_BRAMBLE_PSQ_LU; mnemonic = "psq_lu"; break;
-            case 60: id = PPC_INS_BRAMBLE_PSQ_ST; mnemonic = "psq_st"; break;
-            case 61: id = PPC_INS_BRAMBLE_PSQ_STU; mnemonic = "psq_stu"; break;
+            case 56: id = PPC_INS_ARKCHEMY_PSQ_L; mnemonic = "psq_l"; break;
+            case 57: id = PPC_INS_ARKCHEMY_PSQ_LU; mnemonic = "psq_lu"; break;
+            case 60: id = PPC_INS_ARKCHEMY_PSQ_ST; mnemonic = "psq_st"; break;
+            case 61: id = PPC_INS_ARKCHEMY_PSQ_STU; mnemonic = "psq_stu"; break;
             default: return false;
         }
         insn->id = id;
@@ -94,39 +94,39 @@ bool try_decode_paired_single(uint32_t word, uint64_t addr, cs_insn *insn) {
         // below (they all reduce to XO5 in {0, 8, 16}, none of which the
         // 5-bit family below uses), so checking these first is safe.
         switch (xo10) {
-            case 528: mnemonic = "ps_merge00"; id = PPC_INS_BRAMBLE_PS_MERGE00; goto emit_dab;
-            case 560: mnemonic = "ps_merge01"; id = PPC_INS_BRAMBLE_PS_MERGE01; goto emit_dab;
-            case 592: mnemonic = "ps_merge10"; id = PPC_INS_BRAMBLE_PS_MERGE10; goto emit_dab;
-            case 624: mnemonic = "ps_merge11"; id = PPC_INS_BRAMBLE_PS_MERGE11; goto emit_dab;
-            case 40: mnemonic = "ps_neg"; id = PPC_INS_BRAMBLE_PS_NEG; goto emit_db;
-            case 72: mnemonic = "ps_mr"; id = PPC_INS_BRAMBLE_PS_MR; goto emit_db;
-            case 136: mnemonic = "ps_nabs"; id = PPC_INS_BRAMBLE_PS_NABS; goto emit_db;
-            case 264: mnemonic = "ps_abs"; id = PPC_INS_BRAMBLE_PS_ABS; goto emit_db;
-            case 0: mnemonic = "ps_cmpu0"; id = PPC_INS_BRAMBLE_PS_CMPU0; goto emit_cmp;
-            case 32: mnemonic = "ps_cmpo0"; id = PPC_INS_BRAMBLE_PS_CMPO0; goto emit_cmp;
-            case 64: mnemonic = "ps_cmpu1"; id = PPC_INS_BRAMBLE_PS_CMPU1; goto emit_cmp;
-            case 96: mnemonic = "ps_cmpo1"; id = PPC_INS_BRAMBLE_PS_CMPO1; goto emit_cmp;
+            case 528: mnemonic = "ps_merge00"; id = PPC_INS_ARKCHEMY_PS_MERGE00; goto emit_dab;
+            case 560: mnemonic = "ps_merge01"; id = PPC_INS_ARKCHEMY_PS_MERGE01; goto emit_dab;
+            case 592: mnemonic = "ps_merge10"; id = PPC_INS_ARKCHEMY_PS_MERGE10; goto emit_dab;
+            case 624: mnemonic = "ps_merge11"; id = PPC_INS_ARKCHEMY_PS_MERGE11; goto emit_dab;
+            case 40: mnemonic = "ps_neg"; id = PPC_INS_ARKCHEMY_PS_NEG; goto emit_db;
+            case 72: mnemonic = "ps_mr"; id = PPC_INS_ARKCHEMY_PS_MR; goto emit_db;
+            case 136: mnemonic = "ps_nabs"; id = PPC_INS_ARKCHEMY_PS_NABS; goto emit_db;
+            case 264: mnemonic = "ps_abs"; id = PPC_INS_ARKCHEMY_PS_ABS; goto emit_db;
+            case 0: mnemonic = "ps_cmpu0"; id = PPC_INS_ARKCHEMY_PS_CMPU0; goto emit_cmp;
+            case 32: mnemonic = "ps_cmpo0"; id = PPC_INS_ARKCHEMY_PS_CMPO0; goto emit_cmp;
+            case 64: mnemonic = "ps_cmpu1"; id = PPC_INS_ARKCHEMY_PS_CMPU1; goto emit_cmp;
+            case 96: mnemonic = "ps_cmpo1"; id = PPC_INS_ARKCHEMY_PS_CMPO1; goto emit_cmp;
             default: break;
         }
 
         switch (xo5) {
-            case 18: mnemonic = "ps_div"; id = PPC_INS_BRAMBLE_PS_DIV; goto emit_dab;
-            case 20: mnemonic = "ps_sub"; id = PPC_INS_BRAMBLE_PS_SUB; goto emit_dab;
-            case 21: mnemonic = "ps_add"; id = PPC_INS_BRAMBLE_PS_ADD; goto emit_dab;
-            case 24: mnemonic = "ps_res"; id = PPC_INS_BRAMBLE_PS_RES; goto emit_db;
-            case 26: mnemonic = "ps_rsqrte"; id = PPC_INS_BRAMBLE_PS_RSQRTE; goto emit_db;
-            case 12: mnemonic = "ps_muls0"; id = PPC_INS_BRAMBLE_PS_MULS0; goto emit_dac;
-            case 13: mnemonic = "ps_muls1"; id = PPC_INS_BRAMBLE_PS_MULS1; goto emit_dac;
-            case 25: mnemonic = "ps_mul"; id = PPC_INS_BRAMBLE_PS_MUL; goto emit_dac;
-            case 10: mnemonic = "ps_sum0"; id = PPC_INS_BRAMBLE_PS_SUM0; goto emit_dabc;
-            case 11: mnemonic = "ps_sum1"; id = PPC_INS_BRAMBLE_PS_SUM1; goto emit_dabc;
-            case 14: mnemonic = "ps_madds0"; id = PPC_INS_BRAMBLE_PS_MADDS0; goto emit_dabc;
-            case 15: mnemonic = "ps_madds1"; id = PPC_INS_BRAMBLE_PS_MADDS1; goto emit_dabc;
-            case 23: mnemonic = "ps_sel"; id = PPC_INS_BRAMBLE_PS_SEL; goto emit_dabc;
-            case 28: mnemonic = "ps_msub"; id = PPC_INS_BRAMBLE_PS_MSUB; goto emit_dabc;
-            case 29: mnemonic = "ps_madd"; id = PPC_INS_BRAMBLE_PS_MADD; goto emit_dabc;
-            case 30: mnemonic = "ps_nmsub"; id = PPC_INS_BRAMBLE_PS_NMSUB; goto emit_dabc;
-            case 31: mnemonic = "ps_nmadd"; id = PPC_INS_BRAMBLE_PS_NMADD; goto emit_dabc;
+            case 18: mnemonic = "ps_div"; id = PPC_INS_ARKCHEMY_PS_DIV; goto emit_dab;
+            case 20: mnemonic = "ps_sub"; id = PPC_INS_ARKCHEMY_PS_SUB; goto emit_dab;
+            case 21: mnemonic = "ps_add"; id = PPC_INS_ARKCHEMY_PS_ADD; goto emit_dab;
+            case 24: mnemonic = "ps_res"; id = PPC_INS_ARKCHEMY_PS_RES; goto emit_db;
+            case 26: mnemonic = "ps_rsqrte"; id = PPC_INS_ARKCHEMY_PS_RSQRTE; goto emit_db;
+            case 12: mnemonic = "ps_muls0"; id = PPC_INS_ARKCHEMY_PS_MULS0; goto emit_dac;
+            case 13: mnemonic = "ps_muls1"; id = PPC_INS_ARKCHEMY_PS_MULS1; goto emit_dac;
+            case 25: mnemonic = "ps_mul"; id = PPC_INS_ARKCHEMY_PS_MUL; goto emit_dac;
+            case 10: mnemonic = "ps_sum0"; id = PPC_INS_ARKCHEMY_PS_SUM0; goto emit_dabc;
+            case 11: mnemonic = "ps_sum1"; id = PPC_INS_ARKCHEMY_PS_SUM1; goto emit_dabc;
+            case 14: mnemonic = "ps_madds0"; id = PPC_INS_ARKCHEMY_PS_MADDS0; goto emit_dabc;
+            case 15: mnemonic = "ps_madds1"; id = PPC_INS_ARKCHEMY_PS_MADDS1; goto emit_dabc;
+            case 23: mnemonic = "ps_sel"; id = PPC_INS_ARKCHEMY_PS_SEL; goto emit_dabc;
+            case 28: mnemonic = "ps_msub"; id = PPC_INS_ARKCHEMY_PS_MSUB; goto emit_dabc;
+            case 29: mnemonic = "ps_madd"; id = PPC_INS_ARKCHEMY_PS_MADD; goto emit_dabc;
+            case 30: mnemonic = "ps_nmsub"; id = PPC_INS_ARKCHEMY_PS_NMSUB; goto emit_dabc;
+            case 31: mnemonic = "ps_nmadd"; id = PPC_INS_ARKCHEMY_PS_NMADD; goto emit_dabc;
             default: return false;
         }
 

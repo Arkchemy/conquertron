@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_FUNC_RECOVERY_H
-#define BRAMBLE_FUNC_RECOVERY_H
+#ifndef ARKCHEMY_FUNC_RECOVERY_H
+#define ARKCHEMY_FUNC_RECOVERY_H
 
 #include <cstdint>
 #include <string>
@@ -33,4 +33,4 @@ std::vector<ElfFunction> recover_functions_heuristic(const std::vector<uint8_t> 
 
 }  // namespace recomp
 
-#endif  // BRAMBLE_FUNC_RECOVERY_H
+#endif  // ARKCHEMY_FUNC_RECOVERY_H

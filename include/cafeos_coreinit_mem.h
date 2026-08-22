@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_MEM_H
-#define BRAMBLE_CAFEOS_COREINIT_MEM_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_MEM_H
+#define ARKCHEMY_CAFEOS_COREINIT_MEM_H
 
 #include "ppc_runtime.h"
 #include <stdlib.h>
@@ -88,28 +88,28 @@
  * (block-4) through the end of the payload, i.e. exactly what
  * MEMFreeToExpHeap's block pointer minus 4, plus the size recovered
  * from that header, spans. Reused whole on the next matching alloc. */
-typedef struct BrambleFreeBlock {
+typedef struct ArkchemyFreeBlock {
     uint32_t addr;
     uint32_t size;
-    struct BrambleFreeBlock *next;
-} BrambleFreeBlock;
+    struct ArkchemyFreeBlock *next;
+} ArkchemyFreeBlock;
 
-typedef struct BrambleMemHeap {
+typedef struct ArkchemyMemHeap {
     uint32_t base;
     uint32_t size;
     uint32_t bump;
     int active;
-    BrambleFreeBlock *free_list;
-} BrambleMemHeap;
+    ArkchemyFreeBlock *free_list;
+} ArkchemyMemHeap;
 
-#define BRAMBLE_MEM_MAX_HEAPS 8
+#define ARKCHEMY_MEM_MAX_HEAPS 8
 /* Real definitions in cafeos_state.c -- see its own file comment. */
-extern BrambleMemHeap g_bramble_mem_heaps[BRAMBLE_MEM_MAX_HEAPS];
+extern ArkchemyMemHeap g_arkchemy_mem_heaps[ARKCHEMY_MEM_MAX_HEAPS];
 
 /* MEM_BASE_HEAP_MEM1=0, MEM_BASE_HEAP_MEM2=1, MEM_BASE_HEAP_FG=8 -- see
  * coreinit/memheap.h's MEMBaseHeapType. Indexed [0]=MEM1, [1]=MEM2,
  * [2]=FG; 0 means "not yet lazily created". */
-extern uint32_t g_bramble_base_heap_handle[3];
+extern uint32_t g_arkchemy_base_heap_handle[3];
 
 /* Real layout, found necessary the hard way: these addresses used to sit
  * at 0x8000/0xB000/0x2000 -- fine as "well clear of both the 0x2000+
@@ -147,9 +147,9 @@ extern uint32_t g_bramble_base_heap_handle[3];
  * MEM2 matches real Wii U MEM2 scale (which is far larger) -- grounded
  * in this real binary's own measured global-region size and this one
  * confirmed real allocation failure, not picked blind. */
-#define BRAMBLE_FG_BASE    0x800000u
-#define BRAMBLE_FG_SIZE    0x2000u
-#define BRAMBLE_ERRNO_ADDR 0x802000u
+#define ARKCHEMY_FG_BASE    0x800000u
+#define ARKCHEMY_FG_SIZE    0x2000u
+#define ARKCHEMY_ERRNO_ADDR 0x802000u
 /* Real, targeted fix added 2026-08-21 after a full real hardware trace
  * (see main.c's own comment trail) found the true root cause of the
  * boot-time igStringPool spin: real engine code has a small, dedicated
@@ -169,17 +169,17 @@ extern uint32_t g_bramble_base_heap_handle[3];
  * retry) is a direct, confirmed consequence of just this one missing
  * heap. Rather than try to recover the real missing function, this
  * creates the same real heap directly from this project's own boot
- * shim (see bramble_mem_bootstrap_heap_init below, called once from
+ * shim (see arkchemy_mem_bootstrap_heap_init below, called once from
  * main.c before the real game entry point runs) and writes its handle
  * into that exact real global -- functionally identical to what the
  * real missing function would have done. Small (64KB), carved out of
- * the real unused gap between BRAMBLE_ERRNO_ADDR and BRAMBLE_MEM1_BASE
+ * the real unused gap between ARKCHEMY_ERRNO_ADDR and ARKCHEMY_MEM1_BASE
  * above -- real observed allocations through this heap so far are tiny
  * (52 and 100 bytes), matching a genuine bootstrap-only heap, not a
  * general-purpose one. */
-#define BRAMBLE_BOOTSTRAP_HEAP_HANDLE_ADDR 421248u
-#define BRAMBLE_BOOTSTRAP_HEAP_BASE 0x810000u
-#define BRAMBLE_BOOTSTRAP_HEAP_SIZE 0x10000u
+#define ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR 421248u
+#define ARKCHEMY_BOOTSTRAP_HEAP_BASE 0x810000u
+#define ARKCHEMY_BOOTSTRAP_HEAP_SIZE 0x10000u
 /* Real, decisive diagnostic result as of 2026-08-21: MEM1 was doubled
  * twice (16MB -> 32MB -> 64MB) chasing the real boot-time sbrk/malloc
  * spin, and the real hardware log showed the fill ratio *climbing
@@ -198,16 +198,16 @@ extern uint32_t g_bramble_base_heap_handle[3];
  * Restored to the real, Wii-U-accurate 32MB value (still a genuine
  * correctness improvement over the old undersized 16MB placeholder,
  * just not what was causing this specific hang). */
-#define BRAMBLE_MEM1_BASE 0x1000000u
-#define BRAMBLE_MEM1_SIZE 0x2000000u
-#define BRAMBLE_MEM2_BASE 0x3000000u
-#define BRAMBLE_MEM2_SIZE 0x4000000u
+#define ARKCHEMY_MEM1_BASE 0x1000000u
+#define ARKCHEMY_MEM1_SIZE 0x2000000u
+#define ARKCHEMY_MEM2_BASE 0x3000000u
+#define ARKCHEMY_MEM2_SIZE 0x4000000u
 
-static inline BrambleMemHeap *bramble_mem_heap_find(uint32_t handle) {
+static inline ArkchemyMemHeap *arkchemy_mem_heap_find(uint32_t handle) {
     int i;
-    for (i = 0; i < BRAMBLE_MEM_MAX_HEAPS; i++) {
-        if (g_bramble_mem_heaps[i].active && g_bramble_mem_heaps[i].base == handle) {
-            return &g_bramble_mem_heaps[i];
+    for (i = 0; i < ARKCHEMY_MEM_MAX_HEAPS; i++) {
+        if (g_arkchemy_mem_heaps[i].active && g_arkchemy_mem_heaps[i].base == handle) {
+            return &g_arkchemy_mem_heaps[i];
         }
     }
     return NULL;
@@ -218,51 +218,51 @@ static inline BrambleMemHeap *bramble_mem_heap_find(uint32_t handle) {
  * both on real destroy and before reusing a table slot for a new heap,
  * so a stale list from a previous heap that lived in this same slot
  * never leaks host memory or gets misread as the new heap's own list. */
-static inline void bramble_mem_heap_clear_free_list(BrambleMemHeap *h) {
-    BrambleFreeBlock *n = h->free_list;
+static inline void arkchemy_mem_heap_clear_free_list(ArkchemyMemHeap *h) {
+    ArkchemyFreeBlock *n = h->free_list;
     while (n != NULL) {
-        BrambleFreeBlock *next = n->next;
+        ArkchemyFreeBlock *next = n->next;
         free(n);
         n = next;
     }
     h->free_list = NULL;
 }
 
-static inline uint32_t bramble_mem_heap_create(uint32_t base, uint32_t size) {
+static inline uint32_t arkchemy_mem_heap_create(uint32_t base, uint32_t size) {
     int i;
-    for (i = 0; i < BRAMBLE_MEM_MAX_HEAPS; i++) {
-        if (!g_bramble_mem_heaps[i].active) {
-            bramble_mem_heap_clear_free_list(&g_bramble_mem_heaps[i]);
-            g_bramble_mem_heaps[i].base = base;
-            g_bramble_mem_heaps[i].size = size;
-            g_bramble_mem_heaps[i].bump = base;
-            g_bramble_mem_heaps[i].active = 1;
+    for (i = 0; i < ARKCHEMY_MEM_MAX_HEAPS; i++) {
+        if (!g_arkchemy_mem_heaps[i].active) {
+            arkchemy_mem_heap_clear_free_list(&g_arkchemy_mem_heaps[i]);
+            g_arkchemy_mem_heaps[i].base = base;
+            g_arkchemy_mem_heaps[i].size = size;
+            g_arkchemy_mem_heaps[i].bump = base;
+            g_arkchemy_mem_heaps[i].active = 1;
             return base;
         }
     }
     return 0; /* out of heap table slots */
 }
 
-/* Real, targeted fix -- see BRAMBLE_BOOTSTRAP_HEAP_HANDLE_ADDR's own
+/* Real, targeted fix -- see ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR's own
  * comment above for the full real hardware-traced explanation. Call
  * this once, from the boot shim, before the real game entry point runs
  * -- doing exactly what the real (currently unrecovered/unreached)
  * game function would have done: create the heap, store its handle
  * into the real global every early allocator reads it from. */
-static inline void bramble_mem_bootstrap_heap_init(PpcContext *ctx) {
-    uint32_t handle = bramble_mem_heap_create(BRAMBLE_BOOTSTRAP_HEAP_BASE, BRAMBLE_BOOTSTRAP_HEAP_SIZE);
-    ppc_store_u32(ctx, BRAMBLE_BOOTSTRAP_HEAP_HANDLE_ADDR, handle);
+static inline void arkchemy_mem_bootstrap_heap_init(PpcContext *ctx) {
+    uint32_t handle = arkchemy_mem_heap_create(ARKCHEMY_BOOTSTRAP_HEAP_BASE, ARKCHEMY_BOOTSTRAP_HEAP_SIZE);
+    ppc_store_u32(ctx, ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR, handle);
 }
 
-static inline void bramble_mem_heap_destroy(uint32_t handle) {
-    BrambleMemHeap *h = bramble_mem_heap_find(handle);
+static inline void arkchemy_mem_heap_destroy(uint32_t handle) {
+    ArkchemyMemHeap *h = arkchemy_mem_heap_find(handle);
     if (h != NULL) {
-        bramble_mem_heap_clear_free_list(h);
+        arkchemy_mem_heap_clear_free_list(h);
         h->active = 0;
     }
 }
 
-static inline uint32_t bramble_align_up(uint32_t v, uint32_t align) {
+static inline uint32_t arkchemy_align_up(uint32_t v, uint32_t align) {
     if (align < 4) align = 4;
     return (v + (align - 1)) & ~(align - 1);
 }
@@ -288,13 +288,13 @@ static inline void ppc_mem_set_alloc_fail_log(ppc_mem_alloc_fail_log_fn fn) { g_
  * MEMFreeToExpHeap is even being reached at all. These two counters
  * answer that cheaply -- main.c prints them in its own periodic status
  * line instead of a per-event log line. */
-extern uint64_t g_bramble_mem_alloc_fail_total;
-extern uint64_t g_bramble_mem_free_total;
-extern uint64_t g_bramble_mem_reuse_total;
+extern uint64_t g_arkchemy_mem_alloc_fail_total;
+extern uint64_t g_arkchemy_mem_free_total;
+extern uint64_t g_arkchemy_mem_reuse_total;
 
 static inline void ppc_import_coreinit_MEMCreateExpHeapEx(PpcContext *ctx) {
     /* MEMHeapHandle MEMCreateExpHeapEx(void *heap, uint32_t size, uint16_t flags) */
-    uint32_t result = bramble_mem_heap_create(ctx->r[3], ctx->r[4]);
+    uint32_t result = arkchemy_mem_heap_create(ctx->r[3], ctx->r[4]);
     /* Always logged (success or fail), not throttled the way real-alloc
      * failures are -- real heap creation is naturally rare (at most a
      * handful of real calls for the whole game), unlike real individual
@@ -312,13 +312,13 @@ static inline void ppc_import_coreinit_MEMCreateExpHeapEx(PpcContext *ctx) {
 static inline void ppc_import_coreinit_MEMDestroyExpHeap(PpcContext *ctx) {
     /* void *MEMDestroyExpHeap(MEMHeapHandle heap) -- returns the same pointer */
     uint32_t handle = ctx->r[3];
-    bramble_mem_heap_destroy(handle);
+    arkchemy_mem_heap_destroy(handle);
     ctx->r[3] = handle;
 }
 
 static inline void ppc_import_coreinit_MEMAllocFromExpHeapEx(PpcContext *ctx) {
     /* void *MEMAllocFromExpHeapEx(MEMHeapHandle heap, uint32_t size, int alignment) */
-    BrambleMemHeap *h = bramble_mem_heap_find(ctx->r[3]);
+    ArkchemyMemHeap *h = arkchemy_mem_heap_find(ctx->r[3]);
     uint32_t size = ctx->r[4];
     int32_t alignment = (int32_t)ctx->r[5];
     uint32_t align = alignment < 0 ? (uint32_t)(-alignment) : (uint32_t)alignment;
@@ -335,26 +335,26 @@ static inline void ppc_import_coreinit_MEMAllocFromExpHeapEx(PpcContext *ctx) {
      * on partial use and not coalesced with neighbours; just whole-block
      * reuse, which is enough to stop the heap only ever growing. */
     {
-        BrambleFreeBlock **pp = &h->free_list;
+        ArkchemyFreeBlock **pp = &h->free_list;
         while (*pp != NULL) {
-            BrambleFreeBlock *n = *pp;
-            uint32_t candidate = bramble_align_up(n->addr + 4, align);
+            ArkchemyFreeBlock *n = *pp;
+            uint32_t candidate = arkchemy_align_up(n->addr + 4, align);
             if (candidate + size <= n->addr + n->size) {
                 *pp = n->next;
                 free(n);
                 ppc_store_u32(ctx, candidate - 4, size);
                 ctx->r[3] = candidate;
-                g_bramble_mem_reuse_total++;
+                g_arkchemy_mem_reuse_total++;
                 return;
             }
             pp = &n->next;
         }
     }
 
-    addr = bramble_align_up(h->bump + 4, align); /* +4: room for the private size header */
+    addr = arkchemy_align_up(h->bump + 4, align); /* +4: room for the private size header */
     end = addr + size;
     if (end > h->base + h->size) { /* real OOM behavior: NULL */
-        g_bramble_mem_alloc_fail_total++;
+        g_arkchemy_mem_alloc_fail_total++;
         if (g_ppc_mem_alloc_fail_log) {
             g_ppc_mem_alloc_fail_log("MEMAllocFromExpHeapEx (out of space)", size, h->base, h->size, h->bump - h->base);
         }
@@ -386,24 +386,24 @@ static inline void ppc_import_coreinit_MEMFreeToExpHeap(PpcContext *ctx) {
      * an unknown heap handle are both silently ignored, same honesty
      * standard as the rest of this shim's real-hardware-matching
      * no-crash-on-bad-input behaviour. */
-    BrambleMemHeap *h = bramble_mem_heap_find(ctx->r[3]);
+    ArkchemyMemHeap *h = arkchemy_mem_heap_find(ctx->r[3]);
     uint32_t block = ctx->r[4];
-    BrambleFreeBlock *node;
+    ArkchemyFreeBlock *node;
     uint32_t size;
     if (h == NULL || block == 0) return;
     size = ppc_load_u32(ctx, block - 4);
-    node = (BrambleFreeBlock *)malloc(sizeof(BrambleFreeBlock));
+    node = (ArkchemyFreeBlock *)malloc(sizeof(ArkchemyFreeBlock));
     if (node == NULL) return; /* host allocation failure -- block just stays leaked, no crash */
     node->addr = block - 4;
     node->size = size + 4;
     node->next = h->free_list;
     h->free_list = node;
-    g_bramble_mem_free_total++;
+    g_arkchemy_mem_free_total++;
 }
 
 static inline void ppc_import_coreinit_MEMGetAllocatableSizeForExpHeapEx(PpcContext *ctx) {
     /* uint32_t MEMGetAllocatableSizeForExpHeapEx(MEMHeapHandle heap, int alignment) */
-    BrambleMemHeap *h = bramble_mem_heap_find(ctx->r[3]);
+    ArkchemyMemHeap *h = arkchemy_mem_heap_find(ctx->r[3]);
     uint32_t end;
     uint32_t result;
     if (h == NULL) { ctx->r[3] = 0; return; }
@@ -430,13 +430,13 @@ static inline void ppc_import_coreinit_MEMGetSizeForMBlockExpHeap(PpcContext *ct
 
 static inline void ppc_import_coreinit_MEMAllocFromFrmHeapEx(PpcContext *ctx) {
     /* void *MEMAllocFromFrmHeapEx(MEMHeapHandle heap, uint32_t size, int alignment) */
-    BrambleMemHeap *h = bramble_mem_heap_find(ctx->r[3]);
+    ArkchemyMemHeap *h = arkchemy_mem_heap_find(ctx->r[3]);
     uint32_t size = ctx->r[4];
     int32_t alignment = (int32_t)ctx->r[5];
     uint32_t align = alignment < 0 ? (uint32_t)(-alignment) : (uint32_t)alignment;
     uint32_t addr, end;
     if (h == NULL) { ctx->r[3] = 0; return; }
-    addr = bramble_align_up(h->bump, align); /* no private header needed -- Frm blocks are never size-queried */
+    addr = arkchemy_align_up(h->bump, align); /* no private header needed -- Frm blocks are never size-queried */
     end = addr + size;
     if (end > h->base + h->size) { ctx->r[3] = 0; return; }
     h->bump = end;
@@ -449,7 +449,7 @@ static inline void ppc_import_coreinit_MEMFreeToFrmHeap(PpcContext *ctx) {
      * grows from the head, so HEAD/ALL both mean "reset the whole heap"; a
      * TAIL-only free (2) is a real no-op here (nothing was ever allocated
      * from the tail direction), a known simplification. */
-    BrambleMemHeap *h = bramble_mem_heap_find(ctx->r[3]);
+    ArkchemyMemHeap *h = arkchemy_mem_heap_find(ctx->r[3]);
     uint32_t mode = ctx->r[4];
     if (h != NULL && (mode & 1u) != 0) {
         h->bump = h->base;
@@ -457,7 +457,7 @@ static inline void ppc_import_coreinit_MEMFreeToFrmHeap(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_MEMGetAllocatableSizeForFrmHeapEx(PpcContext *ctx) {
-    BrambleMemHeap *h = bramble_mem_heap_find(ctx->r[3]);
+    ArkchemyMemHeap *h = arkchemy_mem_heap_find(ctx->r[3]);
     uint32_t end;
     if (h == NULL) { ctx->r[3] = 0; return; }
     end = h->base + h->size;
@@ -471,18 +471,18 @@ static inline void ppc_import_coreinit_MEMGetBaseHeapHandle(PpcContext *ctx) {
      * on first call instead, since there's no real boot sequence here. */
     uint32_t type = ctx->r[3];
     int idx = (type == 0) ? 0 : (type == 1) ? 1 : 2;
-    if (g_bramble_base_heap_handle[idx] == 0) {
-        uint32_t base = (idx == 0) ? BRAMBLE_MEM1_BASE : (idx == 1) ? BRAMBLE_MEM2_BASE : BRAMBLE_FG_BASE;
-        uint32_t size = (idx == 0) ? BRAMBLE_MEM1_SIZE : (idx == 1) ? BRAMBLE_MEM2_SIZE : BRAMBLE_FG_SIZE;
-        g_bramble_base_heap_handle[idx] = bramble_mem_heap_create(base, size);
+    if (g_arkchemy_base_heap_handle[idx] == 0) {
+        uint32_t base = (idx == 0) ? ARKCHEMY_MEM1_BASE : (idx == 1) ? ARKCHEMY_MEM2_BASE : ARKCHEMY_FG_BASE;
+        uint32_t size = (idx == 0) ? ARKCHEMY_MEM1_SIZE : (idx == 1) ? ARKCHEMY_MEM2_SIZE : ARKCHEMY_FG_SIZE;
+        g_arkchemy_base_heap_handle[idx] = arkchemy_mem_heap_create(base, size);
         /* Rare (at most 3 real calls total, one per base heap type) --
          * see MEMCreateExpHeapEx's own comment on why this is safe to
          * always log. */
         if (g_ppc_mem_alloc_fail_log) {
-            g_ppc_mem_alloc_fail_log("MEMGetBaseHeapHandle lazy-create", type, base, size, g_bramble_base_heap_handle[idx]);
+            g_ppc_mem_alloc_fail_log("MEMGetBaseHeapHandle lazy-create", type, base, size, g_arkchemy_base_heap_handle[idx]);
         }
     }
-    ctx->r[3] = g_bramble_base_heap_handle[idx];
+    ctx->r[3] = g_arkchemy_base_heap_handle[idx];
 }
 
 /* Real Cafe OS convenience wrappers around the real default (MEM1) app
@@ -500,10 +500,10 @@ static inline void ppc_import_coreinit_MEMAllocFromDefaultHeapEx(PpcContext *ctx
     /* void *MEMAllocFromDefaultHeapEx(uint32_t size, int alignment) */
     uint32_t size = ctx->r[3];
     int32_t alignment = (int32_t)ctx->r[4];
-    if (g_bramble_base_heap_handle[0] == 0) {
-        g_bramble_base_heap_handle[0] = bramble_mem_heap_create(BRAMBLE_MEM1_BASE, BRAMBLE_MEM1_SIZE);
+    if (g_arkchemy_base_heap_handle[0] == 0) {
+        g_arkchemy_base_heap_handle[0] = arkchemy_mem_heap_create(ARKCHEMY_MEM1_BASE, ARKCHEMY_MEM1_SIZE);
     }
-    ctx->r[3] = g_bramble_base_heap_handle[0];
+    ctx->r[3] = g_arkchemy_base_heap_handle[0];
     ctx->r[4] = size;
     ctx->r[5] = (uint32_t)alignment;
     ppc_import_coreinit_MEMAllocFromExpHeapEx(ctx);
@@ -525,10 +525,10 @@ static inline void ppc_import_coreinit_MEMFreeToDefaultHeap(PpcContext *ctx) {
      * MEM1 handle filled in, matching MEMAllocFromDefaultHeapEx's own
      * pattern above. */
     uint32_t ptr = ctx->r[3];
-    if (g_bramble_base_heap_handle[0] == 0) {
-        g_bramble_base_heap_handle[0] = bramble_mem_heap_create(BRAMBLE_MEM1_BASE, BRAMBLE_MEM1_SIZE);
+    if (g_arkchemy_base_heap_handle[0] == 0) {
+        g_arkchemy_base_heap_handle[0] = arkchemy_mem_heap_create(ARKCHEMY_MEM1_BASE, ARKCHEMY_MEM1_SIZE);
     }
-    ctx->r[3] = g_bramble_base_heap_handle[0];
+    ctx->r[3] = g_arkchemy_base_heap_handle[0];
     ctx->r[4] = ptr;
     ppc_import_coreinit_MEMFreeToExpHeap(ctx);
 }
@@ -539,9 +539,9 @@ static inline void ppc_import_coreinit_MEMFreeToDefaultHeap(PpcContext *ctx) {
  * Needs one real, stable, persistent guest address -- a fixed reserved
  * slot, same documented-placeholder trade-off as the base heaps above.
  */
-static inline void ppc_import_coreinit___gh_errno_ptr(PpcContext *ctx) { ctx->r[3] = BRAMBLE_ERRNO_ADDR; }
+static inline void ppc_import_coreinit___gh_errno_ptr(PpcContext *ctx) { ctx->r[3] = ARKCHEMY_ERRNO_ADDR; }
 static inline void ppc_import_coreinit___gh_set_errno(PpcContext *ctx) {
-    ppc_store_u32(ctx, BRAMBLE_ERRNO_ADDR, ctx->r[3]);
+    ppc_store_u32(ctx, ARKCHEMY_ERRNO_ADDR, ctx->r[3]);
 }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_MEM_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_MEM_H */

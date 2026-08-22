@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_GX2_H
-#define BRAMBLE_CAFEOS_GX2_H
+#ifndef ARKCHEMY_CAFEOS_GX2_H
+#define ARKCHEMY_CAFEOS_GX2_H
 
 #include "ppc_runtime.h"
 #include <math.h>
@@ -62,31 +62,31 @@
  * code (GX2InitSampler* below) and the real, __SWITCH__-only decoding
  * code (GX2SetPixelSampler/GX2SetVertexSampler) need them, and the
  * host build never sees inside that block at all. */
-#define BRAMBLE_GX2_SAMPLER_WORD0_OFFSET 0u
-#define BRAMBLE_GX2_SAMPLER_WORD1_OFFSET 4u
-#define BRAMBLE_GX2_SAMPLER_WORD2_OFFSET 8u
+#define ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET 0u
+#define ARKCHEMY_GX2_SAMPLER_WORD1_OFFSET 4u
+#define ARKCHEMY_GX2_SAMPLER_WORD2_OFFSET 8u
 
 /* Real, WUT_CHECK_OFFSET-confirmed byte offsets of GX2Surface's real
  * fields (see wut's gx2/surface.h) -- defined unconditionally for the
  * same reason as the sampler word offsets above: both the
  * backend-independent GX2CalcSurfaceSizeAndAlignment and the real,
  * __SWITCH__-only GX2SetColorBuffer need them. */
-#define BRAMBLE_GX2_SURFACE_DIM_OFFSET 0x00u
-#define BRAMBLE_GX2_SURFACE_WIDTH_OFFSET 0x04u
-#define BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET 0x08u
-#define BRAMBLE_GX2_SURFACE_DEPTH_OFFSET 0x0Cu
-#define BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET 0x10u
-#define BRAMBLE_GX2_SURFACE_FORMAT_OFFSET 0x14u
-#define BRAMBLE_GX2_SURFACE_AA_OFFSET 0x18u
-#define BRAMBLE_GX2_SURFACE_IMAGE_SIZE_OFFSET 0x20u
-#define BRAMBLE_GX2_SURFACE_IMAGE_OFFSET 0x24u
-#define BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET 0x30u
-#define BRAMBLE_GX2_SURFACE_SWIZZLE_OFFSET 0x34u
-#define BRAMBLE_GX2_SURFACE_ALIGNMENT_OFFSET 0x38u
-#define BRAMBLE_GX2_SURFACE_PITCH_OFFSET 0x3Cu
-#define BRAMBLE_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET 0x40u
+#define ARKCHEMY_GX2_SURFACE_DIM_OFFSET 0x00u
+#define ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET 0x04u
+#define ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET 0x08u
+#define ARKCHEMY_GX2_SURFACE_DEPTH_OFFSET 0x0Cu
+#define ARKCHEMY_GX2_SURFACE_MIP_LEVELS_OFFSET 0x10u
+#define ARKCHEMY_GX2_SURFACE_FORMAT_OFFSET 0x14u
+#define ARKCHEMY_GX2_SURFACE_AA_OFFSET 0x18u
+#define ARKCHEMY_GX2_SURFACE_IMAGE_SIZE_OFFSET 0x20u
+#define ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET 0x24u
+#define ARKCHEMY_GX2_SURFACE_TILE_MODE_OFFSET 0x30u
+#define ARKCHEMY_GX2_SURFACE_SWIZZLE_OFFSET 0x34u
+#define ARKCHEMY_GX2_SURFACE_ALIGNMENT_OFFSET 0x38u
+#define ARKCHEMY_GX2_SURFACE_PITCH_OFFSET 0x3Cu
+#define ARKCHEMY_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET 0x40u
 
-static inline uint32_t bramble_gx2_pow2_align(uint32_t x, uint32_t align) {
+static inline uint32_t arkchemy_gx2_pow2_align(uint32_t x, uint32_t align) {
     return (x + align - 1u) & ~(align - 1u);
 }
 
@@ -110,9 +110,9 @@ static inline uint32_t bramble_gx2_pow2_align(uint32_t x, uint32_t align) {
  * sizing once real usage volume is known" trade-off already used
  * elsewhere in this project (assign_global_addrs, PpcContext::mem).
  */
-#define BRAMBLE_GX2_NUM_FRAMEBUFFERS 2u
-#define BRAMBLE_GX2_FB_WIDTH 1280u
-#define BRAMBLE_GX2_FB_HEIGHT 720u
+#define ARKCHEMY_GX2_NUM_FRAMEBUFFERS 2u
+#define ARKCHEMY_GX2_FB_WIDTH 1280u
+#define ARKCHEMY_GX2_FB_HEIGHT 720u
 
 /* Real per-stage sampler count (confirmed against Cemu's real
  * Latte::GPU_LIMITS::NUM_SAMPLERS_PER_STAGE = 18, even Cemu's own
@@ -129,36 +129,36 @@ static inline uint32_t bramble_gx2_pow2_align(uint32_t x, uint32_t align) {
  * ranges within the one real shared descriptor array (geometry
  * samplers aren't in this game's real gx2 import list at all, so no
  * third range is reserved). */
-#define BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE 18u
-#define BRAMBLE_GX2_SAMPLER_PIXEL_BASE 0u
-#define BRAMBLE_GX2_SAMPLER_VERTEX_BASE BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE
-#define BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS (BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE * 2u)
+#define ARKCHEMY_GX2_SAMPLER_SLOTS_PER_STAGE 18u
+#define ARKCHEMY_GX2_SAMPLER_PIXEL_BASE 0u
+#define ARKCHEMY_GX2_SAMPLER_VERTEX_BASE ARKCHEMY_GX2_SAMPLER_SLOTS_PER_STAGE
+#define ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS (ARKCHEMY_GX2_SAMPLER_SLOTS_PER_STAGE * 2u)
 /* Real DkSamplerDescriptor is a fixed, confirmed 32-byte opaque type
  * (DK_DECL_OPAQUE(SamplerDescriptor, 4, 32) in deko3d.h); 36 real
  * entries only need 1152 bytes, rounded up to one full real
  * DK_MEMBLOCK_ALIGNMENT (0x1000) page -- plenty of headroom, same
- * "generous starting point" trade-off as BRAMBLE_GX2_CMD_MEM_SIZE
+ * "generous starting point" trade-off as ARKCHEMY_GX2_CMD_MEM_SIZE
  * above. */
-#define BRAMBLE_GX2_SAMPLER_DESCRIPTOR_MEM_SIZE 0x1000u
+#define ARKCHEMY_GX2_SAMPLER_DESCRIPTOR_MEM_SIZE 0x1000u
 
 /* Real DkImageDescriptor is the same fixed, confirmed 32-byte opaque
  * type as DkSamplerDescriptor (DK_DECL_OPAQUE(ImageDescriptor, 4, 32)
  * in deko3d.h, and devkitPro's own official CDescriptorSet.h even
  * static_asserts the two sizes match) -- so this real image descriptor
  * pool reuses the exact same slot layout/count/sizing reasoning as the
- * sampler pool above (see BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE/
- * BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS), on purpose: real GX2/AMD
+ * sampler pool above (see ARKCHEMY_GX2_SAMPLER_SLOTS_PER_STAGE/
+ * ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS), on purpose: real GX2/AMD
  * hardware pairs pixel/vertex texture unit N with sampler unit N in
  * the shader (a real TFETCH instruction takes both a resource id and a
  * sampler id), so keeping identical pixel/vertex index ranges for both
  * pools means the same real unit index already used for
  * GX2SetPixelSampler/GX2SetVertexSampler can be reused directly as the
- * texture slot too (see bramble_gx2_set_texture below). */
-#define BRAMBLE_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE 0x1000u
+ * texture slot too (see arkchemy_gx2_set_texture below). */
+#define ARKCHEMY_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE 0x1000u
 
 /* Real GX2RenderTarget slot count (confirmed against wut's
  * gx2/enum.h: GX2_RENDER_TARGET_0 through _6). */
-#define BRAMBLE_GX2_NUM_RENDER_TARGETS 7u
+#define ARKCHEMY_GX2_NUM_RENDER_TARGETS 7u
 
 typedef struct {
     bool initialized;
@@ -175,7 +175,7 @@ typedef struct {
      * not read from any real GX2 surface description yet -- see
      * GX2SetColorBuffer's own deferred status below. */
     DkMemBlock fb_mem_block;
-    DkImage framebuffers[BRAMBLE_GX2_NUM_FRAMEBUFFERS];
+    DkImage framebuffers[ARKCHEMY_GX2_NUM_FRAMEBUFFERS];
     DkSwapchain swapchain;
     int acquired_slot; /* -1 if no framebuffer image is currently acquired this frame */
 
@@ -226,7 +226,7 @@ typedef struct {
      * two different real angles (a master on/off switch vs. explicit
      * per-channel selection). Kept as two separate source-of-truth
      * values instead of a shared `DkColorWriteState`, combined via
-     * `bramble_gx2_rebind_color_write_state` below (colorWriteEnable
+     * `arkchemy_gx2_rebind_color_write_state` below (colorWriteEnable
      * ANDed against channel_masks) whenever either changes -- a real,
      * documented interpretation of GX2SetColorControl's own "master
      * on/off switch" description, not the "whichever call happened
@@ -237,7 +237,7 @@ typedef struct {
     uint32_t color_write_enable;
     uint32_t channel_masks;
 
-    /* GX2SetEventCallback registration (see BRAMBLE_GX2_NUM_EVENT_TYPES
+    /* GX2SetEventCallback registration (see ARKCHEMY_GX2_NUM_EVENT_TYPES
      * below) -- real guest addresses (function pointer + userData),
      * not host pointers, same real addressing model as every other
      * guest-memory reference in this project (see ppc_load_u32/
@@ -266,7 +266,7 @@ typedef struct {
      * bits since real hardware keeps them separate too: a sampler's
      * BORDER_COLOR_TYPE field only says *which kind* of border to use
      * (including "the real register value"), not the value itself. */
-    float sampler_border_color[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS][4];
+    float sampler_border_color[ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS][4];
 
     /* Real, independent, off-swapchain color-buffer bindings (see
      * GX2SetColorBuffer's own comment for the full real design and its
@@ -276,9 +276,9 @@ typedef struct {
      * targets that slot again -- real resource lifecycle management,
      * not a leak. `bound[i]` is real and false until GX2SetColorBuffer
      * has successfully bound something there. */
-    DkImage color_target_image[BRAMBLE_GX2_NUM_RENDER_TARGETS];
-    DkMemBlock color_target_mem_block[BRAMBLE_GX2_NUM_RENDER_TARGETS];
-    bool color_target_bound[BRAMBLE_GX2_NUM_RENDER_TARGETS];
+    DkImage color_target_image[ARKCHEMY_GX2_NUM_RENDER_TARGETS];
+    DkMemBlock color_target_mem_block[ARKCHEMY_GX2_NUM_RENDER_TARGETS];
+    bool color_target_bound[ARKCHEMY_GX2_NUM_RENDER_TARGETS];
 
     /* Real, independent depth-buffer binding (see GX2SetDepthBuffer's
      * own comment for the full real design). Real hardware/GX2 only
@@ -304,7 +304,7 @@ typedef struct {
     bool depth_target_bound;
 
     /* Real deko3d image descriptor pool (see
-     * BRAMBLE_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE's own comment and
+     * ARKCHEMY_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE's own comment and
      * GX2SetPixelTexture/GX2SetVertexTexture's own comment for the
      * full real design) -- one shared, persistent, GPU-visible memory
      * block, same real devkitPro CDescriptorSet-pattern reasoning as
@@ -314,9 +314,9 @@ typedef struct {
 
     /* Real, independent, per-slot bound texture images (one real
      * DkImage + backing DkMemBlock + staging DkMemBlock per real
-     * pixel/vertex texture unit, same BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS-
+     * pixel/vertex texture unit, same ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS-
      * sized slot range as the sampler pool -- see
-     * BRAMBLE_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE's own comment for why).
+     * ARKCHEMY_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE's own comment for why).
      * Uses the same real block-linear-image-plus-staging-buffer bridge
      * as GX2SetDepthBuffer (not GX2SetColorBuffer's pitch-linear
      * direct-copy design), since a real sampled texture, unlike a
@@ -324,10 +324,10 @@ typedef struct {
      * project already has a real, hardware-proven staging-buffer path
      * to reuse instead of re-deriving PitchLinear's real constraints
      * for the texture case from scratch. */
-    DkImage texture_image[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
-    DkMemBlock texture_mem_block[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
-    DkMemBlock texture_staging_mem_block[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
-    bool texture_bound[BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS];
+    DkImage texture_image[ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS];
+    DkMemBlock texture_mem_block[ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS];
+    DkMemBlock texture_staging_mem_block[ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS];
+    bool texture_bound[ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS];
 
     /* Real, one-shot temporary source image for
      * GX2CopyColorBufferToScanBuffer (see its own comment for the full
@@ -339,17 +339,17 @@ typedef struct {
     DkImage scan_copy_temp_image;
     DkMemBlock scan_copy_temp_mem_block;
     bool scan_copy_temp_bound;
-} BrambleGx2State;
+} ArkchemyGx2State;
 
 /* GX2EventType's real enumerator count (confirmed against wut's
  * gx2/enum.h: START_OF_PIPE_INTERRUPT=0, END_OF_PIPE_INTERRUPT=1,
  * VSYNC=2, FLIP=3, DISPLAY_LIST_OVERRUN=4) -- sizes the
  * event_callback_func/userdata arrays above. */
-#define BRAMBLE_GX2_NUM_EVENT_TYPES 5u
+#define ARKCHEMY_GX2_NUM_EVENT_TYPES 5u
 
-extern BrambleGx2State g_bramble_gx2; /* real definition in cafeos_state.c -- see its own file comment */
+extern ArkchemyGx2State g_arkchemy_gx2; /* real definition in cafeos_state.c -- see its own file comment */
 
-#define BRAMBLE_GX2_CMD_MEM_SIZE 0x10000u
+#define ARKCHEMY_GX2_CMD_MEM_SIZE 0x10000u
 
 /* Same real host monotonic clock source/reasoning as
  * cafeos_coreinit_sync.h's ppc_coreinit_host_ticks -- a distinct,
@@ -357,16 +357,16 @@ extern BrambleGx2State g_bramble_gx2; /* real definition in cafeos_state.c -- se
  * included in the same translation unit (a real generated program
  * pulls in every cafeos_*.h it needs), which a shared name would
  * redefine. */
-static inline uint64_t bramble_gx2_host_ticks(void) {
+static inline uint64_t arkchemy_gx2_host_ticks(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-static inline void bramble_gx2_create_framebuffers(void) {
+static inline void arkchemy_gx2_create_framebuffers(void) {
     DkImageLayout layout;
     DkImageLayoutMaker layout_maker;
-    DkImage const *fb_array[BRAMBLE_GX2_NUM_FRAMEBUFFERS];
+    DkImage const *fb_array[ARKCHEMY_GX2_NUM_FRAMEBUFFERS];
     uint64_t fb_size;
     uint32_t fb_align, i;
     DkMemBlockMaker fb_mem_maker;
@@ -383,44 +383,44 @@ static inline void bramble_gx2_create_framebuffers(void) {
      * zero-risk defense-in-depth, not a fix for a known bug here. */
     memset(&layout, 0, sizeof(layout));
 
-    dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
+    dkImageLayoutMakerDefaults(&layout_maker, g_arkchemy_gx2.device);
     layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_HwCompression;
     layout_maker.format = DkImageFormat_RGBA8_Unorm;
-    layout_maker.dimensions[0] = BRAMBLE_GX2_FB_WIDTH;
-    layout_maker.dimensions[1] = BRAMBLE_GX2_FB_HEIGHT;
+    layout_maker.dimensions[0] = ARKCHEMY_GX2_FB_WIDTH;
+    layout_maker.dimensions[1] = ARKCHEMY_GX2_FB_HEIGHT;
     dkImageLayoutInitialize(&layout, &layout_maker);
 
     fb_size = dkImageLayoutGetSize(&layout);
     fb_align = dkImageLayoutGetAlignment(&layout);
 
-    dkMemBlockMakerDefaults(&fb_mem_maker, g_bramble_gx2.device,
-                             (uint32_t)((fb_size * BRAMBLE_GX2_NUM_FRAMEBUFFERS + fb_align - 1) & ~(uint64_t)(fb_align - 1)));
+    dkMemBlockMakerDefaults(&fb_mem_maker, g_arkchemy_gx2.device,
+                             (uint32_t)((fb_size * ARKCHEMY_GX2_NUM_FRAMEBUFFERS + fb_align - 1) & ~(uint64_t)(fb_align - 1)));
     fb_mem_maker.flags = DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
-    g_bramble_gx2.fb_mem_block = dkMemBlockCreate(&fb_mem_maker);
+    g_arkchemy_gx2.fb_mem_block = dkMemBlockCreate(&fb_mem_maker);
 
-    for (i = 0; i < BRAMBLE_GX2_NUM_FRAMEBUFFERS; i++) {
-        dkImageInitialize(&g_bramble_gx2.framebuffers[i], &layout, g_bramble_gx2.fb_mem_block, (uint32_t)(i * fb_size));
-        fb_array[i] = &g_bramble_gx2.framebuffers[i];
+    for (i = 0; i < ARKCHEMY_GX2_NUM_FRAMEBUFFERS; i++) {
+        dkImageInitialize(&g_arkchemy_gx2.framebuffers[i], &layout, g_arkchemy_gx2.fb_mem_block, (uint32_t)(i * fb_size));
+        fb_array[i] = &g_arkchemy_gx2.framebuffers[i];
     }
 
-    dkSwapchainMakerDefaults(&swapchain_maker, g_bramble_gx2.device, nwindowGetDefault(), fb_array, BRAMBLE_GX2_NUM_FRAMEBUFFERS);
-    g_bramble_gx2.swapchain = dkSwapchainCreate(&swapchain_maker);
+    dkSwapchainMakerDefaults(&swapchain_maker, g_arkchemy_gx2.device, nwindowGetDefault(), fb_array, ARKCHEMY_GX2_NUM_FRAMEBUFFERS);
+    g_arkchemy_gx2.swapchain = dkSwapchainCreate(&swapchain_maker);
 
-    g_bramble_gx2.acquired_slot = -1;
+    g_arkchemy_gx2.acquired_slot = -1;
 }
 
 /* Ensures a real swapchain framebuffer image is acquired and bound as
  * the current render target before any clear/draw command that needs
  * one -- lazy, so a frame with no clear/draw calls at all doesn't
  * needlessly acquire+present an unused image. */
-static inline void bramble_gx2_ensure_frame_acquired(void) {
+static inline void arkchemy_gx2_ensure_frame_acquired(void) {
     DkImageView color_target;
     DkImageView const *targets[1];
-    if (g_bramble_gx2.acquired_slot >= 0) return;
-    g_bramble_gx2.acquired_slot = dkQueueAcquireImage(g_bramble_gx2.queue, g_bramble_gx2.swapchain);
-    dkImageViewDefaults(&color_target, &g_bramble_gx2.framebuffers[g_bramble_gx2.acquired_slot]);
+    if (g_arkchemy_gx2.acquired_slot >= 0) return;
+    g_arkchemy_gx2.acquired_slot = dkQueueAcquireImage(g_arkchemy_gx2.queue, g_arkchemy_gx2.swapchain);
+    dkImageViewDefaults(&color_target, &g_arkchemy_gx2.framebuffers[g_arkchemy_gx2.acquired_slot]);
     targets[0] = &color_target;
-    dkCmdBufBindRenderTargets(g_bramble_gx2.cmdbuf, targets, 1, NULL);
+    dkCmdBufBindRenderTargets(g_arkchemy_gx2.cmdbuf, targets, 1, NULL);
 }
 
 static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) {
@@ -432,33 +432,33 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) {
      * devkitPro's own official deko3d Example01 (Simple Setup)
      * structure. */
     (void)ctx;
-    if (g_bramble_gx2.initialized) return;
+    if (g_arkchemy_gx2.initialized) return;
 
     DkDeviceMaker device_maker;
     dkDeviceMakerDefaults(&device_maker);
-    g_bramble_gx2.device = dkDeviceCreate(&device_maker);
+    g_arkchemy_gx2.device = dkDeviceCreate(&device_maker);
 
     DkMemBlockMaker mem_maker;
-    dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device, BRAMBLE_GX2_CMD_MEM_SIZE);
+    dkMemBlockMakerDefaults(&mem_maker, g_arkchemy_gx2.device, ARKCHEMY_GX2_CMD_MEM_SIZE);
     mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
-    g_bramble_gx2.cmd_mem_block = dkMemBlockCreate(&mem_maker);
+    g_arkchemy_gx2.cmd_mem_block = dkMemBlockCreate(&mem_maker);
 
     DkCmdBufMaker cmdbuf_maker;
-    dkCmdBufMakerDefaults(&cmdbuf_maker, g_bramble_gx2.device);
-    g_bramble_gx2.cmdbuf = dkCmdBufCreate(&cmdbuf_maker);
-    dkCmdBufAddMemory(g_bramble_gx2.cmdbuf, g_bramble_gx2.cmd_mem_block, 0, BRAMBLE_GX2_CMD_MEM_SIZE);
+    dkCmdBufMakerDefaults(&cmdbuf_maker, g_arkchemy_gx2.device);
+    g_arkchemy_gx2.cmdbuf = dkCmdBufCreate(&cmdbuf_maker);
+    dkCmdBufAddMemory(g_arkchemy_gx2.cmdbuf, g_arkchemy_gx2.cmd_mem_block, 0, ARKCHEMY_GX2_CMD_MEM_SIZE);
 
     DkQueueMaker queue_maker;
-    dkQueueMakerDefaults(&queue_maker, g_bramble_gx2.device);
+    dkQueueMakerDefaults(&queue_maker, g_arkchemy_gx2.device);
     queue_maker.flags = DkQueueFlags_Graphics;
-    g_bramble_gx2.queue = dkQueueCreate(&queue_maker);
+    g_arkchemy_gx2.queue = dkQueueCreate(&queue_maker);
 
-    bramble_gx2_create_framebuffers();
+    arkchemy_gx2_create_framebuffers();
 
-    dkRasterizerStateDefaults(&g_bramble_gx2.rasterizer_state);
-    dkDepthStencilStateDefaults(&g_bramble_gx2.depth_stencil_state);
-    dkColorStateDefaults(&g_bramble_gx2.color_state);
-    dkMultisampleStateDefaults(&g_bramble_gx2.multisample_state);
+    dkRasterizerStateDefaults(&g_arkchemy_gx2.rasterizer_state);
+    dkDepthStencilStateDefaults(&g_arkchemy_gx2.depth_stencil_state);
+    dkColorStateDefaults(&g_arkchemy_gx2.color_state);
+    dkMultisampleStateDefaults(&g_arkchemy_gx2.multisample_state);
     /* deko3d's own default (alphaToCoverageDither=true, deko3d.h) does
      * NOT match real GX2's own real default (GX2_ALPHA_TO_MASK_MODE_
      * NON_DITHERED=0, i.e. dither off) -- corrected here so a game that
@@ -466,91 +466,91 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) {
      * behavior, not deko3d's differing one. alphaToCoverageEnable's
      * deko3d default (false) already matches GX2's real default
      * (alpha-to-coverage off), so that one's untouched. */
-    g_bramble_gx2.multisample_state.alphaToCoverageDither = 0;
+    g_arkchemy_gx2.multisample_state.alphaToCoverageDither = 0;
 
     /* Real GX2 default: color writes enabled, all channels, all
      * targets (matching deko3d's own DkColorWriteState default of
      * masks=0xFFFFFFFF) -- see the color_write_enable/channel_masks
-     * field comment on BrambleGx2State above for why these are two
+     * field comment on ArkchemyGx2State above for why these are two
      * separate values instead of one shared DkColorWriteState. */
-    g_bramble_gx2.color_write_enable = 1;
-    g_bramble_gx2.channel_masks = 0xFFFFFFFFu;
+    g_arkchemy_gx2.color_write_enable = 1;
+    g_arkchemy_gx2.channel_masks = 0xFFFFFFFFu;
 
     /* Real sampler descriptor pool -- see GX2SetPixelSampler/
-     * GX2SetVertexSampler's own comment and BrambleGx2State's field
+     * GX2SetVertexSampler's own comment and ArkchemyGx2State's field
      * comment for the full real design. */
     {
         DkMemBlockMaker sampler_mem_maker;
-        dkMemBlockMakerDefaults(&sampler_mem_maker, g_bramble_gx2.device, BRAMBLE_GX2_SAMPLER_DESCRIPTOR_MEM_SIZE);
+        dkMemBlockMakerDefaults(&sampler_mem_maker, g_arkchemy_gx2.device, ARKCHEMY_GX2_SAMPLER_DESCRIPTOR_MEM_SIZE);
         sampler_mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
-        g_bramble_gx2.sampler_descriptor_mem_block = dkMemBlockCreate(&sampler_mem_maker);
-        g_bramble_gx2.sampler_descriptor_gpu_addr = dkMemBlockGetGpuAddr(g_bramble_gx2.sampler_descriptor_mem_block);
+        g_arkchemy_gx2.sampler_descriptor_mem_block = dkMemBlockCreate(&sampler_mem_maker);
+        g_arkchemy_gx2.sampler_descriptor_gpu_addr = dkMemBlockGetGpuAddr(g_arkchemy_gx2.sampler_descriptor_mem_block);
     }
 
     /* Real image descriptor pool -- see GX2SetPixelTexture/
-     * GX2SetVertexTexture's own comment and BrambleGx2State's field
+     * GX2SetVertexTexture's own comment and ArkchemyGx2State's field
      * comment for the full real design. */
     {
         DkMemBlockMaker texture_mem_maker;
-        dkMemBlockMakerDefaults(&texture_mem_maker, g_bramble_gx2.device, BRAMBLE_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE);
+        dkMemBlockMakerDefaults(&texture_mem_maker, g_arkchemy_gx2.device, ARKCHEMY_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE);
         texture_mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
-        g_bramble_gx2.texture_descriptor_mem_block = dkMemBlockCreate(&texture_mem_maker);
-        g_bramble_gx2.texture_descriptor_gpu_addr = dkMemBlockGetGpuAddr(g_bramble_gx2.texture_descriptor_mem_block);
+        g_arkchemy_gx2.texture_descriptor_mem_block = dkMemBlockCreate(&texture_mem_maker);
+        g_arkchemy_gx2.texture_descriptor_gpu_addr = dkMemBlockGetGpuAddr(g_arkchemy_gx2.texture_descriptor_mem_block);
     }
 
-    g_bramble_gx2.initialized = true;
+    g_arkchemy_gx2.initialized = true;
 }
 
 static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) {
     (void)ctx;
-    if (!g_bramble_gx2.initialized) return;
-    dkQueueWaitIdle(g_bramble_gx2.queue);
-    dkCmdBufClear(g_bramble_gx2.cmdbuf); /* destroys any recorded cmdlists still referencing the framebuffers below */
-    dkSwapchainDestroy(g_bramble_gx2.swapchain);
+    if (!g_arkchemy_gx2.initialized) return;
+    dkQueueWaitIdle(g_arkchemy_gx2.queue);
+    dkCmdBufClear(g_arkchemy_gx2.cmdbuf); /* destroys any recorded cmdlists still referencing the framebuffers below */
+    dkSwapchainDestroy(g_arkchemy_gx2.swapchain);
     /* DkImage itself needs no explicit per-image destroy call -- only its backing DkMemBlock does */
-    dkMemBlockDestroy(g_bramble_gx2.fb_mem_block);
-    dkMemBlockDestroy(g_bramble_gx2.sampler_descriptor_mem_block);
+    dkMemBlockDestroy(g_arkchemy_gx2.fb_mem_block);
+    dkMemBlockDestroy(g_arkchemy_gx2.sampler_descriptor_mem_block);
     {
         /* Real cleanup for any off-swapchain color-buffer bindings
          * (see GX2SetColorBuffer's own comment). */
         uint32_t i;
-        for (i = 0; i < BRAMBLE_GX2_NUM_RENDER_TARGETS; i++) {
-            if (g_bramble_gx2.color_target_bound[i]) {
-                dkMemBlockDestroy(g_bramble_gx2.color_target_mem_block[i]);
-                g_bramble_gx2.color_target_bound[i] = false;
+        for (i = 0; i < ARKCHEMY_GX2_NUM_RENDER_TARGETS; i++) {
+            if (g_arkchemy_gx2.color_target_bound[i]) {
+                dkMemBlockDestroy(g_arkchemy_gx2.color_target_mem_block[i]);
+                g_arkchemy_gx2.color_target_bound[i] = false;
             }
         }
     }
-    if (g_bramble_gx2.depth_target_bound) {
+    if (g_arkchemy_gx2.depth_target_bound) {
         /* Real cleanup for any bound depth buffer (see
          * GX2SetDepthBuffer's own comment). */
-        dkMemBlockDestroy(g_bramble_gx2.depth_target_mem_block);
-        dkMemBlockDestroy(g_bramble_gx2.depth_target_staging_mem_block);
-        g_bramble_gx2.depth_target_bound = false;
+        dkMemBlockDestroy(g_arkchemy_gx2.depth_target_mem_block);
+        dkMemBlockDestroy(g_arkchemy_gx2.depth_target_staging_mem_block);
+        g_arkchemy_gx2.depth_target_bound = false;
     }
-    dkMemBlockDestroy(g_bramble_gx2.texture_descriptor_mem_block);
+    dkMemBlockDestroy(g_arkchemy_gx2.texture_descriptor_mem_block);
     {
         /* Real cleanup for any bound textures (see
          * GX2SetPixelTexture/GX2SetVertexTexture's own comment). */
         uint32_t i;
-        for (i = 0; i < BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS; i++) {
-            if (g_bramble_gx2.texture_bound[i]) {
-                dkMemBlockDestroy(g_bramble_gx2.texture_mem_block[i]);
-                dkMemBlockDestroy(g_bramble_gx2.texture_staging_mem_block[i]);
-                g_bramble_gx2.texture_bound[i] = false;
+        for (i = 0; i < ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS; i++) {
+            if (g_arkchemy_gx2.texture_bound[i]) {
+                dkMemBlockDestroy(g_arkchemy_gx2.texture_mem_block[i]);
+                dkMemBlockDestroy(g_arkchemy_gx2.texture_staging_mem_block[i]);
+                g_arkchemy_gx2.texture_bound[i] = false;
             }
         }
     }
-    if (g_bramble_gx2.scan_copy_temp_bound) {
+    if (g_arkchemy_gx2.scan_copy_temp_bound) {
         /* Real cleanup for GX2CopyColorBufferToScanBuffer's temp
          * source image (see its own comment). */
-        dkMemBlockDestroy(g_bramble_gx2.scan_copy_temp_mem_block);
-        g_bramble_gx2.scan_copy_temp_bound = false;
+        dkMemBlockDestroy(g_arkchemy_gx2.scan_copy_temp_mem_block);
+        g_arkchemy_gx2.scan_copy_temp_bound = false;
     }
-    dkQueueDestroy(g_bramble_gx2.queue);
-    dkCmdBufDestroy(g_bramble_gx2.cmdbuf);
-    dkMemBlockDestroy(g_bramble_gx2.cmd_mem_block);
-    dkDeviceDestroy(g_bramble_gx2.device);
+    dkQueueDestroy(g_arkchemy_gx2.queue);
+    dkCmdBufDestroy(g_arkchemy_gx2.cmdbuf);
+    dkMemBlockDestroy(g_arkchemy_gx2.cmd_mem_block);
+    dkDeviceDestroy(g_arkchemy_gx2.device);
     /* Real correctness fix: event_callback_func/userdata (see
      * GX2SetEventCallback) hold real *guest* addresses that only stay
      * meaningful for the lifetime of the game session that registered
@@ -561,9 +561,9 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) {
      * isn't implemented yet (see that function's own comment), but a
      * real landmine for whenever dispatch is added -- cleared now so
      * it never becomes one. */
-    memset(g_bramble_gx2.event_callback_func, 0, sizeof(g_bramble_gx2.event_callback_func));
-    memset(g_bramble_gx2.event_callback_userdata, 0, sizeof(g_bramble_gx2.event_callback_userdata));
-    g_bramble_gx2.initialized = false;
+    memset(g_arkchemy_gx2.event_callback_func, 0, sizeof(g_arkchemy_gx2.event_callback_func));
+    memset(g_arkchemy_gx2.event_callback_userdata, 0, sizeof(g_arkchemy_gx2.event_callback_userdata));
+    g_arkchemy_gx2.initialized = false;
 }
 
 static inline void ppc_import_gx2_GX2SetViewport(PpcContext *ctx) {
@@ -582,7 +582,7 @@ static inline void ppc_import_gx2_GX2SetViewport(PpcContext *ctx) {
     vp.height = (float)ctx->f[4];
     vp.near = (float)ctx->f[5];
     vp.far = (float)ctx->f[6];
-    dkCmdBufSetViewports(g_bramble_gx2.cmdbuf, 0, &vp, 1);
+    dkCmdBufSetViewports(g_arkchemy_gx2.cmdbuf, 0, &vp, 1);
 }
 
 static inline void ppc_import_gx2_GX2SetScissor(PpcContext *ctx) {
@@ -594,13 +594,13 @@ static inline void ppc_import_gx2_GX2SetScissor(PpcContext *ctx) {
     sc.y = ctx->r[4];
     sc.width = ctx->r[5];
     sc.height = ctx->r[6];
-    dkCmdBufSetScissors(g_bramble_gx2.cmdbuf, 0, &sc, 1);
+    dkCmdBufSetScissors(g_arkchemy_gx2.cmdbuf, 0, &sc, 1);
 }
 
 static inline void ppc_import_gx2_GX2SetLineWidth(PpcContext *ctx) {
     /* void GX2SetLineWidth(float width) -- direct real equivalent,
      * dkCmdBufSetLineWidth(cmdbuf, float width). */
-    dkCmdBufSetLineWidth(g_bramble_gx2.cmdbuf, (float)ctx->f[1]);
+    dkCmdBufSetLineWidth(g_arkchemy_gx2.cmdbuf, (float)ctx->f[1]);
 }
 
 static inline void ppc_import_gx2_GX2SetPointSize(PpcContext *ctx) {
@@ -609,7 +609,7 @@ static inline void ppc_import_gx2_GX2SetPointSize(PpcContext *ctx) {
      * non-square points); deko3d's dkCmdBufSetPointSize only takes one
      * uniform size -- a real, honest simplification (uses width,
      * ignores height) documented here, not silently dropped. */
-    dkCmdBufSetPointSize(g_bramble_gx2.cmdbuf, (float)ctx->f[1]);
+    dkCmdBufSetPointSize(g_arkchemy_gx2.cmdbuf, (float)ctx->f[1]);
 }
 
 static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) {
@@ -620,17 +620,17 @@ static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) {
      * face-separated, state -- a real, honest simplification (uses the
      * front-face values only) documented here, not silently dropped.
      * Real args: r3-r7 all floats (f1-f5). */
-    dkCmdBufSetDepthBias(g_bramble_gx2.cmdbuf, (float)ctx->f[1], (float)ctx->f[5], (float)ctx->f[2]);
+    dkCmdBufSetDepthBias(g_arkchemy_gx2.cmdbuf, (float)ctx->f[1], (float)ctx->f[5], (float)ctx->f[2]);
 }
 
 static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) {
     /* void GX2SetBlendConstantColor(float red, float green, float blue,
      * float alpha) -- direct real equivalent,
      * dkCmdBufSetBlendConst(cmdbuf, r, g, b, a), same argument order. */
-    dkCmdBufSetBlendConst(g_bramble_gx2.cmdbuf, (float)ctx->f[1], (float)ctx->f[2], (float)ctx->f[3], (float)ctx->f[4]);
+    dkCmdBufSetBlendConst(g_arkchemy_gx2.cmdbuf, (float)ctx->f[1], (float)ctx->f[2], (float)ctx->f[3], (float)ctx->f[4]);
 }
 
-static inline DkBlendFactor bramble_gx2_blend_mode_to_dk(uint32_t gx2_mode) {
+static inline DkBlendFactor arkchemy_gx2_blend_mode_to_dk(uint32_t gx2_mode) {
     /* GX2BlendMode -> DkBlendFactor. Real GX2BlendMode has 21 values
      * (0-20, confirmed against wut's gx2/enum.h), real DkBlendFactor
      * values confirmed directly from deko3d.h. For indices 0-10 and
@@ -658,7 +658,7 @@ static inline DkBlendFactor bramble_gx2_blend_mode_to_dk(uint32_t gx2_mode) {
     return (DkBlendFactor)table[gx2_mode];
 }
 
-static inline DkBlendOp bramble_gx2_blend_combine_to_dk(uint32_t gx2_combine) {
+static inline DkBlendOp arkchemy_gx2_blend_combine_to_dk(uint32_t gx2_combine) {
     /* GX2BlendCombineMode -> DkBlendOp. Real GX2 order (confirmed
      * against wut's gx2/enum.h) is ADD=0, SUB=1, MIN=2, MAX=3,
      * REV_SUB=4; real deko3d order (confirmed against deko3d.h) is
@@ -699,17 +699,17 @@ static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) {
 
     dkBlendStateDefaults(&state);
     dkBlendStateSetOps(&state,
-        bramble_gx2_blend_combine_to_dk(color_combine),
-        use_alpha_blend ? bramble_gx2_blend_combine_to_dk(alpha_combine) : bramble_gx2_blend_combine_to_dk(color_combine));
+        arkchemy_gx2_blend_combine_to_dk(color_combine),
+        use_alpha_blend ? arkchemy_gx2_blend_combine_to_dk(alpha_combine) : arkchemy_gx2_blend_combine_to_dk(color_combine));
     dkBlendStateSetFactors(&state,
-        bramble_gx2_blend_mode_to_dk(color_src), bramble_gx2_blend_mode_to_dk(color_dst),
-        use_alpha_blend ? bramble_gx2_blend_mode_to_dk(alpha_src) : bramble_gx2_blend_mode_to_dk(color_src),
-        use_alpha_blend ? bramble_gx2_blend_mode_to_dk(alpha_dst) : bramble_gx2_blend_mode_to_dk(color_dst));
+        arkchemy_gx2_blend_mode_to_dk(color_src), arkchemy_gx2_blend_mode_to_dk(color_dst),
+        use_alpha_blend ? arkchemy_gx2_blend_mode_to_dk(alpha_src) : arkchemy_gx2_blend_mode_to_dk(color_src),
+        use_alpha_blend ? arkchemy_gx2_blend_mode_to_dk(alpha_dst) : arkchemy_gx2_blend_mode_to_dk(color_dst));
 
-    if (target < 8) dkCmdBufBindBlendState(g_bramble_gx2.cmdbuf, target, &state);
+    if (target < 8) dkCmdBufBindBlendState(g_arkchemy_gx2.cmdbuf, target, &state);
 }
 
-static inline DkLogicOp bramble_gx2_logic_op_to_dk(uint32_t gx2_rop3) {
+static inline DkLogicOp arkchemy_gx2_logic_op_to_dk(uint32_t gx2_rop3) {
     /* GX2LogicOp -> DkLogicOp. GX2's real values (confirmed against
      * wut's gx2/enum.h) are a byte with the same nibble duplicated
      * twice (0x00, 0x11, 0x22, ... 0xFF) -- i.e. value == index * 0x11,
@@ -743,7 +743,7 @@ static inline DkLogicOp bramble_gx2_logic_op_to_dk(uint32_t gx2_rop3) {
     return (DkLogicOp)table[index];
 }
 
-static inline void bramble_gx2_rebind_color_write_state(void) {
+static inline void arkchemy_gx2_rebind_color_write_state(void) {
     /* Combines GX2SetColorControl's `color_write_enable` (a real
      * master on/off switch) with GX2SetTargetChannelMasks'
      * `channel_masks` (real per-target/per-channel selection) via a
@@ -755,8 +755,8 @@ static inline void bramble_gx2_rebind_color_write_state(void) {
      * reflected without either silently discarding the other's. */
     DkColorWriteState state;
     dkColorWriteStateDefaults(&state);
-    state.masks = g_bramble_gx2.color_write_enable ? g_bramble_gx2.channel_masks : 0u;
-    dkCmdBufBindColorWriteState(g_bramble_gx2.cmdbuf, &state);
+    state.masks = g_arkchemy_gx2.color_write_enable ? g_arkchemy_gx2.channel_masks : 0u;
+    dkCmdBufBindColorWriteState(g_arkchemy_gx2.cmdbuf, &state);
 }
 
 static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) {
@@ -765,13 +765,13 @@ static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) {
      * confirmed against wut's gx2/registers.h. 4 integer/enum/BOOL
      * params, all in r3-r6.
      *
-     * rop3 -> DkColorState.logicOp via bramble_gx2_logic_op_to_dk.
+     * rop3 -> DkColorState.logicOp via arkchemy_gx2_logic_op_to_dk.
      * targetBlendEnable is a real per-render-target bitmask (bit i =
      * blending enabled for target i) -- applied via
      * dkColorStateSetBlendEnable per target, matching deko3d's own
      * per-target model exactly. colorWriteEnable is a real master
      * on/off switch, combined with GX2SetTargetChannelMasks' real
-     * per-channel masks via `bramble_gx2_rebind_color_write_state`
+     * per-channel masks via `arkchemy_gx2_rebind_color_write_state`
      * (see its own comment) rather than unilaterally overwriting every
      * target to all-or-nothing -- a real correctness fix over this
      * file's earlier "whichever of these two calls happened most
@@ -784,8 +784,8 @@ static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) {
      * unimplemented gap, not silently dropped: the argument is read
      * but intentionally unused.
      *
-     * Reads/writes the persistent `g_bramble_gx2.color_state` shadow
-     * copy (see its field comment on BrambleGx2State) rather than
+     * Reads/writes the persistent `g_arkchemy_gx2.color_state` shadow
+     * copy (see its field comment on ArkchemyGx2State) rather than
      * binding a fresh, freshly-defaulted local struct -- GX2SetAlphaTest
      * below also touches `color_state.alphaCompareOp`, a real,
      * independent GX2 call that shares deko3d's same combined state
@@ -799,17 +799,17 @@ static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) {
 
     (void)multi_write_enable; /* no deko3d equivalent -- see comment above */
 
-    g_bramble_gx2.color_state.logicOp = bramble_gx2_logic_op_to_dk(rop3);
+    g_arkchemy_gx2.color_state.logicOp = arkchemy_gx2_logic_op_to_dk(rop3);
     for (i = 0; i < 8; i++) {
-        dkColorStateSetBlendEnable(&g_bramble_gx2.color_state, i, (target_blend_enable >> i) & 1u);
+        dkColorStateSetBlendEnable(&g_arkchemy_gx2.color_state, i, (target_blend_enable >> i) & 1u);
     }
-    dkCmdBufBindColorState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.color_state);
+    dkCmdBufBindColorState(g_arkchemy_gx2.cmdbuf, &g_arkchemy_gx2.color_state);
 
-    g_bramble_gx2.color_write_enable = color_write_enable ? 1u : 0u;
-    bramble_gx2_rebind_color_write_state();
+    g_arkchemy_gx2.color_write_enable = color_write_enable ? 1u : 0u;
+    arkchemy_gx2_rebind_color_write_state();
 }
 
-static inline DkCompareOp bramble_gx2_compare_func_to_dk(uint32_t gx2_func) {
+static inline DkCompareOp arkchemy_gx2_compare_func_to_dk(uint32_t gx2_func) {
     /* GX2CompareFunction -> DkCompareOp. Real GX2 order (confirmed
      * against wut's gx2/enum.h: NEVER=0, LESS=1, EQUAL=2, LEQUAL=3,
      * GREATER=4, NOT_EQUAL=5, GEQUAL=6, ALWAYS=7) is a uniform +1
@@ -821,7 +821,7 @@ static inline DkCompareOp bramble_gx2_compare_func_to_dk(uint32_t gx2_func) {
     return (DkCompareOp)(gx2_func + 1);
 }
 
-static inline DkStencilOp bramble_gx2_stencil_func_to_dk(uint32_t gx2_func) {
+static inline DkStencilOp arkchemy_gx2_stencil_func_to_dk(uint32_t gx2_func) {
     /* GX2StencilFunction -> DkStencilOp. Real GX2 order (confirmed
      * against wut's gx2/enum.h: KEEP=0, ZERO=1, REPLACE=2,
      * INCR_CLAMP=3, DECR_CLAMP=4, INV=5, INCR_WRAP=6, DECR_WRAP=7) is a
@@ -858,9 +858,9 @@ static inline void ppc_import_gx2_GX2SetAlphaTest(PpcContext *ctx) {
     uint32_t func = ctx->r[4];
     float ref = (float)ctx->f[1];
 
-    g_bramble_gx2.color_state.alphaCompareOp = alpha_test ? bramble_gx2_compare_func_to_dk(func) : DkCompareOp_Always;
-    dkCmdBufBindColorState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.color_state);
-    dkCmdBufSetAlphaRef(g_bramble_gx2.cmdbuf, ref);
+    g_arkchemy_gx2.color_state.alphaCompareOp = alpha_test ? arkchemy_gx2_compare_func_to_dk(func) : DkCompareOp_Always;
+    dkCmdBufBindColorState(g_arkchemy_gx2.cmdbuf, &g_arkchemy_gx2.color_state);
+    dkCmdBufSetAlphaRef(g_arkchemy_gx2.cmdbuf, ref);
 }
 
 static inline void ppc_import_gx2_GX2SetAlphaToMask(PpcContext *ctx) {
@@ -882,9 +882,9 @@ static inline void ppc_import_gx2_GX2SetAlphaToMask(PpcContext *ctx) {
     uint32_t alpha_to_mask = ctx->r[3];
     uint32_t mode = ctx->r[4];
 
-    g_bramble_gx2.multisample_state.alphaToCoverageEnable = alpha_to_mask ? 1 : 0;
-    g_bramble_gx2.multisample_state.alphaToCoverageDither = (mode != 0) ? 1 : 0;
-    dkCmdBufBindMultisampleState(g_bramble_gx2.cmdbuf, &g_bramble_gx2.multisample_state);
+    g_arkchemy_gx2.multisample_state.alphaToCoverageEnable = alpha_to_mask ? 1 : 0;
+    g_arkchemy_gx2.multisample_state.alphaToCoverageDither = (mode != 0) ? 1 : 0;
+    dkCmdBufBindMultisampleState(g_arkchemy_gx2.cmdbuf, &g_arkchemy_gx2.multisample_state);
 }
 
 static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) {
@@ -929,26 +929,26 @@ static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) {
     uint32_t back_stencil_zpass = ppc_load_u32(ctx, ctx->r[1] + 16);
     uint32_t back_stencil_zfail = ppc_load_u32(ctx, ctx->r[1] + 20);
     uint32_t back_stencil_fail = ppc_load_u32(ctx, ctx->r[1] + 24);
-    DkDepthStencilState *state = &g_bramble_gx2.depth_stencil_state;
+    DkDepthStencilState *state = &g_arkchemy_gx2.depth_stencil_state;
 
-    /* Reads/writes the persistent shadow copy (see BrambleGx2State's
+    /* Reads/writes the persistent shadow copy (see ArkchemyGx2State's
      * field comment) -- GX2SetDepthOnlyControl below is a real subset
      * of this same hardware register and shares this same object. */
     state->depthTestEnable = depth_test ? 1 : 0;
     state->depthWriteEnable = depth_write ? 1 : 0;
-    state->depthCompareOp = bramble_gx2_compare_func_to_dk(depth_compare);
+    state->depthCompareOp = arkchemy_gx2_compare_func_to_dk(depth_compare);
     state->stencilTestEnable = stencil_test ? 1 : 0;
 
-    state->stencilFrontCompareOp = bramble_gx2_compare_func_to_dk(front_stencil_func);
-    state->stencilFrontPassOp = bramble_gx2_stencil_func_to_dk(front_stencil_zpass);
-    state->stencilFrontDepthFailOp = bramble_gx2_stencil_func_to_dk(front_stencil_zfail);
-    state->stencilFrontFailOp = bramble_gx2_stencil_func_to_dk(front_stencil_fail);
+    state->stencilFrontCompareOp = arkchemy_gx2_compare_func_to_dk(front_stencil_func);
+    state->stencilFrontPassOp = arkchemy_gx2_stencil_func_to_dk(front_stencil_zpass);
+    state->stencilFrontDepthFailOp = arkchemy_gx2_stencil_func_to_dk(front_stencil_zfail);
+    state->stencilFrontFailOp = arkchemy_gx2_stencil_func_to_dk(front_stencil_fail);
 
     if (backface_stencil) {
-        state->stencilBackCompareOp = bramble_gx2_compare_func_to_dk(back_stencil_func);
-        state->stencilBackPassOp = bramble_gx2_stencil_func_to_dk(back_stencil_zpass);
-        state->stencilBackDepthFailOp = bramble_gx2_stencil_func_to_dk(back_stencil_zfail);
-        state->stencilBackFailOp = bramble_gx2_stencil_func_to_dk(back_stencil_fail);
+        state->stencilBackCompareOp = arkchemy_gx2_compare_func_to_dk(back_stencil_func);
+        state->stencilBackPassOp = arkchemy_gx2_stencil_func_to_dk(back_stencil_zpass);
+        state->stencilBackDepthFailOp = arkchemy_gx2_stencil_func_to_dk(back_stencil_zfail);
+        state->stencilBackFailOp = arkchemy_gx2_stencil_func_to_dk(back_stencil_fail);
     } else {
         state->stencilBackCompareOp = state->stencilFrontCompareOp;
         state->stencilBackPassOp = state->stencilFrontPassOp;
@@ -956,10 +956,10 @@ static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) {
         state->stencilBackFailOp = state->stencilFrontFailOp;
     }
 
-    dkCmdBufBindDepthStencilState(g_bramble_gx2.cmdbuf, state);
+    dkCmdBufBindDepthStencilState(g_arkchemy_gx2.cmdbuf, state);
 }
 
-static inline DkFrontFace bramble_gx2_front_face_to_dk(uint32_t gx2_front_face) {
+static inline DkFrontFace arkchemy_gx2_front_face_to_dk(uint32_t gx2_front_face) {
     /* GX2FrontFace -> DkFrontFace. Real GX2 order (CCW=0, CW=1,
      * confirmed against wut's gx2/enum.h) is *inverted* relative to
      * deko3d's real order (CW=0, CCW=1, confirmed against deko3d.h) --
@@ -970,7 +970,7 @@ static inline DkFrontFace bramble_gx2_front_face_to_dk(uint32_t gx2_front_face) 
     return (DkFrontFace)table[gx2_front_face & 1u];
 }
 
-static inline DkPolygonMode bramble_gx2_polygon_mode_to_dk(uint32_t gx2_mode) {
+static inline DkPolygonMode arkchemy_gx2_polygon_mode_to_dk(uint32_t gx2_mode) {
     /* GX2PolygonMode -> DkPolygonMode. Real GX2 order (POINT=0, LINE=1,
      * TRIANGLE=2, confirmed against wut's gx2/enum.h) is a direct match
      * with deko3d's real order (Point=0, Line=1, Fill=2, confirmed
@@ -981,13 +981,13 @@ static inline DkPolygonMode bramble_gx2_polygon_mode_to_dk(uint32_t gx2_mode) {
     return (DkPolygonMode)gx2_mode;
 }
 
-static inline void bramble_gx2_apply_cull_state(DkRasterizerState *state, uint32_t front_face, uint32_t cull_front, uint32_t cull_back) {
+static inline void arkchemy_gx2_apply_cull_state(DkRasterizerState *state, uint32_t front_face, uint32_t cull_front, uint32_t cull_back) {
     /* Shared frontFace/cullMode translation -- GX2SetPolygonControl
      * and GX2SetCullOnlyControl below both real, independent GX2 calls
      * writing this exact same subset of the same hardware register;
      * extracted so a future correction only needs to change one place
      * instead of two byte-identical copies staying in sync by hand. */
-    state->frontFace = bramble_gx2_front_face_to_dk(front_face);
+    state->frontFace = arkchemy_gx2_front_face_to_dk(front_face);
     if (cull_front && cull_back) state->cullMode = DkFace_FrontAndBack;
     else if (cull_front) state->cullMode = DkFace_Front;
     else if (cull_back) state->cullMode = DkFace_Back;
@@ -1035,28 +1035,28 @@ static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) {
     uint32_t poly_offset_front_enable = ctx->r[9];
     uint32_t poly_offset_back_enable = ctx->r[10];
     uint32_t poly_offset_para_enable = ppc_load_u32(ctx, ctx->r[1] + 8);
-    DkRasterizerState *state = &g_bramble_gx2.rasterizer_state;
+    DkRasterizerState *state = &g_arkchemy_gx2.rasterizer_state;
 
     (void)poly_offset_front_enable; /* no deko3d equivalent -- see comment above */
     (void)poly_offset_back_enable;  /* no deko3d equivalent -- see comment above */
     (void)poly_offset_para_enable;  /* no deko3d equivalent -- see comment above */
 
-    /* Reads/writes the persistent shadow copy (see BrambleGx2State's
+    /* Reads/writes the persistent shadow copy (see ArkchemyGx2State's
      * field comment) -- GX2SetCullOnlyControl below and
      * GX2SetRasterizerClipControl further down are real subsets/
      * neighbors of this same hardware register and share this same
      * object. */
-    bramble_gx2_apply_cull_state(state, front_face, cull_front, cull_back);
+    arkchemy_gx2_apply_cull_state(state, front_face, cull_front, cull_back);
 
     if (poly_mode) {
-        state->polygonModeFront = bramble_gx2_polygon_mode_to_dk(poly_mode_front);
-        state->polygonModeBack = bramble_gx2_polygon_mode_to_dk(poly_mode_back);
+        state->polygonModeFront = arkchemy_gx2_polygon_mode_to_dk(poly_mode_front);
+        state->polygonModeBack = arkchemy_gx2_polygon_mode_to_dk(poly_mode_back);
     } else {
         state->polygonModeFront = DkPolygonMode_Fill;
         state->polygonModeBack = DkPolygonMode_Fill;
     }
 
-    dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, state);
+    dkCmdBufBindRasterizerState(g_arkchemy_gx2.cmdbuf, state);
 }
 
 static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) {
@@ -1072,11 +1072,11 @@ static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) {
     uint32_t front_face = ctx->r[3];
     uint32_t cull_front = ctx->r[4];
     uint32_t cull_back = ctx->r[5];
-    DkRasterizerState *state = &g_bramble_gx2.rasterizer_state;
+    DkRasterizerState *state = &g_arkchemy_gx2.rasterizer_state;
 
-    bramble_gx2_apply_cull_state(state, front_face, cull_front, cull_back);
+    arkchemy_gx2_apply_cull_state(state, front_face, cull_front, cull_back);
 
-    dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, state);
+    dkCmdBufBindRasterizerState(g_arkchemy_gx2.cmdbuf, state);
 }
 
 static inline void ppc_import_gx2_GX2SetRasterizerClipControl(PpcContext *ctx) {
@@ -1099,12 +1099,12 @@ static inline void ppc_import_gx2_GX2SetRasterizerClipControl(PpcContext *ctx) {
      * which share this same combined object. */
     uint32_t rasterizer = ctx->r[3];
     uint32_t zclip_enable = ctx->r[4];
-    DkRasterizerState *state = &g_bramble_gx2.rasterizer_state;
+    DkRasterizerState *state = &g_arkchemy_gx2.rasterizer_state;
 
     state->rasterizerEnable = rasterizer ? 1 : 0;
     state->depthClampEnable = zclip_enable ? 0 : 1;
 
-    dkCmdBufBindRasterizerState(g_bramble_gx2.cmdbuf, state);
+    dkCmdBufBindRasterizerState(g_arkchemy_gx2.cmdbuf, state);
 }
 
 static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) {
@@ -1120,13 +1120,13 @@ static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) {
     uint32_t depth_test = ctx->r[3];
     uint32_t depth_write = ctx->r[4];
     uint32_t depth_compare = ctx->r[5];
-    DkDepthStencilState *state = &g_bramble_gx2.depth_stencil_state;
+    DkDepthStencilState *state = &g_arkchemy_gx2.depth_stencil_state;
 
     state->depthTestEnable = depth_test ? 1 : 0;
     state->depthWriteEnable = depth_write ? 1 : 0;
-    state->depthCompareOp = bramble_gx2_compare_func_to_dk(depth_compare);
+    state->depthCompareOp = arkchemy_gx2_compare_func_to_dk(depth_compare);
 
-    dkCmdBufBindDepthStencilState(g_bramble_gx2.cmdbuf, state);
+    dkCmdBufBindDepthStencilState(g_arkchemy_gx2.cmdbuf, state);
 }
 
 static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) {
@@ -1152,8 +1152,8 @@ static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) {
     uint32_t back_write_mask = ctx->r[7];
     uint32_t back_ref = ctx->r[8];
 
-    dkCmdBufSetStencil(g_bramble_gx2.cmdbuf, DkFace_Front, (uint8_t)front_write_mask, (uint8_t)front_ref, (uint8_t)front_mask);
-    dkCmdBufSetStencil(g_bramble_gx2.cmdbuf, DkFace_Back, (uint8_t)back_write_mask, (uint8_t)back_ref, (uint8_t)back_mask);
+    dkCmdBufSetStencil(g_arkchemy_gx2.cmdbuf, DkFace_Front, (uint8_t)front_write_mask, (uint8_t)front_ref, (uint8_t)front_mask);
+    dkCmdBufSetStencil(g_arkchemy_gx2.cmdbuf, DkFace_Back, (uint8_t)back_write_mask, (uint8_t)back_ref, (uint8_t)back_mask);
 }
 
 static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) {
@@ -1170,9 +1170,9 @@ static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) {
      * no translation table needed, unlike most other GX2<->deko3d enum
      * mappings in this file.
      *
-     * Reads/writes the persistent `g_bramble_gx2.channel_masks` value,
+     * Reads/writes the persistent `g_arkchemy_gx2.channel_masks` value,
      * combined with GX2SetColorControl's `color_write_enable` via
-     * `bramble_gx2_rebind_color_write_state` (see its own comment) --
+     * `arkchemy_gx2_rebind_color_write_state` (see its own comment) --
      * both real, independent GX2 calls that affect the same real
      * per-target mask bits, now genuinely independent instead of
      * whichever one happened to run last silently overwriting the
@@ -1184,8 +1184,8 @@ static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) {
     for (i = 0; i < 8; i++) {
         dkColorWriteStateSetMask(&packed, i, ctx->r[3 + i]);
     }
-    g_bramble_gx2.channel_masks = packed.masks;
-    bramble_gx2_rebind_color_write_state();
+    g_arkchemy_gx2.channel_masks = packed.masks;
+    arkchemy_gx2_rebind_color_write_state();
 }
 
 static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
@@ -1197,7 +1197,7 @@ static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
      * not confirmed against real hardware behavior (no
      * GX2DisablePrimitiveRestart-style counterpart exists in this
      * game's real import list to contradict it). */
-    dkCmdBufSetPrimitiveRestart(g_bramble_gx2.cmdbuf, true, ctx->r[3]);
+    dkCmdBufSetPrimitiveRestart(g_arkchemy_gx2.cmdbuf, true, ctx->r[3]);
 }
 
 static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) {
@@ -1218,8 +1218,8 @@ static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) {
      * arbitrary off-screen surface. Real, visible, testable progress
      * for that common case; a known, documented gap for the other. */
     (void)ctx;
-    bramble_gx2_ensure_frame_acquired();
-    dkCmdBufClearColorFloat(g_bramble_gx2.cmdbuf, 0, DkColorMask_RGBA,
+    arkchemy_gx2_ensure_frame_acquired();
+    dkCmdBufClearColorFloat(g_arkchemy_gx2.cmdbuf, 0, DkColorMask_RGBA,
                             (float)ctx->f[1], (float)ctx->f[2], (float)ctx->f[3], (float)ctx->f[4]);
 }
 
@@ -1240,7 +1240,7 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) {
      * caught by compiling/linking, which is why this needed real
      * hardware to find): the command buffer was never being reset
      * between frames, so every frame's recorded commands kept
-     * accumulating in the same fixed BRAMBLE_GX2_CMD_MEM_SIZE (64KB)
+     * accumulating in the same fixed ARKCHEMY_GX2_CMD_MEM_SIZE (64KB)
      * pool forever -- devkitPro's own official deko3d Example01 this
      * project otherwise follows closely avoids this entirely by
      * recording its rendering commands exactly *once* into static
@@ -1259,16 +1259,16 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) {
      * (a separate real memory block per frame-in-flight) is worth the
      * added complexity. */
     (void)ctx;
-    if (g_bramble_gx2.acquired_slot < 0) return;
-    dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
-    g_bramble_gx2.submitted_timestamp = bramble_gx2_host_ticks();
-    dkQueuePresentImage(g_bramble_gx2.queue, g_bramble_gx2.swapchain, g_bramble_gx2.acquired_slot);
-    dkQueueWaitIdle(g_bramble_gx2.queue);
-    g_bramble_gx2.retired_timestamp = g_bramble_gx2.submitted_timestamp;
-    g_bramble_gx2.swap_count++;
-    g_bramble_gx2.flip_count++;
-    dkCmdBufClear(g_bramble_gx2.cmdbuf);
-    g_bramble_gx2.acquired_slot = -1;
+    if (g_arkchemy_gx2.acquired_slot < 0) return;
+    dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
+    g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
+    dkQueuePresentImage(g_arkchemy_gx2.queue, g_arkchemy_gx2.swapchain, g_arkchemy_gx2.acquired_slot);
+    dkQueueWaitIdle(g_arkchemy_gx2.queue);
+    g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.submitted_timestamp;
+    g_arkchemy_gx2.swap_count++;
+    g_arkchemy_gx2.flip_count++;
+    dkCmdBufClear(g_arkchemy_gx2.cmdbuf);
+    g_arkchemy_gx2.acquired_slot = -1;
 }
 
 static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) {
@@ -1283,7 +1283,7 @@ static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) {
      * Real, deliberate simplification carried over from
      * GX2SwapScanBuffers' own documented one: this project's command
      * memory isn't double-buffered yet, so a flush here still shares
-     * the same persistent `cmdbuf`/`BRAMBLE_GX2_CMD_MEM_SIZE` pool --
+     * the same persistent `cmdbuf`/`ARKCHEMY_GX2_CMD_MEM_SIZE` pool --
      * safe because deko3d's command allocator is append-only until an
      * explicit `dkCmdBufClear` (only called on the real frame boundary
      * in GX2SwapScanBuffers), not a ring buffer that could be
@@ -1294,8 +1294,8 @@ static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) {
      * GX2WaitTimeStamp below), since this is a real submit point same
      * as GX2SwapScanBuffers'. */
     (void)ctx;
-    dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
-    g_bramble_gx2.submitted_timestamp = bramble_gx2_host_ticks();
+    dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
+    g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
 }
 
 static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) {
@@ -1313,10 +1313,10 @@ static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) {
      * completes (this runtime has no timeout/cancellation path for
      * GX2WaitTimeStamp to have failed on). */
     (void)ctx;
-    dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
-    g_bramble_gx2.submitted_timestamp = bramble_gx2_host_ticks();
-    dkQueueWaitIdle(g_bramble_gx2.queue);
-    g_bramble_gx2.retired_timestamp = g_bramble_gx2.submitted_timestamp;
+    dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
+    g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
+    dkQueueWaitIdle(g_arkchemy_gx2.queue);
+    g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.submitted_timestamp;
     ctx->r[3] = 1; /* TRUE */
 }
 
@@ -1345,10 +1345,10 @@ static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) {
      * GX2SwapScanBuffers would otherwise get back a "synced" result
      * while that work was never actually sent to the GPU. */
     (void)ctx;
-    dkQueueSubmitCommands(g_bramble_gx2.queue, dkCmdBufFinishList(g_bramble_gx2.cmdbuf));
-    g_bramble_gx2.submitted_timestamp = bramble_gx2_host_ticks();
-    dkQueueWaitIdle(g_bramble_gx2.queue);
-    g_bramble_gx2.retired_timestamp = g_bramble_gx2.submitted_timestamp;
+    dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
+    g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
+    dkQueueWaitIdle(g_arkchemy_gx2.queue);
+    g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.submitted_timestamp;
 }
 
 static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) {
@@ -1359,7 +1359,7 @@ static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) 
      * `submitted_timestamp` field comment above for what this actually
      * measures here (a host monotonic tick at each real submit point,
      * not a real Wii U-magnitude tick count). */
-    uint64_t t = g_bramble_gx2.submitted_timestamp;
+    uint64_t t = g_arkchemy_gx2.submitted_timestamp;
     ctx->r[3] = (uint32_t)(t >> 32);
     ctx->r[4] = (uint32_t)t;
 }
@@ -1374,7 +1374,7 @@ static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) {
      * honest reflection of "GX2Flush submits without waiting" even
      * though this runtime has no real async completion tracking of its
      * own. */
-    uint64_t t = g_bramble_gx2.retired_timestamp;
+    uint64_t t = g_arkchemy_gx2.retired_timestamp;
     ctx->r[3] = (uint32_t)(t >> 32);
     ctx->r[4] = (uint32_t)t;
 }
@@ -1393,9 +1393,9 @@ static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) {
      * Always returns TRUE -- same "no timeout/cancellation path to
      * have failed on" reasoning as GX2DrawDone above. */
     uint64_t time = ((uint64_t)ctx->r[3] << 32) | (uint64_t)ctx->r[4];
-    if (time > g_bramble_gx2.retired_timestamp) {
-        dkQueueWaitIdle(g_bramble_gx2.queue);
-        g_bramble_gx2.retired_timestamp = g_bramble_gx2.submitted_timestamp;
+    if (time > g_arkchemy_gx2.retired_timestamp) {
+        dkQueueWaitIdle(g_arkchemy_gx2.queue);
+        g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.submitted_timestamp;
     }
     ctx->r[3] = 1; /* TRUE */
 }
@@ -1426,17 +1426,17 @@ static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) {
     uint32_t last_flip_ptr = ctx->r[5];
     uint32_t last_vsync_ptr = ctx->r[6];
 
-    if (swap_count_ptr) ppc_store_u32(ctx, swap_count_ptr, g_bramble_gx2.swap_count);
-    if (flip_count_ptr) ppc_store_u32(ctx, flip_count_ptr, g_bramble_gx2.flip_count);
-    if (last_flip_ptr) ppc_store_u64(ctx, last_flip_ptr, g_bramble_gx2.retired_timestamp);
-    if (last_vsync_ptr) ppc_store_u64(ctx, last_vsync_ptr, g_bramble_gx2.retired_timestamp);
+    if (swap_count_ptr) ppc_store_u32(ctx, swap_count_ptr, g_arkchemy_gx2.swap_count);
+    if (flip_count_ptr) ppc_store_u32(ctx, flip_count_ptr, g_arkchemy_gx2.flip_count);
+    if (last_flip_ptr) ppc_store_u64(ctx, last_flip_ptr, g_arkchemy_gx2.retired_timestamp);
+    if (last_vsync_ptr) ppc_store_u64(ctx, last_vsync_ptr, g_arkchemy_gx2.retired_timestamp);
 }
 
 static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) {
     /* GX2DRCConnectCallback GX2SetEventCallback(GX2EventType type,
      * GX2EventCallbackFunction func, void *userData) -- real signature
      * confirmed against wut's gx2/event.h. `type` selects one of the 5
-     * real GX2EventType slots (see BRAMBLE_GX2_NUM_EVENT_TYPES above);
+     * real GX2EventType slots (see ARKCHEMY_GX2_NUM_EVENT_TYPES above);
      * `func`/`userData` are real *guest* addresses (a PPC function
      * pointer and its opaque argument), stored verbatim, not
      * dereferenced or called here.
@@ -1475,15 +1475,15 @@ static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) {
     uint32_t user_data = ctx->r[5];
     uint32_t previous_func = 0;
 
-    if (type < BRAMBLE_GX2_NUM_EVENT_TYPES) {
-        previous_func = g_bramble_gx2.event_callback_func[type];
-        g_bramble_gx2.event_callback_func[type] = func;
-        g_bramble_gx2.event_callback_userdata[type] = user_data;
+    if (type < ARKCHEMY_GX2_NUM_EVENT_TYPES) {
+        previous_func = g_arkchemy_gx2.event_callback_func[type];
+        g_arkchemy_gx2.event_callback_func[type] = func;
+        g_arkchemy_gx2.event_callback_userdata[type] = user_data;
     }
     ctx->r[3] = previous_func;
 }
 
-static inline DkWrapMode bramble_gx2_clamp_mode_to_dk(uint32_t gx2_clamp) {
+static inline DkWrapMode arkchemy_gx2_clamp_mode_to_dk(uint32_t gx2_clamp) {
     /* GX2TexClampMode -> DkWrapMode. Confirmed real values both sides
      * (wut's gx2/enum.h: WRAP=0, MIRROR=1, CLAMP=2, MIRROR_ONCE=3,
      * CLAMP_HALF_BORDER=4, MIRROR_ONCE_HALF_BORDER=5, CLAMP_BORDER=6,
@@ -1512,7 +1512,7 @@ static inline DkWrapMode bramble_gx2_clamp_mode_to_dk(uint32_t gx2_clamp) {
     return (DkWrapMode)table[gx2_clamp];
 }
 
-static inline DkFilter bramble_gx2_xy_filter_to_dk(uint32_t gx2_filter) {
+static inline DkFilter arkchemy_gx2_xy_filter_to_dk(uint32_t gx2_filter) {
     /* GX2TexXYFilterMode -> DkFilter. Real GX2 values (wut's
      * gx2/enum.h): POINT=0, LINEAR=1, BICUBIC=2 -- plus the real
      * hardware-only ANISO_POINT=4/ANISO_BILINEAR=5 values
@@ -1520,7 +1520,7 @@ static inline DkFilter bramble_gx2_xy_filter_to_dk(uint32_t gx2_filter) {
      * above) can substitute in when anisotropic filtering is
      * requested. deko3d has only two real filter modes
      * (Nearest/Linear) plus a separate `maxAnisotropy` float (handled
-     * by bramble_gx2_aniso_ratio_to_dk below) -- BICUBIC and the
+     * by arkchemy_gx2_aniso_ratio_to_dk below) -- BICUBIC and the
      * ANISO_* variants all collapse onto the nearest real deko3d
      * equivalent (BICUBIC -> Linear, a documented, unconfirmed
      * simplification; ANISO_POINT/ANISO_BILINEAR -> Nearest/Linear,
@@ -1539,7 +1539,7 @@ static inline DkFilter bramble_gx2_xy_filter_to_dk(uint32_t gx2_filter) {
     return (DkFilter)table[gx2_filter];
 }
 
-static inline DkMipFilter bramble_gx2_mip_filter_to_dk(uint32_t gx2_filter) {
+static inline DkMipFilter arkchemy_gx2_mip_filter_to_dk(uint32_t gx2_filter) {
     /* GX2TexZFilterMode/GX2TexMipFilterMode (both share the same real
      * NONE=0/POINT=1/LINEAR=2 encoding, confirmed against wut's
      * gx2/enum.h) -> DkMipFilter (None=1, Nearest=2, Linear=3,
@@ -1550,7 +1550,7 @@ static inline DkMipFilter bramble_gx2_mip_filter_to_dk(uint32_t gx2_filter) {
     return (DkMipFilter)(gx2_filter + 1);
 }
 
-static inline float bramble_gx2_aniso_ratio_to_dk(uint32_t gx2_ratio) {
+static inline float arkchemy_gx2_aniso_ratio_to_dk(uint32_t gx2_ratio) {
     /* GX2TexAnisoRatio (NONE=0, 2:1=1, 4:1=2, 8:1=3, 16:1=4, confirmed
      * against wut's gx2/enum.h) -> deko3d's real `maxAnisotropy` float
      * field -- a real, direct `1 << ratio` conversion (1x/2x/4x/8x/16x
@@ -1579,9 +1579,9 @@ static inline float bramble_gx2_aniso_ratio_to_dk(uint32_t gx2_ratio) {
  * register") since that real register is set by a distinct function,
  * GX2Set{Pixel,Vertex}SamplerBorderColor, not implemented here -- a
  * real, honest, separate gap, not silently guessed at. */
-static inline void bramble_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_addr, uint32_t slot, DkSampler *out_sampler) {
-    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
-    uint32_t word1 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD1_OFFSET);
+static inline void arkchemy_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_addr, uint32_t slot, DkSampler *out_sampler) {
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET);
+    uint32_t word1 = ppc_load_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD1_OFFSET);
     uint32_t clamp_x = (word0 >> 0) & 0x7u;
     uint32_t clamp_y = (word0 >> 3) & 0x7u;
     uint32_t clamp_z = (word0 >> 6) & 0x7u;
@@ -1597,14 +1597,14 @@ static inline void bramble_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_
     if (lod_bias & 0x800) lod_bias -= 0x1000; /* sign-extend the real 12-bit field */
 
     dkSamplerDefaults(out_sampler);
-    out_sampler->wrapMode[0] = bramble_gx2_clamp_mode_to_dk(clamp_x);
-    out_sampler->wrapMode[1] = bramble_gx2_clamp_mode_to_dk(clamp_y);
-    out_sampler->wrapMode[2] = bramble_gx2_clamp_mode_to_dk(clamp_z);
-    out_sampler->magFilter = bramble_gx2_xy_filter_to_dk(xy_mag_filter);
-    out_sampler->minFilter = bramble_gx2_xy_filter_to_dk(xy_min_filter);
-    out_sampler->mipFilter = bramble_gx2_mip_filter_to_dk(mip_filter);
-    out_sampler->maxAnisotropy = bramble_gx2_aniso_ratio_to_dk(max_aniso_ratio);
-    out_sampler->compareOp = bramble_gx2_compare_func_to_dk(depth_compare_function);
+    out_sampler->wrapMode[0] = arkchemy_gx2_clamp_mode_to_dk(clamp_x);
+    out_sampler->wrapMode[1] = arkchemy_gx2_clamp_mode_to_dk(clamp_y);
+    out_sampler->wrapMode[2] = arkchemy_gx2_clamp_mode_to_dk(clamp_z);
+    out_sampler->magFilter = arkchemy_gx2_xy_filter_to_dk(xy_mag_filter);
+    out_sampler->minFilter = arkchemy_gx2_xy_filter_to_dk(xy_min_filter);
+    out_sampler->mipFilter = arkchemy_gx2_mip_filter_to_dk(mip_filter);
+    out_sampler->maxAnisotropy = arkchemy_gx2_aniso_ratio_to_dk(max_aniso_ratio);
+    out_sampler->compareOp = arkchemy_gx2_compare_func_to_dk(depth_compare_function);
     out_sampler->lodClampMin = (float)min_lod / 64.0f;
     out_sampler->lodClampMax = (float)max_lod / 64.0f;
     out_sampler->lodBias = (float)lod_bias / 64.0f;
@@ -1630,10 +1630,10 @@ static inline void bramble_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_
             out_sampler->borderColor[3].value_f = 1.0f;
             break;
         case 3: /* VARIABLE -- real, separately-set register value */
-            out_sampler->borderColor[0].value_f = g_bramble_gx2.sampler_border_color[slot][0];
-            out_sampler->borderColor[1].value_f = g_bramble_gx2.sampler_border_color[slot][1];
-            out_sampler->borderColor[2].value_f = g_bramble_gx2.sampler_border_color[slot][2];
-            out_sampler->borderColor[3].value_f = g_bramble_gx2.sampler_border_color[slot][3];
+            out_sampler->borderColor[0].value_f = g_arkchemy_gx2.sampler_border_color[slot][0];
+            out_sampler->borderColor[1].value_f = g_arkchemy_gx2.sampler_border_color[slot][1];
+            out_sampler->borderColor[2].value_f = g_arkchemy_gx2.sampler_border_color[slot][2];
+            out_sampler->borderColor[3].value_f = g_arkchemy_gx2.sampler_border_color[slot][3];
             break;
         default: /* TRANSPARENT_BLACK (0) -- also deko3d's own real default, nothing to do */
             break;
@@ -1642,7 +1642,7 @@ static inline void bramble_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_
 
 /* Pushes a decoded DkSampler into this stage's real slot of the shared
  * sampler descriptor pool and (re-)binds the whole set -- see
- * BrambleGx2State's own field comment and the constants above for the
+ * ArkchemyGx2State's own field comment and the constants above for the
  * real pool layout/sizing. Binding on every single call (rather than
  * once per frame/draw, the real deko3d-example convention) is a real,
  * deliberate "trade performance for straightforward correctness"
@@ -1651,17 +1651,17 @@ static inline void bramble_gx2_sampler_decode(PpcContext *ctx, uint32_t sampler_
  * real draw-call pipeline yet to know when "right before a draw"
  * actually is, so this keeps the bound set always up to date instead
  * of guessing when a real draw call might eventually need it current. */
-static inline void bramble_gx2_set_sampler(PpcContext *ctx, uint32_t sampler_addr, uint32_t base_index, uint32_t index) {
+static inline void arkchemy_gx2_set_sampler(PpcContext *ctx, uint32_t sampler_addr, uint32_t base_index, uint32_t index) {
     DkSampler sampler;
     DkSamplerDescriptor descriptor;
     uint32_t slot;
-    if (index >= BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE) return; /* real, bounded pool -- out-of-range index is a no-op, not a crash */
+    if (index >= ARKCHEMY_GX2_SAMPLER_SLOTS_PER_STAGE) return; /* real, bounded pool -- out-of-range index is a no-op, not a crash */
     slot = base_index + index;
-    bramble_gx2_sampler_decode(ctx, sampler_addr, slot, &sampler);
+    arkchemy_gx2_sampler_decode(ctx, sampler_addr, slot, &sampler);
     dkSamplerDescriptorInitialize(&descriptor, &sampler);
-    dkCmdBufPushData(g_bramble_gx2.cmdbuf, g_bramble_gx2.sampler_descriptor_gpu_addr + (uint64_t)slot * sizeof(DkSamplerDescriptor),
+    dkCmdBufPushData(g_arkchemy_gx2.cmdbuf, g_arkchemy_gx2.sampler_descriptor_gpu_addr + (uint64_t)slot * sizeof(DkSamplerDescriptor),
                       &descriptor, sizeof(DkSamplerDescriptor));
-    dkCmdBufBindSamplerDescriptorSet(g_bramble_gx2.cmdbuf, g_bramble_gx2.sampler_descriptor_gpu_addr, BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS);
+    dkCmdBufBindSamplerDescriptorSet(g_arkchemy_gx2.cmdbuf, g_arkchemy_gx2.sampler_descriptor_gpu_addr, ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS);
 }
 
 static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) {
@@ -1672,11 +1672,11 @@ static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) {
      * to keep pixel-stage samplers in their own real AMD hardware
      * register range, separate from vertex/geometry -- deko3d has no
      * such per-stage namespace at all (see
-     * `BRAMBLE_GX2_SAMPLER_PIXEL_BASE`'s own comment above for the
+     * `ARKCHEMY_GX2_SAMPLER_PIXEL_BASE`'s own comment above for the
      * real, documented substitute this project uses instead). */
     uint32_t sampler_addr = ctx->r[3];
     uint32_t sampler_index = ctx->r[4];
-    bramble_gx2_set_sampler(ctx, sampler_addr, BRAMBLE_GX2_SAMPLER_PIXEL_BASE, sampler_index);
+    arkchemy_gx2_set_sampler(ctx, sampler_addr, ARKCHEMY_GX2_SAMPLER_PIXEL_BASE, sampler_index);
 }
 
 static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) {
@@ -1686,17 +1686,17 @@ static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) {
      * the real pixel/vertex namespace-separation reasoning. */
     uint32_t sampler_addr = ctx->r[3];
     uint32_t sampler_index = ctx->r[4];
-    bramble_gx2_set_sampler(ctx, sampler_addr, BRAMBLE_GX2_SAMPLER_VERTEX_BASE, sampler_index);
+    arkchemy_gx2_set_sampler(ctx, sampler_addr, ARKCHEMY_GX2_SAMPLER_VERTEX_BASE, sampler_index);
 }
 
-static inline void bramble_gx2_set_sampler_border_color(PpcContext *ctx, uint32_t base_index, uint32_t index) {
+static inline void arkchemy_gx2_set_sampler_border_color(PpcContext *ctx, uint32_t base_index, uint32_t index) {
     uint32_t slot;
-    if (index >= BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE) return; /* real, bounded pool -- out-of-range index is a no-op, not a crash */
+    if (index >= ARKCHEMY_GX2_SAMPLER_SLOTS_PER_STAGE) return; /* real, bounded pool -- out-of-range index is a no-op, not a crash */
     slot = base_index + index;
-    g_bramble_gx2.sampler_border_color[slot][0] = (float)ctx->f[1];
-    g_bramble_gx2.sampler_border_color[slot][1] = (float)ctx->f[2];
-    g_bramble_gx2.sampler_border_color[slot][2] = (float)ctx->f[3];
-    g_bramble_gx2.sampler_border_color[slot][3] = (float)ctx->f[4];
+    g_arkchemy_gx2.sampler_border_color[slot][0] = (float)ctx->f[1];
+    g_arkchemy_gx2.sampler_border_color[slot][1] = (float)ctx->f[2];
+    g_arkchemy_gx2.sampler_border_color[slot][2] = (float)ctx->f[3];
+    g_arkchemy_gx2.sampler_border_color[slot][3] = (float)ctx->f[4];
 }
 
 static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx) {
@@ -1709,9 +1709,9 @@ static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx)
      * writes this into a genuinely separate register bank
      * (`TD_PS_SAMPLER_BORDER_COLOR[index]`, confirmed against Cemu's
      * real LatteReg.h) rather than into the `GX2Sampler` struct itself
-     * -- stored the same way here (see BrambleGx2State's
+     * -- stored the same way here (see ArkchemyGx2State's
      * `sampler_border_color` field comment), consulted by
-     * `bramble_gx2_sampler_decode` only when a sampler's own real
+     * `arkchemy_gx2_sampler_decode` only when a sampler's own real
      * `BORDER_COLOR_TYPE` field says `VARIABLE`. Real, honest
      * consequence of that real hardware design: calling this *after*
      * `GX2SetPixelSampler` has already pushed a `VARIABLE`-type
@@ -1721,7 +1721,7 @@ static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx)
      * draw that samples this slot, not instantly), not a bug specific
      * to this shim. */
     uint32_t index = ctx->r[3];
-    bramble_gx2_set_sampler_border_color(ctx, BRAMBLE_GX2_SAMPLER_PIXEL_BASE, index);
+    arkchemy_gx2_set_sampler_border_color(ctx, ARKCHEMY_GX2_SAMPLER_PIXEL_BASE, index);
 }
 
 static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx) {
@@ -1731,7 +1731,7 @@ static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx
      * GX2SetPixelSamplerBorderColor's own comment for the real
      * register-bank/timing reasoning. */
     uint32_t index = ctx->r[3];
-    bramble_gx2_set_sampler_border_color(ctx, BRAMBLE_GX2_SAMPLER_VERTEX_BASE, index);
+    arkchemy_gx2_set_sampler_border_color(ctx, ARKCHEMY_GX2_SAMPLER_VERTEX_BASE, index);
 }
 
 /* void GX2SetColorBuffer(const GX2ColorBuffer *colorBuffer,
@@ -1832,16 +1832,16 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
      * meaning for a pitch-linear image. */
     memset(&layout, 0, sizeof(layout));
 
-    if (target >= BRAMBLE_GX2_NUM_RENDER_TARGETS) return; /* real, bounded slot range */
+    if (target >= ARKCHEMY_GX2_NUM_RENDER_TARGETS) return; /* real, bounded slot range */
 
-    dim = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
-    width = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
-    height = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
-    mip_levels = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET);
-    format = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
-    tile_mode = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
-    pitch = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
-    image_addr = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+    dim = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_DIM_OFFSET);
+    width = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
+    height = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET);
+    mip_levels = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_MIP_LEVELS_OFFSET);
+    format = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_FORMAT_OFFSET);
+    tile_mode = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_TILE_MODE_OFFSET);
+    pitch = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET);
+    image_addr = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
     if (dim != 1u) return;                            /* real scope: DIM_2D only */
     if (tile_mode != 1u && tile_mode != 16u) return;   /* real scope: already-resolved-linear only */
@@ -1878,20 +1878,20 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
      * already independently used this identical formula -- now the
      * `pitchStride` fed into deko3d matches it exactly, instead of
      * silently diverging). */
-    dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
+    dkImageLayoutMakerDefaults(&layout_maker, g_arkchemy_gx2.device);
     layout_maker.flags = DkImageFlags_PitchLinear | DkImageFlags_UsageRender;
     layout_maker.format = DkImageFormat_RGBA8_Unorm;
     layout_maker.dimensions[0] = width;
     layout_maker.dimensions[1] = height;
     layout_maker.dimensions[2] = 1;
     layout_maker.mipLevels = 1;
-    layout_maker.pitchStride = bramble_gx2_pow2_align(bytes_per_pixel * width, 128u);
+    layout_maker.pitchStride = arkchemy_gx2_pow2_align(bytes_per_pixel * width, 128u);
     dkImageLayoutInitialize(&layout, &layout_maker);
 
     image_size = (uint32_t)dkImageLayoutGetSize(&layout);
 
-    dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device,
-                             bramble_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
+    dkMemBlockMakerDefaults(&mem_maker, g_arkchemy_gx2.device,
+                             arkchemy_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
     /* Real correction to a previous, now-reverted "fix": an earlier
      * version of this function added `DkMemBlockFlags_Image` here,
      * reasoning that deko3d's real `NvKind_Pitch` value couldn't be
@@ -1927,15 +1927,15 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
      * `m_gpuAddrCompressed` path `DkMemBlockFlags_Image` enables). */
     mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
 
-    if (g_bramble_gx2.color_target_bound[target]) {
+    if (g_arkchemy_gx2.color_target_bound[target]) {
         /* Real resource lifecycle: replace, don't leak, a previous
          * binding at this same real target slot. */
-        dkMemBlockDestroy(g_bramble_gx2.color_target_mem_block[target]);
-        g_bramble_gx2.color_target_bound[target] = false;
+        dkMemBlockDestroy(g_arkchemy_gx2.color_target_mem_block[target]);
+        g_arkchemy_gx2.color_target_bound[target] = false;
     }
-    g_bramble_gx2.color_target_mem_block[target] = dkMemBlockCreate(&mem_maker);
-    dkImageInitialize(&g_bramble_gx2.color_target_image[target], &layout, g_bramble_gx2.color_target_mem_block[target], 0);
-    g_bramble_gx2.color_target_bound[target] = true;
+    g_arkchemy_gx2.color_target_mem_block[target] = dkMemBlockCreate(&mem_maker);
+    dkImageInitialize(&g_arkchemy_gx2.color_target_image[target], &layout, g_arkchemy_gx2.color_target_mem_block[target], 0);
+    g_arkchemy_gx2.color_target_bound[target] = true;
 
     /* Real guest-memory-to-GPU-memory pixel copy, row by row -- the
      * real guest surface's own row stride is its `pitch` (in pixels,
@@ -1946,8 +1946,8 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) {
      * alignment happens to already satisfy deko3d's 128-byte
      * requirement -- copying row-by-row using each side's own real
      * stride is correct regardless of whether they match. */
-    dest_stride = bramble_gx2_pow2_align(bytes_per_pixel * width, 128u);
-    dest_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.color_target_mem_block[target]);
+    dest_stride = arkchemy_gx2_pow2_align(bytes_per_pixel * width, 128u);
+    dest_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.color_target_mem_block[target]);
     copy_bytes = bytes_per_pixel * width;
     if (copy_bytes > pitch * bytes_per_pixel) copy_bytes = pitch * bytes_per_pixel; /* real, defensive: never read past the guest's own declared row */
     for (row = 0; row < height; row++) {
@@ -2023,14 +2023,14 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) {
      * this one as an uninitialized local either. */
     memset(&layout, 0, sizeof(layout));
 
-    dim = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
-    width = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
-    height = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
-    mip_levels = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET);
-    format = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
-    tile_mode = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
-    pitch = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
-    image_addr = ppc_load_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+    dim = ppc_load_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_SURFACE_DIM_OFFSET);
+    width = ppc_load_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
+    height = ppc_load_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET);
+    mip_levels = ppc_load_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_SURFACE_MIP_LEVELS_OFFSET);
+    format = ppc_load_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_SURFACE_FORMAT_OFFSET);
+    tile_mode = ppc_load_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_SURFACE_TILE_MODE_OFFSET);
+    pitch = ppc_load_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET);
+    image_addr = ppc_load_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
     if (dim != 1u) return;                            /* real scope: DIM_2D only */
     if (tile_mode != 1u && tile_mode != 16u) return;   /* real scope: already-resolved-linear only */
@@ -2040,7 +2040,7 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) {
 
     /* Real block-linear depth image (no PitchLinear flag -- see this
      * function's own comment). */
-    dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
+    dkImageLayoutMakerDefaults(&layout_maker, g_arkchemy_gx2.device);
     layout_maker.flags = DkImageFlags_UsageRender;
     layout_maker.format = DkImageFormat_Z24X8;
     layout_maker.dimensions[0] = width;
@@ -2050,8 +2050,8 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) {
     dkImageLayoutInitialize(&layout, &layout_maker);
 
     image_size = (uint32_t)dkImageLayoutGetSize(&layout);
-    dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device,
-                             bramble_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
+    dkMemBlockMakerDefaults(&mem_maker, g_arkchemy_gx2.device,
+                             arkchemy_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
     mem_maker.flags = DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
 
     /* Real, tightly-packed linear staging buffer -- real guest pixel
@@ -2059,21 +2059,21 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) {
      * `dkCmdBufCopyBufferToImage`) into the real block-linear image
      * above once this recorded command actually submits. */
     staging_size = bytes_per_pixel * width * height;
-    dkMemBlockMakerDefaults(&staging_maker, g_bramble_gx2.device,
-                             bramble_gx2_pow2_align(staging_size, DK_MEMBLOCK_ALIGNMENT));
+    dkMemBlockMakerDefaults(&staging_maker, g_arkchemy_gx2.device,
+                             arkchemy_gx2_pow2_align(staging_size, DK_MEMBLOCK_ALIGNMENT));
     staging_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
 
-    if (g_bramble_gx2.depth_target_bound) {
+    if (g_arkchemy_gx2.depth_target_bound) {
         /* Real resource lifecycle: replace, don't leak, a previous
          * real depth-buffer binding. */
-        dkMemBlockDestroy(g_bramble_gx2.depth_target_mem_block);
-        dkMemBlockDestroy(g_bramble_gx2.depth_target_staging_mem_block);
-        g_bramble_gx2.depth_target_bound = false;
+        dkMemBlockDestroy(g_arkchemy_gx2.depth_target_mem_block);
+        dkMemBlockDestroy(g_arkchemy_gx2.depth_target_staging_mem_block);
+        g_arkchemy_gx2.depth_target_bound = false;
     }
-    g_bramble_gx2.depth_target_mem_block = dkMemBlockCreate(&mem_maker);
-    dkImageInitialize(&g_bramble_gx2.depth_target_image, &layout, g_bramble_gx2.depth_target_mem_block, 0);
-    g_bramble_gx2.depth_target_staging_mem_block = dkMemBlockCreate(&staging_maker);
-    g_bramble_gx2.depth_target_bound = true;
+    g_arkchemy_gx2.depth_target_mem_block = dkMemBlockCreate(&mem_maker);
+    dkImageInitialize(&g_arkchemy_gx2.depth_target_image, &layout, g_arkchemy_gx2.depth_target_mem_block, 0);
+    g_arkchemy_gx2.depth_target_staging_mem_block = dkMemBlockCreate(&staging_maker);
+    g_arkchemy_gx2.depth_target_bound = true;
 
     /* Real guest-memory-to-staging-buffer pixel copy, row by row --
      * the real guest surface's own row stride is its `pitch` (in
@@ -2081,7 +2081,7 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) {
      * buffer's own row stride is tightly packed (`width *
      * bytes_per_pixel`, no padding), matching `DkCopyBuf`'s own real
      * default-stride assumption (`rowLength`/`imageHeight` left 0). */
-    staging_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.depth_target_staging_mem_block);
+    staging_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.depth_target_staging_mem_block);
     copy_bytes = bytes_per_pixel * width;
     if (copy_bytes > pitch * bytes_per_pixel) copy_bytes = pitch * bytes_per_pixel; /* real, defensive: never read past the guest's own declared row */
     for (row = 0; row < height; row++) {
@@ -2096,19 +2096,19 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) {
     /* Real, recorded (not yet submitted) GPU blit from the real
      * staging buffer into the real block-linear depth image -- see
      * this function's own comment for the real submit timing. */
-    dkImageViewDefaults(&dst_view, &g_bramble_gx2.depth_target_image);
+    dkImageViewDefaults(&dst_view, &g_arkchemy_gx2.depth_target_image);
     dst_rect.x = 0; dst_rect.y = 0; dst_rect.z = 0;
     dst_rect.width = width; dst_rect.height = height; dst_rect.depth = 1;
-    src_buf.addr = dkMemBlockGetGpuAddr(g_bramble_gx2.depth_target_staging_mem_block);
+    src_buf.addr = dkMemBlockGetGpuAddr(g_arkchemy_gx2.depth_target_staging_mem_block);
     src_buf.rowLength = 0;  /* real default: tightly-packed, matching the staging buffer's own real layout */
     src_buf.imageHeight = 0;
-    dkCmdBufCopyBufferToImage(g_bramble_gx2.cmdbuf, &src_buf, &dst_view, &dst_rect, 0);
+    dkCmdBufCopyBufferToImage(g_arkchemy_gx2.cmdbuf, &src_buf, &dst_view, &dst_rect, 0);
 }
 
 /* Real, shared implementation for GX2SetPixelTexture/GX2SetVertexTexture
  * -- builds a real, GPU-visible deko3d image from a real guest
  * GX2Texture and binds it to this stage's real texture unit, mirroring
- * `bramble_gx2_set_sampler`'s own real "rebind on every call" pattern
+ * `arkchemy_gx2_set_sampler`'s own real "rebind on every call" pattern
  * (see that function's own comment for the reasoning).
  *
  * Same real, deliberately bounded scope as GX2SetColorBuffer/
@@ -2124,15 +2124,15 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) {
  * guest pixel bytes copied in via the CPU, then a real, recorded
  * `dkCmdBufCopyBufferToImage` GPU blit into a proper block-linear
  * `DkImage`) rather than GX2SetColorBuffer's pitch-linear direct-copy
- * design -- see BrambleGx2State's own `texture_image` field comment
+ * design -- see ArkchemyGx2State's own `texture_image` field comment
  * for why. The real image descriptor itself
  * (`dkImageDescriptorInitialize`) and the real combined texture handle
  * (`dkMakeTextureHandle`, pairing this real image slot with the
  * *same-numbered* real sampler slot -- see
- * BRAMBLE_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE's own comment) are both
+ * ARKCHEMY_GX2_TEXTURE_DESCRIPTOR_MEM_SIZE's own comment) are both
  * confirmed against devkitPro's own real official example,
  * `deko_console/source/gpu_console.c`. */
-static inline void bramble_gx2_set_texture(PpcContext *ctx, uint32_t texture_addr, DkStage stage, uint32_t base_index, uint32_t index) {
+static inline void arkchemy_gx2_set_texture(PpcContext *ctx, uint32_t texture_addr, DkStage stage, uint32_t base_index, uint32_t index) {
     uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
     uint32_t bytes_per_pixel = 4u; /* RGBA8_UNORM only, see this function's own comment */
     uint32_t staging_size, image_size, row, copy_bytes, slot;
@@ -2147,19 +2147,19 @@ static inline void bramble_gx2_set_texture(PpcContext *ctx, uint32_t texture_add
     DkImageDescriptor descriptor;
     DkResHandle handle;
 
-    if (index >= BRAMBLE_GX2_SAMPLER_SLOTS_PER_STAGE) return; /* real, bounded pool -- out-of-range index is a no-op, not a crash */
+    if (index >= ARKCHEMY_GX2_SAMPLER_SLOTS_PER_STAGE) return; /* real, bounded pool -- out-of-range index is a no-op, not a crash */
     slot = base_index + index;
 
     memset(&layout, 0, sizeof(layout)); /* defensive, same reasoning as every other real image build in this file */
 
-    dim = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
-    width = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
-    height = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
-    mip_levels = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET);
-    format = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
-    tile_mode = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
-    pitch = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
-    image_addr = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+    dim = ppc_load_u32(ctx, texture_addr + ARKCHEMY_GX2_SURFACE_DIM_OFFSET);
+    width = ppc_load_u32(ctx, texture_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
+    height = ppc_load_u32(ctx, texture_addr + ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET);
+    mip_levels = ppc_load_u32(ctx, texture_addr + ARKCHEMY_GX2_SURFACE_MIP_LEVELS_OFFSET);
+    format = ppc_load_u32(ctx, texture_addr + ARKCHEMY_GX2_SURFACE_FORMAT_OFFSET);
+    tile_mode = ppc_load_u32(ctx, texture_addr + ARKCHEMY_GX2_SURFACE_TILE_MODE_OFFSET);
+    pitch = ppc_load_u32(ctx, texture_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET);
+    image_addr = ppc_load_u32(ctx, texture_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
     if (dim != 1u) return;
     if (tile_mode != 1u && tile_mode != 16u) return;
@@ -2167,7 +2167,7 @@ static inline void bramble_gx2_set_texture(PpcContext *ctx, uint32_t texture_add
     if (format != 0x1au) return;
     if (width == 0u || height == 0u || pitch == 0u) return;
 
-    dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
+    dkImageLayoutMakerDefaults(&layout_maker, g_arkchemy_gx2.device);
     layout_maker.format = DkImageFormat_RGBA8_Unorm;
     layout_maker.dimensions[0] = width;
     layout_maker.dimensions[1] = height;
@@ -2176,27 +2176,27 @@ static inline void bramble_gx2_set_texture(PpcContext *ctx, uint32_t texture_add
     dkImageLayoutInitialize(&layout, &layout_maker);
 
     image_size = (uint32_t)dkImageLayoutGetSize(&layout);
-    dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device,
-                             bramble_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
+    dkMemBlockMakerDefaults(&mem_maker, g_arkchemy_gx2.device,
+                             arkchemy_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
     mem_maker.flags = DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
 
     staging_size = bytes_per_pixel * width * height;
-    dkMemBlockMakerDefaults(&staging_maker, g_bramble_gx2.device,
-                             bramble_gx2_pow2_align(staging_size, DK_MEMBLOCK_ALIGNMENT));
+    dkMemBlockMakerDefaults(&staging_maker, g_arkchemy_gx2.device,
+                             arkchemy_gx2_pow2_align(staging_size, DK_MEMBLOCK_ALIGNMENT));
     staging_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
 
-    if (g_bramble_gx2.texture_bound[slot]) {
+    if (g_arkchemy_gx2.texture_bound[slot]) {
         /* Real resource lifecycle: replace, don't leak, a previous real binding at this slot. */
-        dkMemBlockDestroy(g_bramble_gx2.texture_mem_block[slot]);
-        dkMemBlockDestroy(g_bramble_gx2.texture_staging_mem_block[slot]);
-        g_bramble_gx2.texture_bound[slot] = false;
+        dkMemBlockDestroy(g_arkchemy_gx2.texture_mem_block[slot]);
+        dkMemBlockDestroy(g_arkchemy_gx2.texture_staging_mem_block[slot]);
+        g_arkchemy_gx2.texture_bound[slot] = false;
     }
-    g_bramble_gx2.texture_mem_block[slot] = dkMemBlockCreate(&mem_maker);
-    dkImageInitialize(&g_bramble_gx2.texture_image[slot], &layout, g_bramble_gx2.texture_mem_block[slot], 0);
-    g_bramble_gx2.texture_staging_mem_block[slot] = dkMemBlockCreate(&staging_maker);
-    g_bramble_gx2.texture_bound[slot] = true;
+    g_arkchemy_gx2.texture_mem_block[slot] = dkMemBlockCreate(&mem_maker);
+    dkImageInitialize(&g_arkchemy_gx2.texture_image[slot], &layout, g_arkchemy_gx2.texture_mem_block[slot], 0);
+    g_arkchemy_gx2.texture_staging_mem_block[slot] = dkMemBlockCreate(&staging_maker);
+    g_arkchemy_gx2.texture_bound[slot] = true;
 
-    staging_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.texture_staging_mem_block[slot]);
+    staging_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.texture_staging_mem_block[slot]);
     copy_bytes = bytes_per_pixel * width;
     if (copy_bytes > pitch * bytes_per_pixel) copy_bytes = pitch * bytes_per_pixel;
     for (row = 0; row < height; row++) {
@@ -2208,21 +2208,21 @@ static inline void bramble_gx2_set_texture(PpcContext *ctx, uint32_t texture_add
         }
     }
 
-    dkImageViewDefaults(&dst_view, &g_bramble_gx2.texture_image[slot]);
+    dkImageViewDefaults(&dst_view, &g_arkchemy_gx2.texture_image[slot]);
     dst_rect.x = 0; dst_rect.y = 0; dst_rect.z = 0;
     dst_rect.width = width; dst_rect.height = height; dst_rect.depth = 1;
-    src_buf.addr = dkMemBlockGetGpuAddr(g_bramble_gx2.texture_staging_mem_block[slot]);
+    src_buf.addr = dkMemBlockGetGpuAddr(g_arkchemy_gx2.texture_staging_mem_block[slot]);
     src_buf.rowLength = 0;
     src_buf.imageHeight = 0;
-    dkCmdBufCopyBufferToImage(g_bramble_gx2.cmdbuf, &src_buf, &dst_view, &dst_rect, 0);
+    dkCmdBufCopyBufferToImage(g_arkchemy_gx2.cmdbuf, &src_buf, &dst_view, &dst_rect, 0);
 
     dkImageDescriptorInitialize(&descriptor, &dst_view, false, false);
-    dkCmdBufPushData(g_bramble_gx2.cmdbuf, g_bramble_gx2.texture_descriptor_gpu_addr + (uint64_t)slot * sizeof(DkImageDescriptor),
+    dkCmdBufPushData(g_arkchemy_gx2.cmdbuf, g_arkchemy_gx2.texture_descriptor_gpu_addr + (uint64_t)slot * sizeof(DkImageDescriptor),
                       &descriptor, sizeof(DkImageDescriptor));
-    dkCmdBufBindImageDescriptorSet(g_bramble_gx2.cmdbuf, g_bramble_gx2.texture_descriptor_gpu_addr, BRAMBLE_GX2_NUM_SAMPLER_DESCRIPTORS);
+    dkCmdBufBindImageDescriptorSet(g_arkchemy_gx2.cmdbuf, g_arkchemy_gx2.texture_descriptor_gpu_addr, ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS);
 
     handle = dkMakeTextureHandle(slot, slot); /* real, same-numbered image/sampler slot pairing -- see this function's own comment */
-    dkCmdBufBindTextures(g_bramble_gx2.cmdbuf, stage, index, &handle, 1);
+    dkCmdBufBindTextures(g_arkchemy_gx2.cmdbuf, stage, index, &handle, 1);
 }
 
 static inline void ppc_import_gx2_GX2SetPixelTexture(PpcContext *ctx) {
@@ -2230,11 +2230,11 @@ static inline void ppc_import_gx2_GX2SetPixelTexture(PpcContext *ctx) {
      * unit) -- real signature confirmed against wut's gx2/texture.h.
      * `GX2Texture`'s own `surface` member is a plain `GX2Surface` at
      * offset 0 (confirmed against the same header), so this reuses
-     * the exact same `BRAMBLE_GX2_SURFACE_*_OFFSET` constants
+     * the exact same `ARKCHEMY_GX2_SURFACE_*_OFFSET` constants
      * GX2SetColorBuffer/GX2SetDepthBuffer already use. */
     uint32_t texture_addr = ctx->r[3];
     uint32_t unit = ctx->r[4];
-    bramble_gx2_set_texture(ctx, texture_addr, DkStage_Fragment, BRAMBLE_GX2_SAMPLER_PIXEL_BASE, unit);
+    arkchemy_gx2_set_texture(ctx, texture_addr, DkStage_Fragment, ARKCHEMY_GX2_SAMPLER_PIXEL_BASE, unit);
 }
 
 static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) {
@@ -2243,7 +2243,7 @@ static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) {
      * See GX2SetPixelTexture's own comment. */
     uint32_t texture_addr = ctx->r[3];
     uint32_t unit = ctx->r[4];
-    bramble_gx2_set_texture(ctx, texture_addr, DkStage_Vertex, BRAMBLE_GX2_SAMPLER_VERTEX_BASE, unit);
+    arkchemy_gx2_set_texture(ctx, texture_addr, DkStage_Vertex, ARKCHEMY_GX2_SAMPLER_VERTEX_BASE, unit);
 }
 
 static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx) {
@@ -2285,8 +2285,8 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
      * above. Copies the top-left `min(colorBuffer width/height, real
      * swapchain framebuffer width/height)` region -- this project's
      * own real swapchain framebuffers are a fixed
-     * `BRAMBLE_GX2_FB_WIDTH`x`BRAMBLE_GX2_FB_HEIGHT` (1280x720, see
-     * `bramble_gx2_create_framebuffers`' own comment), not necessarily
+     * `ARKCHEMY_GX2_FB_WIDTH`x`ARKCHEMY_GX2_FB_HEIGHT` (1280x720, see
+     * `arkchemy_gx2_create_framebuffers`' own comment), not necessarily
      * matching `colorBuffer`'s own real dimensions. */
     uint32_t color_buffer_addr = ctx->r[3];
     uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
@@ -2301,14 +2301,14 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
 
     memset(&layout, 0, sizeof(layout)); /* defensive, same reasoning as GX2SetColorBuffer's own comment */
 
-    dim = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
-    width = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
-    height = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
-    mip_levels = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET);
-    format = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
-    tile_mode = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
-    pitch = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
-    image_addr = ppc_load_u32(ctx, color_buffer_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+    dim = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_DIM_OFFSET);
+    width = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
+    height = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET);
+    mip_levels = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_MIP_LEVELS_OFFSET);
+    format = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_FORMAT_OFFSET);
+    tile_mode = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_TILE_MODE_OFFSET);
+    pitch = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET);
+    image_addr = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
     if (dim != 1u) return;
     if (tile_mode != 1u && tile_mode != 16u) return;
@@ -2316,30 +2316,30 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
     if (format != 0x1au) return;
     if (width == 0u || height == 0u || pitch == 0u) return;
 
-    dkImageLayoutMakerDefaults(&layout_maker, g_bramble_gx2.device);
+    dkImageLayoutMakerDefaults(&layout_maker, g_arkchemy_gx2.device);
     layout_maker.flags = DkImageFlags_PitchLinear | DkImageFlags_UsageRender;
     layout_maker.format = DkImageFormat_RGBA8_Unorm;
     layout_maker.dimensions[0] = width;
     layout_maker.dimensions[1] = height;
     layout_maker.dimensions[2] = 1;
     layout_maker.mipLevels = 1;
-    layout_maker.pitchStride = bramble_gx2_pow2_align(bytes_per_pixel * width, 128u);
+    layout_maker.pitchStride = arkchemy_gx2_pow2_align(bytes_per_pixel * width, 128u);
     dkImageLayoutInitialize(&layout, &layout_maker);
 
     image_size = (uint32_t)dkImageLayoutGetSize(&layout);
-    dkMemBlockMakerDefaults(&mem_maker, g_bramble_gx2.device,
-                             bramble_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
+    dkMemBlockMakerDefaults(&mem_maker, g_arkchemy_gx2.device,
+                             arkchemy_gx2_pow2_align(image_size, DK_MEMBLOCK_ALIGNMENT));
     mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
 
-    if (g_bramble_gx2.scan_copy_temp_bound) {
-        dkMemBlockDestroy(g_bramble_gx2.scan_copy_temp_mem_block);
-        g_bramble_gx2.scan_copy_temp_bound = false;
+    if (g_arkchemy_gx2.scan_copy_temp_bound) {
+        dkMemBlockDestroy(g_arkchemy_gx2.scan_copy_temp_mem_block);
+        g_arkchemy_gx2.scan_copy_temp_bound = false;
     }
-    g_bramble_gx2.scan_copy_temp_mem_block = dkMemBlockCreate(&mem_maker);
-    dkImageInitialize(&g_bramble_gx2.scan_copy_temp_image, &layout, g_bramble_gx2.scan_copy_temp_mem_block, 0);
-    g_bramble_gx2.scan_copy_temp_bound = true;
+    g_arkchemy_gx2.scan_copy_temp_mem_block = dkMemBlockCreate(&mem_maker);
+    dkImageInitialize(&g_arkchemy_gx2.scan_copy_temp_image, &layout, g_arkchemy_gx2.scan_copy_temp_mem_block, 0);
+    g_arkchemy_gx2.scan_copy_temp_bound = true;
 
-    dest_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_bramble_gx2.scan_copy_temp_mem_block);
+    dest_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.scan_copy_temp_mem_block);
     for (row = 0; row < height; row++) {
         uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
         uint32_t dst_off = row * layout_maker.pitchStride;
@@ -2349,18 +2349,18 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
         }
     }
 
-    bramble_gx2_ensure_frame_acquired();
+    arkchemy_gx2_ensure_frame_acquired();
 
-    copy_width = (width < BRAMBLE_GX2_FB_WIDTH) ? width : BRAMBLE_GX2_FB_WIDTH;
-    copy_height = (height < BRAMBLE_GX2_FB_HEIGHT) ? height : BRAMBLE_GX2_FB_HEIGHT;
+    copy_width = (width < ARKCHEMY_GX2_FB_WIDTH) ? width : ARKCHEMY_GX2_FB_WIDTH;
+    copy_height = (height < ARKCHEMY_GX2_FB_HEIGHT) ? height : ARKCHEMY_GX2_FB_HEIGHT;
 
-    dkImageViewDefaults(&src_view, &g_bramble_gx2.scan_copy_temp_image);
-    dkImageViewDefaults(&dst_view, &g_bramble_gx2.framebuffers[g_bramble_gx2.acquired_slot]);
+    dkImageViewDefaults(&src_view, &g_arkchemy_gx2.scan_copy_temp_image);
+    dkImageViewDefaults(&dst_view, &g_arkchemy_gx2.framebuffers[g_arkchemy_gx2.acquired_slot]);
     src_rect.x = 0; src_rect.y = 0; src_rect.z = 0;
     src_rect.width = copy_width; src_rect.height = copy_height; src_rect.depth = 1;
     dst_rect.x = 0; dst_rect.y = 0; dst_rect.z = 0;
     dst_rect.width = copy_width; dst_rect.height = copy_height; dst_rect.depth = 1;
-    dkCmdBufCopyImage(g_bramble_gx2.cmdbuf, &src_view, &src_rect, &dst_view, &dst_rect, 0);
+    dkCmdBufCopyImage(g_arkchemy_gx2.cmdbuf, &src_view, &src_rect, &dst_view, &dst_rect, 0);
 }
 
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
@@ -2473,7 +2473,7 @@ static inline void ppc_import_gx2_GX2SetTVScale(PpcContext *ctx) {
     /* void GX2SetTVScale(uint32_t x, uint32_t y) -- real hardware
      * scales the TV scan buffer's real output resolution independently
      * of its render resolution. This runtime's swapchain is a fixed
-     * `BRAMBLE_GX2_FB_WIDTH`x`BRAMBLE_GX2_FB_HEIGHT` (see the framebuffer
+     * `ARKCHEMY_GX2_FB_WIDTH`x`ARKCHEMY_GX2_FB_HEIGHT` (see the framebuffer
      * setup above) with no real output-scaling stage of its own yet --
      * accepted, not stored, same "no real getter in this game's actual
      * import list to contradict it" reasoning as GX2SetSwapInterval
@@ -2649,7 +2649,7 @@ static inline void ppc_import_gx2_GX2GetDisplayListWriteStatus(PpcContext *ctx) 
  * operates on a whole compressed 4x4 block as one addressable unit;
  * only GX2GetSurfaceFormatBits' own real, public "bits per reported
  * pixel" meaning divides by 16 on top, as its own separate step. */
-static inline uint32_t bramble_gx2_hw_format_bits_raw(uint32_t hw_format) {
+static inline uint32_t arkchemy_gx2_hw_format_bits_raw(uint32_t hw_format) {
     static const uint8_t bits_table[64] = {
         0x00, 0x08, 0x08, 0x00, 0x00, 0x10, 0x10, 0x10,
         0x10, 0x10, 0x10, 0x10, 0x10, 0x20, 0x20, 0x20,
@@ -2671,7 +2671,7 @@ static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) {
      * bits (the real hardware format index, GX2's own surface-format
      * encoding already reserves the upper bits for sign/int/float/sRGB
      * modifiers that don't change bit width), look up
-     * bramble_gx2_hw_format_bits_raw's real, shared table, then for the
+     * arkchemy_gx2_hw_format_bits_raw's real, shared table, then for the
      * real hardware's BC1-BC5 compressed-format range (0x31-0x35)
      * divide by 16 (a compressed "pixel" entry in this table is really
      * a 4x4 block). Cross-checked by hand against wut's own confirmed
@@ -2681,7 +2681,7 @@ static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) {
      * compression ratio, correct) -- not just copied blind. */
     uint32_t format = ctx->r[3];
     uint32_t hw_format = format & 0x3Fu;
-    uint32_t bpp = bramble_gx2_hw_format_bits_raw(hw_format);
+    uint32_t bpp = arkchemy_gx2_hw_format_bits_raw(hw_format);
     if (hw_format >= 0x31u && hw_format <= 0x35u) { /* real BC1-BC5 compressed range */
         bpp /= 16u;
     }
@@ -2768,7 +2768,7 @@ static inline void ppc_import_gx2_GX2CalcColorBufferAuxInfo(PpcContext *ctx) {
  * inside GX2CalculateSurfaceInfo's TM_LINEAR_SPECIAL branch) -- height
  * gets a real, additional block-size rounding step afterward, done by
  * the caller, not here. */
-static inline void bramble_gx2_calc_dim_linear_special(uint32_t dim, uint32_t height_in, uint32_t depth_in,
+static inline void arkchemy_gx2_calc_dim_linear_special(uint32_t dim, uint32_t height_in, uint32_t depth_in,
                                                          uint32_t *height_out, uint32_t *depth_out, int *supported) {
     *supported = 1;
     switch (dim) {
@@ -2788,7 +2788,7 @@ static inline void bramble_gx2_calc_dim_linear_special(uint32_t dim, uint32_t he
  * distinct set of rules from the LINEAR_SPECIAL case above (no
  * block-size rounding here at all; that's LINEAR_SPECIAL-only real
  * behavior). */
-static inline void bramble_gx2_calc_dim_outer(uint32_t dim, uint32_t height_in, uint32_t depth_in,
+static inline void arkchemy_gx2_calc_dim_outer(uint32_t dim, uint32_t height_in, uint32_t depth_in,
                                                uint32_t *height_out, uint32_t *slices_out, int *supported) {
     *supported = 1;
     switch (dim) {
@@ -2811,16 +2811,16 @@ static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx
      * above. See this whole section's own file comment for the real,
      * bounded scope. */
     uint32_t surface_addr = ctx->r[3];
-    uint32_t dim = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
-    uint32_t width = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
-    uint32_t height = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
-    uint32_t depth = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_DEPTH_OFFSET);
-    uint32_t mip_levels = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_MIP_LEVELS_OFFSET);
-    uint32_t format = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
-    uint32_t aa = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_AA_OFFSET);
-    uint32_t tile_mode = ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
+    uint32_t dim = ppc_load_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_DIM_OFFSET);
+    uint32_t width = ppc_load_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
+    uint32_t height = ppc_load_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET);
+    uint32_t depth = ppc_load_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_DEPTH_OFFSET);
+    uint32_t mip_levels = ppc_load_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_MIP_LEVELS_OFFSET);
+    uint32_t format = ppc_load_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_FORMAT_OFFSET);
+    uint32_t aa = ppc_load_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_AA_OFFSET);
+    uint32_t tile_mode = ppc_load_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_TILE_MODE_OFFSET);
     uint32_t hw_format = format & 0x3Fu;
-    uint32_t bpp = bramble_gx2_hw_format_bits_raw(hw_format);
+    uint32_t bpp = arkchemy_gx2_hw_format_bits_raw(hw_format);
     int is_bc = (hw_format >= 0x31u && hw_format <= 0x35u);
     uint32_t num_samples = 1u << aa;
 
@@ -2845,14 +2845,14 @@ static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx
         tile_mode = 4u; /* TM_2D_TILED_THIN1 -- not itself supported below, so this real case still ends up a no-op past this point, matching real hardware's own actual (macro-tiled) outcome for a corrected surface */
         aa = 0u;
         format = 0x1au; /* UNORM_R8_G8_B8_A8 */
-        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET, dim);
-        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET, width);
-        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET, height);
-        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_DEPTH_OFFSET, depth);
-        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET, tile_mode);
-        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_AA_OFFSET, aa);
-        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET, format);
-        ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_ALIGNMENT_OFFSET, 0x400u);
+        ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_DIM_OFFSET, dim);
+        ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET, width);
+        ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET, height);
+        ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_DEPTH_OFFSET, depth);
+        ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_TILE_MODE_OFFSET, tile_mode);
+        ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_AA_OFFSET, aa);
+        ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_FORMAT_OFFSET, format);
+        ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_ALIGNMENT_OFFSET, 0x400u);
         return; /* real behavior stops here too -- the corrected surface still needs a real, separate real call to actually size it */
     }
 
@@ -2864,7 +2864,7 @@ static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx
         uint32_t width_px = (width + block_size - 1u) & ~(block_size - 1u);
         uint32_t out_height, out_depth;
         int supported;
-        bramble_gx2_calc_dim_linear_special(dim, height, depth, &out_height, &out_depth, &supported);
+        arkchemy_gx2_calc_dim_linear_special(dim, height, depth, &out_height, &out_depth, &supported);
         if (!supported) return;
         out_height = ((~(block_size - 1u)) & (out_height + block_size - 1u)) / block_size;
         if (out_height == 0u) out_height = 1u;
@@ -2872,10 +2872,10 @@ static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx
             uint32_t pitch = width_px / block_size;
             if (pitch == 0u) pitch = 1u;
             uint64_t surf_size = ((uint64_t)bpp * num_samples * out_depth * out_height * pitch) >> 3;
-            ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_IMAGE_SIZE_OFFSET, (uint32_t)surf_size);
-            ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_ALIGNMENT_OFFSET, 1u);
-            ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET, pitch);
-            ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET, 0u);
+            ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_IMAGE_SIZE_OFFSET, (uint32_t)surf_size);
+            ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_ALIGNMENT_OFFSET, 1u);
+            ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET, pitch);
+            ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET, 0u);
         }
         return;
     }
@@ -2886,7 +2886,7 @@ static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx
          * section's own file comment). */
         uint32_t out_height, out_slices;
         int supported;
-        bramble_gx2_calc_dim_outer(dim, height, depth, &out_height, &out_slices, &supported);
+        arkchemy_gx2_calc_dim_outer(dim, height, depth, &out_height, &out_slices, &supported);
         if (!supported) return;
         {
             /* _ComputeSurfaceAlignmentsLinear's real TM_LINEAR_ALIGNED
@@ -2908,8 +2908,8 @@ static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx
              * dim!=CUBE in the common case this project reaches --
              * DIM_CUBE's own real NextPow2(slices) rounding is applied
              * below too, matching real behavior for that case). */
-            exp_pitch = bramble_gx2_pow2_align(exp_pitch, pitch_align);
-            exp_height = bramble_gx2_pow2_align(exp_height, height_align);
+            exp_pitch = arkchemy_gx2_pow2_align(exp_pitch, pitch_align);
+            exp_height = arkchemy_gx2_pow2_align(exp_height, height_align);
             if (dim == 3u) { /* DIM_CUBE */
                 exp_slices = 1u;
                 while (exp_slices < out_slices) exp_slices <<= 1;
@@ -2918,14 +2918,14 @@ static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx
                 uint32_t slices = exp_slices * num_samples; /* microTileThickness=1, matching the real formula's own division by it */
                 uint64_t surf_size = ((uint64_t)exp_height * exp_pitch * slices * bpp * num_samples) >> 3;
                 if (tile_mode == 0u) {
-                    ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET, 1u); /* real upgrade to LINEAR_ALIGNED, written back */
+                    ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_TILE_MODE_OFFSET, 1u); /* real upgrade to LINEAR_ALIGNED, written back */
                 }
-                ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_SWIZZLE_OFFSET,
-                              ppc_load_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_SWIZZLE_OFFSET) & 0xFF00FFFFu);
-                ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_IMAGE_SIZE_OFFSET, (uint32_t)surf_size);
-                ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_ALIGNMENT_OFFSET, base_align);
-                ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET, exp_pitch);
-                ppc_store_u32(ctx, surface_addr + BRAMBLE_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET, 0u);
+                ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_SWIZZLE_OFFSET,
+                              ppc_load_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_SWIZZLE_OFFSET) & 0xFF00FFFFu);
+                ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_IMAGE_SIZE_OFFSET, (uint32_t)surf_size);
+                ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_ALIGNMENT_OFFSET, base_align);
+                ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET, exp_pitch);
+                ppc_store_u32(ctx, surface_addr + ARKCHEMY_GX2_SURFACE_MIP_LEVEL_OFFSET_OFFSET, 0u);
             }
         }
         return;
@@ -2957,15 +2957,15 @@ static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx
  * byte-for-byte. Backend-independent (pure guest-memory writes, no
  * deko3d call), works identically on host and Switch. */
 
-#define BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET 0x88u
-#define BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET 0x8Cu
+#define ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET 0x88u
+#define ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET 0x8Cu
 
 static inline void ppc_import_gx2_GX2SetClearDepth(PpcContext *ctx) {
     /* void GX2SetClearDepth(GX2DepthBuffer *depthBuffer, float depth) --
      * real args: r3=depthBuffer (pointer, integer sequence), f1=depth
      * (independent float sequence, real PPC32 SVR4 ABI). */
     uint32_t depth_buffer_addr = ctx->r[3];
-    ppc_store_f32(ctx, depth_buffer_addr + BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET, ctx->f[1]);
+    ppc_store_f32(ctx, depth_buffer_addr + ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET, ctx->f[1]);
 }
 
 static inline void ppc_import_gx2_GX2SetClearStencil(PpcContext *ctx) {
@@ -2975,7 +2975,7 @@ static inline void ppc_import_gx2_GX2SetClearStencil(PpcContext *ctx) {
      * the real GX2DepthBuffer struct's own `stencilClear` field type). */
     uint32_t depth_buffer_addr = ctx->r[3];
     uint32_t stencil = ctx->r[4] & 0xFFu;
-    ppc_store_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET, stencil);
+    ppc_store_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET, stencil);
 }
 
 static inline void ppc_import_gx2_GX2SetClearDepthStencil(PpcContext *ctx) {
@@ -2987,8 +2987,8 @@ static inline void ppc_import_gx2_GX2SetClearDepthStencil(PpcContext *ctx) {
      * their position in the real source-level parameter list. */
     uint32_t depth_buffer_addr = ctx->r[3];
     uint32_t stencil = ctx->r[4] & 0xFFu;
-    ppc_store_f32(ctx, depth_buffer_addr + BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET, ctx->f[1]);
-    ppc_store_u32(ctx, depth_buffer_addr + BRAMBLE_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET, stencil);
+    ppc_store_f32(ctx, depth_buffer_addr + ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET, ctx->f[1]);
+    ppc_store_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET, stencil);
 }
 
 static inline void ppc_import_gx2_GX2ClearDepthStencilEx(PpcContext *ctx) {
@@ -3007,7 +3007,7 @@ static inline void ppc_import_gx2_GX2ClearDepthStencilEx(PpcContext *ctx) {
      * real GPU depth/stencil surface using the values passed here
      * directly -- but this project's swapchain render pass doesn't
      * bind a depth attachment at all yet
-     * (`bramble_gx2_ensure_frame_acquired`'s own
+     * (`arkchemy_gx2_ensure_frame_acquired`'s own
      * `dkCmdBufBindRenderTargets` call passes `NULL` for it), so
      * there's no real, live depth target for `dkCmdBufClearDepthStencil`
      * to act on -- wiring one in is the same real, deliberately
@@ -3048,14 +3048,14 @@ static inline void ppc_import_gx2_GX2ClearDepthStencilEx(PpcContext *ctx) {
  * binding to a deko3d DkSampler only happens once GX2SetPixelSampler/
  * GX2SetVertexSampler decode these same bits back out (see their own
  * real, now-implemented decode/bind logic and
- * `BRAMBLE_GX2_SAMPLER_WORD0_OFFSET`'s own definition above), the same
+ * `ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET`'s own definition above), the same
  * real two-step "build state struct, then bind it" shape real hardware
  * itself uses. This works identically on host and Switch (no
  * __SWITCH__ guard needed), same as every other pure-guest-memory-
  * struct shim in this project.
  */
 
-static inline uint32_t bramble_gx2_bitfield_set(uint32_t word, uint32_t value, uint32_t shift, uint32_t width) {
+static inline uint32_t arkchemy_gx2_bitfield_set(uint32_t word, uint32_t value, uint32_t shift, uint32_t width) {
     uint32_t mask = ((width >= 32u) ? 0xFFFFFFFFu : ((1u << width) - 1u)) << shift;
     return (word & ~mask) | ((value << shift) & mask);
 }
@@ -3074,22 +3074,22 @@ static inline void ppc_import_gx2_GX2InitSampler(PpcContext *ctx) {
     uint32_t filter_mode = ctx->r[5];
     uint32_t word0 = 0, word1 = 0, word2 = 0;
 
-    word0 = bramble_gx2_bitfield_set(word0, clamp_mode, 0, 3);  /* CLAMP_X */
-    word0 = bramble_gx2_bitfield_set(word0, clamp_mode, 3, 3);  /* CLAMP_Y */
-    word0 = bramble_gx2_bitfield_set(word0, clamp_mode, 6, 3);  /* CLAMP_Z */
-    word0 = bramble_gx2_bitfield_set(word0, filter_mode, 9, 3);  /* XY_MAG_FILTER */
-    word0 = bramble_gx2_bitfield_set(word0, filter_mode, 12, 3); /* XY_MIN_FILTER */
-    word0 = bramble_gx2_bitfield_set(word0, 1u, 15, 2); /* Z_FILTER = POINT */
-    word0 = bramble_gx2_bitfield_set(word0, 1u, 17, 2); /* MIP_FILTER = POINT */
-    word0 = bramble_gx2_bitfield_set(word0, 1u, 25, 1); /* TEX_ARRAY_OVERRIDE = true */
+    word0 = arkchemy_gx2_bitfield_set(word0, clamp_mode, 0, 3);  /* CLAMP_X */
+    word0 = arkchemy_gx2_bitfield_set(word0, clamp_mode, 3, 3);  /* CLAMP_Y */
+    word0 = arkchemy_gx2_bitfield_set(word0, clamp_mode, 6, 3);  /* CLAMP_Z */
+    word0 = arkchemy_gx2_bitfield_set(word0, filter_mode, 9, 3);  /* XY_MAG_FILTER */
+    word0 = arkchemy_gx2_bitfield_set(word0, filter_mode, 12, 3); /* XY_MIN_FILTER */
+    word0 = arkchemy_gx2_bitfield_set(word0, 1u, 15, 2); /* Z_FILTER = POINT */
+    word0 = arkchemy_gx2_bitfield_set(word0, 1u, 17, 2); /* MIP_FILTER = POINT */
+    word0 = arkchemy_gx2_bitfield_set(word0, 1u, 25, 1); /* TEX_ARRAY_OVERRIDE = true */
 
-    word1 = bramble_gx2_bitfield_set(word1, 0x3FFu, 10, 10); /* MAX_LOD = 0x3FF */
+    word1 = arkchemy_gx2_bitfield_set(word1, 0x3FFu, 10, 10); /* MAX_LOD = 0x3FF */
 
-    word2 = bramble_gx2_bitfield_set(word2, 1u, 31, 1); /* TYPE = UKN1 */
+    word2 = arkchemy_gx2_bitfield_set(word2, 1u, 31, 1); /* TYPE = UKN1 */
 
-    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
-    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD1_OFFSET, word1);
-    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD2_OFFSET, word2);
+    ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET, word0);
+    ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD1_OFFSET, word1);
+    ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD2_OFFSET, word2);
 }
 
 static inline void ppc_import_gx2_GX2InitSamplerXYFilter(PpcContext *ctx) {
@@ -3108,7 +3108,7 @@ static inline void ppc_import_gx2_GX2InitSamplerXYFilter(PpcContext *ctx) {
     uint32_t filter_mag = ctx->r[4];
     uint32_t filter_min = ctx->r[5];
     uint32_t max_aniso = ctx->r[6];
-    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET);
 
     if (max_aniso != 0u) {
         if (filter_mag == 0u) filter_mag = 4u; /* POINT -> ANISO_POINT */
@@ -3117,11 +3117,11 @@ static inline void ppc_import_gx2_GX2InitSamplerXYFilter(PpcContext *ctx) {
         else if (filter_min == 1u) filter_min = 5u;
     }
 
-    word0 = bramble_gx2_bitfield_set(word0, filter_mag, 9, 3);
-    word0 = bramble_gx2_bitfield_set(word0, filter_min, 12, 3);
-    word0 = bramble_gx2_bitfield_set(word0, max_aniso, 19, 3);
+    word0 = arkchemy_gx2_bitfield_set(word0, filter_mag, 9, 3);
+    word0 = arkchemy_gx2_bitfield_set(word0, filter_min, 12, 3);
+    word0 = arkchemy_gx2_bitfield_set(word0, max_aniso, 19, 3);
 
-    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
+    ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
 static inline void ppc_import_gx2_GX2InitSamplerZMFilter(PpcContext *ctx) {
@@ -3131,12 +3131,12 @@ static inline void ppc_import_gx2_GX2InitSamplerZMFilter(PpcContext *ctx) {
     uint32_t sampler_addr = ctx->r[3];
     uint32_t z_filter = ctx->r[4];
     uint32_t mip_filter = ctx->r[5];
-    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET);
 
-    word0 = bramble_gx2_bitfield_set(word0, z_filter, 15, 2);
-    word0 = bramble_gx2_bitfield_set(word0, mip_filter, 17, 2);
+    word0 = arkchemy_gx2_bitfield_set(word0, z_filter, 15, 2);
+    word0 = arkchemy_gx2_bitfield_set(word0, mip_filter, 17, 2);
 
-    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
+    ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
 static inline void ppc_import_gx2_GX2InitSamplerLOD(PpcContext *ctx) {
@@ -3172,11 +3172,11 @@ static inline void ppc_import_gx2_GX2InitSamplerLOD(PpcContext *ctx) {
     if (i_lod_bias > 2047) i_lod_bias = 2047;
 
     word1 = 0;
-    word1 = bramble_gx2_bitfield_set(word1, (uint32_t)i_min_lod, 0, 10);
-    word1 = bramble_gx2_bitfield_set(word1, (uint32_t)i_max_lod, 10, 10);
-    word1 = bramble_gx2_bitfield_set(word1, (uint32_t)(i_lod_bias & 0xFFF), 20, 12);
+    word1 = arkchemy_gx2_bitfield_set(word1, (uint32_t)i_min_lod, 0, 10);
+    word1 = arkchemy_gx2_bitfield_set(word1, (uint32_t)i_max_lod, 10, 10);
+    word1 = arkchemy_gx2_bitfield_set(word1, (uint32_t)(i_lod_bias & 0xFFF), 20, 12);
 
-    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD1_OFFSET, word1);
+    ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD1_OFFSET, word1);
 }
 
 static inline void ppc_import_gx2_GX2InitSamplerClamping(PpcContext *ctx) {
@@ -3187,13 +3187,13 @@ static inline void ppc_import_gx2_GX2InitSamplerClamping(PpcContext *ctx) {
     uint32_t clamp_x = ctx->r[4];
     uint32_t clamp_y = ctx->r[5];
     uint32_t clamp_z = ctx->r[6];
-    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET);
 
-    word0 = bramble_gx2_bitfield_set(word0, clamp_x, 0, 3);
-    word0 = bramble_gx2_bitfield_set(word0, clamp_y, 3, 3);
-    word0 = bramble_gx2_bitfield_set(word0, clamp_z, 6, 3);
+    word0 = arkchemy_gx2_bitfield_set(word0, clamp_x, 0, 3);
+    word0 = arkchemy_gx2_bitfield_set(word0, clamp_y, 3, 3);
+    word0 = arkchemy_gx2_bitfield_set(word0, clamp_z, 6, 3);
 
-    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
+    ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
 static inline void ppc_import_gx2_GX2InitSamplerBorderType(PpcContext *ctx) {
@@ -3201,11 +3201,11 @@ static inline void ppc_import_gx2_GX2InitSamplerBorderType(PpcContext *ctx) {
      * GX2TexBorderType borderColorType) -- real, direct field write. */
     uint32_t sampler_addr = ctx->r[3];
     uint32_t border_type = ctx->r[4];
-    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET);
 
-    word0 = bramble_gx2_bitfield_set(word0, border_type, 22, 2);
+    word0 = arkchemy_gx2_bitfield_set(word0, border_type, 22, 2);
 
-    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
+    ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
 static inline void ppc_import_gx2_GX2InitSamplerDepthCompare(PpcContext *ctx) {
@@ -3218,11 +3218,11 @@ static inline void ppc_import_gx2_GX2InitSamplerDepthCompare(PpcContext *ctx) {
      * into a deko3d struct. */
     uint32_t sampler_addr = ctx->r[3];
     uint32_t depth_compare = ctx->r[4];
-    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET);
+    uint32_t word0 = ppc_load_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET);
 
-    word0 = bramble_gx2_bitfield_set(word0, depth_compare, 26, 3);
+    word0 = arkchemy_gx2_bitfield_set(word0, depth_compare, 26, 3);
 
-    ppc_store_u32(ctx, sampler_addr + BRAMBLE_GX2_SAMPLER_WORD0_OFFSET, word0);
+    ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
 /* GX2InitColorBufferRegs/GX2InitDepthBufferRegs/GX2InitDepthBufferHiZEnable
@@ -3288,7 +3288,7 @@ static inline void ppc_import_gx2_GX2InitTextureRegs(PpcContext *ctx) {
     uint32_t texture_addr = ctx->r[3];
     uint32_t view_num_mips = ppc_load_u32(ctx, texture_addr + 0x78u);   /* GX2Texture::viewNumMips offset, confirmed against wut's gx2/texture.h */
     uint32_t view_num_slices = ppc_load_u32(ctx, texture_addr + 0x80u); /* GX2Texture::viewNumSlices offset */
-    uint32_t width = ppc_load_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
+    uint32_t width = ppc_load_u32(ctx, texture_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
 
     if (view_num_mips == 0u) {
         ppc_store_u32(ctx, texture_addr + 0x78u, 1u);
@@ -3297,7 +3297,7 @@ static inline void ppc_import_gx2_GX2InitTextureRegs(PpcContext *ctx) {
         ppc_store_u32(ctx, texture_addr + 0x80u, 1u);
     }
     if (width == 0u) {
-        ppc_store_u32(ctx, texture_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET, 1u);
+        ppc_store_u32(ctx, texture_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET, 1u);
     }
 }
 
@@ -3320,11 +3320,11 @@ static inline void ppc_import_gx2_GX2InitTextureRegs(PpcContext *ctx) {
  *
  * Real, honest, deliberate architectural gap, not a guess dressed up as
  * a real implementation: this project's own render-state model (see
- * `BrambleGx2State`'s `rasterizer_state`/`depth_stencil_state`/
+ * `ArkchemyGx2State`'s `rasterizer_state`/`depth_stencil_state`/
  * `color_state`/`multisample_state` shadow copies) is a single, global,
  * persistent set -- every `GX2Set*Control`-style call in this file
  * mutates the *one* shared state and immediately rebinds it (see
- * `bramble_gx2_rebind_color_write_state` and friends), with no concept
+ * `arkchemy_gx2_rebind_color_write_state` and friends), with no concept
  * of multiple independently-switchable contexts at all. Real game code
  * that calls `GX2SetContextState` purely as one-time setup boilerplate
  * (the overwhelmingly common real usage: one context, set up once,
@@ -3393,21 +3393,21 @@ static inline void ppc_import_gx2_GX2CopySurface(PpcContext *ctx) {
 
     if (src_level != 0u || dst_level != 0u) return; /* real scope: mip level 0 only */
 
-    src_dim = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
-    src_width = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
-    src_height = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
-    src_format = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
-    src_tile_mode = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
-    src_pitch = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
-    src_image = ppc_load_u32(ctx, src_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+    src_dim = ppc_load_u32(ctx, src_addr + ARKCHEMY_GX2_SURFACE_DIM_OFFSET);
+    src_width = ppc_load_u32(ctx, src_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
+    src_height = ppc_load_u32(ctx, src_addr + ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET);
+    src_format = ppc_load_u32(ctx, src_addr + ARKCHEMY_GX2_SURFACE_FORMAT_OFFSET);
+    src_tile_mode = ppc_load_u32(ctx, src_addr + ARKCHEMY_GX2_SURFACE_TILE_MODE_OFFSET);
+    src_pitch = ppc_load_u32(ctx, src_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET);
+    src_image = ppc_load_u32(ctx, src_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
-    dst_dim = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_DIM_OFFSET);
-    dst_width = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_WIDTH_OFFSET);
-    dst_height = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_HEIGHT_OFFSET);
-    dst_format = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_FORMAT_OFFSET);
-    dst_tile_mode = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_TILE_MODE_OFFSET);
-    dst_pitch = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_PITCH_OFFSET);
-    dst_image = ppc_load_u32(ctx, dst_addr + BRAMBLE_GX2_SURFACE_IMAGE_OFFSET);
+    dst_dim = ppc_load_u32(ctx, dst_addr + ARKCHEMY_GX2_SURFACE_DIM_OFFSET);
+    dst_width = ppc_load_u32(ctx, dst_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
+    dst_height = ppc_load_u32(ctx, dst_addr + ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET);
+    dst_format = ppc_load_u32(ctx, dst_addr + ARKCHEMY_GX2_SURFACE_FORMAT_OFFSET);
+    dst_tile_mode = ppc_load_u32(ctx, dst_addr + ARKCHEMY_GX2_SURFACE_TILE_MODE_OFFSET);
+    dst_pitch = ppc_load_u32(ctx, dst_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET);
+    dst_image = ppc_load_u32(ctx, dst_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
     if (src_dim != 1u || dst_dim != 1u) return;                                       /* real scope: DIM_2D only */
     if (src_tile_mode != 1u && src_tile_mode != 16u) return;                          /* real scope: already-resolved-linear only */
@@ -3437,7 +3437,7 @@ static inline void ppc_import_gx2_GX2CopySurface(PpcContext *ctx) {
  * swapchain format), not an attempt at a full real format-size table.
  * Returns 0 for any other real format -- a real, honest, documented
  * gap, not a guessed value. */
-static inline uint32_t bramble_gx2_surface_format_bpp(uint32_t format) {
+static inline uint32_t arkchemy_gx2_surface_format_bpp(uint32_t format) {
     if (format == 0x1au) return 4u;
     return 0u;
 }
@@ -3480,7 +3480,7 @@ static inline void ppc_import_gx2_GX2CalcTVSize(PpcContext *ctx) {
         default: return; /* real scope: DISABLED(0) and any other real value is a real, honest, documented gap */
     }
 
-    bpp = bramble_gx2_surface_format_bpp(surface_format);
+    bpp = arkchemy_gx2_surface_format_bpp(surface_format);
     if (bpp == 0u) return;
 
     switch (buffering_mode) {
@@ -3517,7 +3517,7 @@ static inline void ppc_import_gx2_GX2CalcDRCSize(PpcContext *ctx) {
 
     if (drc_render_mode != 1u && drc_render_mode != 2u) return; /* real scope: SINGLE(1)/DOUBLE(2) only -- DISABLED(0) and any other real value is a real, honest, documented gap */
 
-    bpp = bramble_gx2_surface_format_bpp(surface_format);
+    bpp = arkchemy_gx2_surface_format_bpp(surface_format);
     if (bpp == 0u) return;
 
     switch (buffering_mode) {
@@ -3545,7 +3545,7 @@ static inline void ppc_import_gx2_GX2CalcDRCSize(PpcContext *ctx) {
  * supports natively. This project's own entire architecture is
  * *immediate execution* instead: every `GX2Set*`/`GX2Clear*` call in
  * this file mutates real, persistent deko3d state or records directly
- * into the one real, always-live `g_bramble_gx2.cmdbuf` right when
+ * into the one real, always-live `g_arkchemy_gx2.cmdbuf` right when
  * it's called -- there's no concept of "redirect where the next N GX2
  * calls' output goes" anywhere in this design. Real, honest,
  * documented architectural gap, not a guess: correctly supporting
@@ -3767,4 +3767,4 @@ static inline void ppc_import_gx2_GX2DrawIndexedEx(PpcContext *ctx) {
     (void)ctx;
 }
 
-#endif /* BRAMBLE_CAFEOS_GX2_H */
+#endif /* ARKCHEMY_CAFEOS_GX2_H */

@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_NSYSHID_H
-#define BRAMBLE_CAFEOS_NSYSHID_H
+#ifndef ARKCHEMY_CAFEOS_NSYSHID_H
+#define ARKCHEMY_CAFEOS_NSYSHID_H
 
 #include "ppc_runtime.h"
 
@@ -58,4 +58,4 @@ static inline void ppc_import_nsyshid_HIDDecodeError(PpcContext *ctx) {
     ctx->r[3] = 0;
 }
 
-#endif /* BRAMBLE_CAFEOS_NSYSHID_H */
+#endif /* ARKCHEMY_CAFEOS_NSYSHID_H */

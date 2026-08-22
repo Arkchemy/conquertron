@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_IM_H
-#define BRAMBLE_CAFEOS_COREINIT_IM_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_IM_H
+#define ARKCHEMY_CAFEOS_COREINIT_IM_H
 
 #include "ppc_runtime.h"
 
@@ -43,4 +43,4 @@ static inline void ppc_import_coreinit_IMIsDimEnabled(PpcContext *ctx) {
     ctx->r[3] = (uint32_t)g_ppc_im_dim_enabled;
 }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_IM_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_IM_H */

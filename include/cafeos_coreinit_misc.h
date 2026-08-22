@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_MISC_H
-#define BRAMBLE_CAFEOS_COREINIT_MISC_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_MISC_H
+#define ARKCHEMY_CAFEOS_COREINIT_MISC_H
 
 #include "ppc_runtime.h"
 
@@ -83,4 +83,4 @@ static inline void ppc_import_coreinit_UCOpen(PpcContext *ctx) { ctx->r[3] = 1; 
 static inline void ppc_import_coreinit_UCClose(PpcContext *ctx) { ctx->r[3] = 0; }
 static inline void ppc_import_coreinit_UCReadSysConfig(PpcContext *ctx) { ctx->r[3] = (uint32_t)-0x200009; }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_MISC_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_MISC_H */

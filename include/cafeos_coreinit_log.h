@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_LOG_H
-#define BRAMBLE_CAFEOS_COREINIT_LOG_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_LOG_H
+#define ARKCHEMY_CAFEOS_COREINIT_LOG_H
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,4 +61,4 @@ static inline void ppc_import_coreinit_OSConsoleWrite(PpcContext *ctx) {
     for (uint32_t i = 0; i < len; i++) fputc((int)ppc_load_u8(ctx, addr + i), stderr);
 }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_LOG_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_LOG_H */

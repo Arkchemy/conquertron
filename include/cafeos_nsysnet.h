@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_NSYSNET_H
-#define BRAMBLE_CAFEOS_NSYSNET_H
+#ifndef ARKCHEMY_CAFEOS_NSYSNET_H
+#define ARKCHEMY_CAFEOS_NSYSNET_H
 
 #include "ppc_runtime.h"
 
@@ -21,4 +21,4 @@ static inline void ppc_import_nsysnet_socket_lib_init(PpcContext *ctx) { ctx->r[
 static inline void ppc_import_nsysnet_socket_lib_finish(PpcContext *ctx) { ctx->r[3] = 0; }
 static inline void ppc_import_nsysnet_socketclose(PpcContext *ctx) { ctx->r[3] = 0; }
 
-#endif /* BRAMBLE_CAFEOS_NSYSNET_H */
+#endif /* ARKCHEMY_CAFEOS_NSYSNET_H */

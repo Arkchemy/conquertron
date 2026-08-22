@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_SYSAPP_H
-#define BRAMBLE_CAFEOS_SYSAPP_H
+#ifndef ARKCHEMY_CAFEOS_SYSAPP_H
+#define ARKCHEMY_CAFEOS_SYSAPP_H
 
 #include "ppc_runtime.h"
 
@@ -20,4 +20,4 @@
  */
 static inline void ppc_import_sysapp_SYSLaunchSettings(PpcContext *ctx) { (void)ctx; }
 
-#endif /* BRAMBLE_CAFEOS_SYSAPP_H */
+#endif /* ARKCHEMY_CAFEOS_SYSAPP_H */

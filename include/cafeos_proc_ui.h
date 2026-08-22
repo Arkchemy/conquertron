@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_PROC_UI_H
-#define BRAMBLE_CAFEOS_PROC_UI_H
+#ifndef ARKCHEMY_CAFEOS_PROC_UI_H
+#define ARKCHEMY_CAFEOS_PROC_UI_H
 
 #include "ppc_runtime.h"
 
@@ -33,18 +33,18 @@
  * event to invoke them from, so there's nothing to call them with yet.
  */
 enum {
-    BRAMBLE_PROCUI_STATUS_IN_FOREGROUND = 0,
+    ARKCHEMY_PROCUI_STATUS_IN_FOREGROUND = 0,
 };
 
 static inline void ppc_import_proc_ui_ProcUIInit(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_proc_ui_ProcUIShutdown(PpcContext *ctx) { (void)ctx; }
 
 static inline void ppc_import_proc_ui_ProcUIProcessMessages(PpcContext *ctx) {
-    ctx->r[3] = (uint32_t)BRAMBLE_PROCUI_STATUS_IN_FOREGROUND;
+    ctx->r[3] = (uint32_t)ARKCHEMY_PROCUI_STATUS_IN_FOREGROUND;
 }
 
 static inline void ppc_import_proc_ui_ProcUIRegisterCallback(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_proc_ui_ProcUIRegisterBackgroundCallback(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_proc_ui_ProcUIDrawDoneRelease(PpcContext *ctx) { (void)ctx; }
 
-#endif /* BRAMBLE_CAFEOS_PROC_UI_H */
+#endif /* ARKCHEMY_CAFEOS_PROC_UI_H */

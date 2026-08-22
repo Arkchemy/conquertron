@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_H
-#define BRAMBLE_CAFEOS_COREINIT_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_H
+#define ARKCHEMY_CAFEOS_COREINIT_H
 
 #include <stdlib.h>
 
@@ -43,4 +43,4 @@ static inline void ppc_import_coreinit_DCFlushRangeNoSync(PpcContext *ctx) { (vo
 static inline void ppc_import_coreinit_exit(PpcContext *ctx) { exit((int)ctx->r[3]); }
 static inline void ppc_import_coreinit__Exit(PpcContext *ctx) { _Exit((int)ctx->r[3]); }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_H */

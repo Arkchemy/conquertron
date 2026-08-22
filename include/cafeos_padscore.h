@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_PADSCORE_H
-#define BRAMBLE_CAFEOS_PADSCORE_H
+#ifndef ARKCHEMY_CAFEOS_PADSCORE_H
+#define ARKCHEMY_CAFEOS_PADSCORE_H
 
 #include "ppc_runtime.h"
 
@@ -43,4 +43,4 @@ static inline void ppc_import_padscore_WPADControlMotor(PpcContext *ctx) { (void
 static inline void ppc_import_padscore_WPADDisconnect(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_padscore_WPADEnableURCC(PpcContext *ctx) { (void)ctx; }
 
-#endif /* BRAMBLE_CAFEOS_PADSCORE_H */
+#endif /* ARKCHEMY_CAFEOS_PADSCORE_H */

@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_MCP_H
-#define BRAMBLE_CAFEOS_COREINIT_MCP_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_MCP_H
+#define ARKCHEMY_CAFEOS_COREINIT_MCP_H
 
 #include <string.h>
 
@@ -49,4 +49,4 @@ static inline void ppc_import_coreinit_MCP_GetSysProdSettings(PpcContext *ctx) {
     ctx->r[3] = 0;
 }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_MCP_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_MCP_H */

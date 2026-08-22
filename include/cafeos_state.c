@@ -11,7 +11,7 @@
  * switch/native/ and switch/gx2_test/ do -- their own single main.c is
  * the only file that ever includes these headers, so each header's
  * `static` state naturally has exactly one, real, correctly-shared
- * instance). Bramble's actual, full recompiled game is far too large
+ * instance). Arkchemy's actual, full recompiled game is far too large
  * (8.5M+ lines) to safely compile as that same single-translation-unit
  * shape (a real attempt exhausted a real, deliberate 5.5GB compile-time
  * memory safety cap) -- it needs to be split across many independently-
@@ -20,7 +20,7 @@
  * files means each one, if it `#include`s a shim header directly,
  * would get its *own*, separate, `static`-scoped (internal-linkage)
  * copy of that header's state -- e.g. every file's own private copy of
- * `g_bramble_gx2`, meaning a real `GX2Init` call recorded in one file's
+ * `g_arkchemy_gx2`, meaning a real `GX2Init` call recorded in one file's
  * copy would be genuinely invisible to a `GX2ClearColor` call compiled
  * into a different file, silently breaking real cross-call state
  * coherence throughout the whole game.
@@ -55,42 +55,42 @@ ppc_unhandled_log_fn g_ppc_unhandled_log = NULL;
 
 ppc_fs_open_log_fn g_ppc_fs_open_log = NULL;
 
-int32_t g_ppc_fs_last_error = BRAMBLE_FS_STATUS_OK;
-FILE *g_ppc_fs_files[BRAMBLE_FS_MAX_HANDLES];
-DIR *g_ppc_fs_dirs[BRAMBLE_FS_MAX_DIR_HANDLES];
+int32_t g_ppc_fs_last_error = ARKCHEMY_FS_STATUS_OK;
+FILE *g_ppc_fs_files[ARKCHEMY_FS_MAX_HANDLES];
+DIR *g_ppc_fs_dirs[ARKCHEMY_FS_MAX_DIR_HANDLES];
 int g_ppc_im_dim_enabled = 1; /* real hardware default is dimming enabled */
 
 #ifdef __SWITCH__
-char g_bramble_fs_content_root[256] = "sdmc:/switch/Bramble/content";
-char g_bramble_fs_save_root[256] = "sdmc:/switch/Bramble/save";
+char g_arkchemy_fs_content_root[256] = "sdmc:/switch/Jouster/content";
+char g_arkchemy_fs_save_root[256] = "sdmc:/switch/Jouster/save";
 #else
-char g_bramble_fs_content_root[256] = "content";
-char g_bramble_fs_save_root[256] = "save";
+char g_arkchemy_fs_content_root[256] = "content";
+char g_arkchemy_fs_save_root[256] = "save";
 #endif
 
-BrambleThreadEntry g_bramble_threads[BRAMBLE_THREAD_TABLE_SIZE];
-pthread_mutex_t g_bramble_thread_table_lock = PTHREAD_MUTEX_INITIALIZER;
-pthread_key_t g_bramble_current_thread_key;
-pthread_once_t g_bramble_thread_tls_once = PTHREAD_ONCE_INIT;
+ArkchemyThreadEntry g_arkchemy_threads[ARKCHEMY_THREAD_TABLE_SIZE];
+pthread_mutex_t g_arkchemy_thread_table_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_key_t g_arkchemy_current_thread_key;
+pthread_once_t g_arkchemy_thread_tls_once = PTHREAD_ONCE_INIT;
 
-BrambleMemHeap g_bramble_mem_heaps[BRAMBLE_MEM_MAX_HEAPS];
+ArkchemyMemHeap g_arkchemy_mem_heaps[ARKCHEMY_MEM_MAX_HEAPS];
 ppc_mem_alloc_fail_log_fn g_ppc_mem_alloc_fail_log = NULL;
-uint32_t g_bramble_base_heap_handle[3];
-uint64_t g_bramble_mem_alloc_fail_total = 0;
-uint64_t g_bramble_mem_free_total = 0;
-uint64_t g_bramble_mem_reuse_total = 0;
+uint32_t g_arkchemy_base_heap_handle[3];
+uint64_t g_arkchemy_mem_alloc_fail_total = 0;
+uint64_t g_arkchemy_mem_free_total = 0;
+uint64_t g_arkchemy_mem_reuse_total = 0;
 
-BrambleMutexEntry g_bramble_mutexes[BRAMBLE_SYNC_TABLE_SIZE];
-pthread_mutex_t g_bramble_mutex_table_lock = PTHREAD_MUTEX_INITIALIZER;
-BrambleEventEntry g_bramble_events[BRAMBLE_SYNC_TABLE_SIZE];
-pthread_mutex_t g_bramble_event_table_lock = PTHREAD_MUTEX_INITIALIZER;
-BrambleSemEntry g_bramble_sems[BRAMBLE_SYNC_TABLE_SIZE];
-pthread_mutex_t g_bramble_sem_table_lock = PTHREAD_MUTEX_INITIALIZER;
+ArkchemyMutexEntry g_arkchemy_mutexes[ARKCHEMY_SYNC_TABLE_SIZE];
+pthread_mutex_t g_arkchemy_mutex_table_lock = PTHREAD_MUTEX_INITIALIZER;
+ArkchemyEventEntry g_arkchemy_events[ARKCHEMY_SYNC_TABLE_SIZE];
+pthread_mutex_t g_arkchemy_event_table_lock = PTHREAD_MUTEX_INITIALIZER;
+ArkchemySemEntry g_arkchemy_sems[ARKCHEMY_SYNC_TABLE_SIZE];
+pthread_mutex_t g_arkchemy_sem_table_lock = PTHREAD_MUTEX_INITIALIZER;
 
 int g_ax_initialized = 0;
-int g_bramble_ax_voice_used[BRAMBLE_AXVOICE_MAX];
+int g_arkchemy_ax_voice_used[ARKCHEMY_AXVOICE_MAX];
 
 #ifdef __SWITCH__
-BrambleGx2State g_bramble_gx2;
-BrambleVpadState g_bramble_vpad;
+ArkchemyGx2State g_arkchemy_gx2;
+ArkchemyVpadState g_arkchemy_vpad;
 #endif

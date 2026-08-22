@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_SND_USER_H
-#define BRAMBLE_CAFEOS_SND_USER_H
+#ifndef ARKCHEMY_CAFEOS_SND_USER_H
+#define ARKCHEMY_CAFEOS_SND_USER_H
 
 #include "ppc_runtime.h"
 
@@ -25,4 +25,4 @@
 static inline void ppc_import_snd_user_AXFXSetHooks(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_snd_user_AXFXMultiChReverbShutdown(PpcContext *ctx) { (void)ctx; }
 
-#endif /* BRAMBLE_CAFEOS_SND_USER_H */
+#endif /* ARKCHEMY_CAFEOS_SND_USER_H */

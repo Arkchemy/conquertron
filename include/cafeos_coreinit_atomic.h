@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_COREINIT_ATOMIC_H
-#define BRAMBLE_CAFEOS_COREINIT_ATOMIC_H
+#ifndef ARKCHEMY_CAFEOS_COREINIT_ATOMIC_H
+#define ARKCHEMY_CAFEOS_COREINIT_ATOMIC_H
 
 #include "ppc_runtime.h"
 
@@ -78,4 +78,4 @@ static inline void ppc_import_coreinit_OSCompareAndSwapAtomic64(PpcContext *ctx)
     }
 }
 
-#endif /* BRAMBLE_CAFEOS_COREINIT_ATOMIC_H */
+#endif /* ARKCHEMY_CAFEOS_COREINIT_ATOMIC_H */

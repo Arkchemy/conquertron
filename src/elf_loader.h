@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_ELF_LOADER_H
-#define BRAMBLE_ELF_LOADER_H
+#ifndef ARKCHEMY_ELF_LOADER_H
+#define ARKCHEMY_ELF_LOADER_H
 
 #include <cstdint>
 #include <map>
@@ -216,4 +216,4 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error);
 
 }  // namespace recomp
 
-#endif  // BRAMBLE_ELF_LOADER_H
+#endif  // ARKCHEMY_ELF_LOADER_H

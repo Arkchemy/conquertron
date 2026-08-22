@@ -1,5 +1,5 @@
-#ifndef BRAMBLE_CAFEOS_SND_CORE_H
-#define BRAMBLE_CAFEOS_SND_CORE_H
+#ifndef ARKCHEMY_CAFEOS_SND_CORE_H
+#define ARKCHEMY_CAFEOS_SND_CORE_H
 
 #include "ppc_runtime.h"
 
@@ -112,19 +112,19 @@ static inline void ppc_import_snd_core_AXRegisterExceedCallback(PpcContext *ctx)
 
 /* --- AXVoice pool -- see file comment for the real-offset/no-op split. --- */
 
-#define BRAMBLE_AXVOICE_POOL_BASE 0xE100u
-#define BRAMBLE_AXVOICE_SLOT_SIZE 0x58u
-#define BRAMBLE_AXVOICE_MAX 32
+#define ARKCHEMY_AXVOICE_POOL_BASE 0xE100u
+#define ARKCHEMY_AXVOICE_SLOT_SIZE 0x58u
+#define ARKCHEMY_AXVOICE_MAX 32
 
 /* Real, WUT_CHECK_OFFSET-confirmed offsets within AXVoice. */
-#define BRAMBLE_AXVOICE_OFF_INDEX 0x00u
-#define BRAMBLE_AXVOICE_OFF_STATE 0x04u
-#define BRAMBLE_AXVOICE_OFF_PRIORITY 0x1Cu
-#define BRAMBLE_AXVOICE_OFF_CALLBACK 0x20u
-#define BRAMBLE_AXVOICE_OFF_USERCONTEXT 0x24u
-#define BRAMBLE_AXVOICE_OFF_OFFSETS 0x34u /* AXVoiceOffsets: dataType u16@+0, loopingEnabled u16@+2, loopOffset u32@+4, endOffset u32@+8, currentOffset u32@+c, data ptr@+0x10 */
+#define ARKCHEMY_AXVOICE_OFF_INDEX 0x00u
+#define ARKCHEMY_AXVOICE_OFF_STATE 0x04u
+#define ARKCHEMY_AXVOICE_OFF_PRIORITY 0x1Cu
+#define ARKCHEMY_AXVOICE_OFF_CALLBACK 0x20u
+#define ARKCHEMY_AXVOICE_OFF_USERCONTEXT 0x24u
+#define ARKCHEMY_AXVOICE_OFF_OFFSETS 0x34u /* AXVoiceOffsets: dataType u16@+0, loopingEnabled u16@+2, loopOffset u32@+4, endOffset u32@+8, currentOffset u32@+c, data ptr@+0x10 */
 
-extern int g_bramble_ax_voice_used[BRAMBLE_AXVOICE_MAX]; /* real definition in cafeos_state.c -- see its own file comment */
+extern int g_arkchemy_ax_voice_used[ARKCHEMY_AXVOICE_MAX]; /* real definition in cafeos_state.c -- see its own file comment */
 
 static inline void ppc_import_snd_core_AXAcquireVoice(PpcContext *ctx) {
     /* AXVoice *AXAcquireVoice(uint32_t priority, AXVoiceCallbackFn callback, void *userContext) */
@@ -132,16 +132,16 @@ static inline void ppc_import_snd_core_AXAcquireVoice(PpcContext *ctx) {
     uint32_t callback = ctx->r[4];
     uint32_t user_context = ctx->r[5];
     int i;
-    for (i = 0; i < BRAMBLE_AXVOICE_MAX; i++) {
+    for (i = 0; i < ARKCHEMY_AXVOICE_MAX; i++) {
         uint32_t addr, b;
-        if (g_bramble_ax_voice_used[i]) continue;
-        g_bramble_ax_voice_used[i] = 1;
-        addr = BRAMBLE_AXVOICE_POOL_BASE + (uint32_t)i * BRAMBLE_AXVOICE_SLOT_SIZE;
-        for (b = 0; b < BRAMBLE_AXVOICE_SLOT_SIZE; b++) ppc_store_u8(ctx, addr + b, 0);
-        ppc_store_u32(ctx, addr + BRAMBLE_AXVOICE_OFF_INDEX, (uint32_t)i);
-        ppc_store_u32(ctx, addr + BRAMBLE_AXVOICE_OFF_PRIORITY, priority);
-        ppc_store_u32(ctx, addr + BRAMBLE_AXVOICE_OFF_CALLBACK, callback);
-        ppc_store_u32(ctx, addr + BRAMBLE_AXVOICE_OFF_USERCONTEXT, user_context);
+        if (g_arkchemy_ax_voice_used[i]) continue;
+        g_arkchemy_ax_voice_used[i] = 1;
+        addr = ARKCHEMY_AXVOICE_POOL_BASE + (uint32_t)i * ARKCHEMY_AXVOICE_SLOT_SIZE;
+        for (b = 0; b < ARKCHEMY_AXVOICE_SLOT_SIZE; b++) ppc_store_u8(ctx, addr + b, 0);
+        ppc_store_u32(ctx, addr + ARKCHEMY_AXVOICE_OFF_INDEX, (uint32_t)i);
+        ppc_store_u32(ctx, addr + ARKCHEMY_AXVOICE_OFF_PRIORITY, priority);
+        ppc_store_u32(ctx, addr + ARKCHEMY_AXVOICE_OFF_CALLBACK, callback);
+        ppc_store_u32(ctx, addr + ARKCHEMY_AXVOICE_OFF_USERCONTEXT, user_context);
         ctx->r[3] = addr;
         return;
     }
@@ -151,9 +151,9 @@ static inline void ppc_import_snd_core_AXAcquireVoice(PpcContext *ctx) {
 static inline void ppc_import_snd_core_AXFreeVoice(PpcContext *ctx) {
     /* void AXFreeVoice(AXVoice *voice) */
     uint32_t addr = ctx->r[3];
-    if (addr >= BRAMBLE_AXVOICE_POOL_BASE) {
-        uint32_t idx = (addr - BRAMBLE_AXVOICE_POOL_BASE) / BRAMBLE_AXVOICE_SLOT_SIZE;
-        if (idx < BRAMBLE_AXVOICE_MAX) g_bramble_ax_voice_used[idx] = 0;
+    if (addr >= ARKCHEMY_AXVOICE_POOL_BASE) {
+        uint32_t idx = (addr - ARKCHEMY_AXVOICE_POOL_BASE) / ARKCHEMY_AXVOICE_SLOT_SIZE;
+        if (idx < ARKCHEMY_AXVOICE_MAX) g_arkchemy_ax_voice_used[idx] = 0;
     }
 }
 
@@ -163,7 +163,7 @@ static inline void ppc_import_snd_core_AXIsVoiceRunning(PpcContext *ctx) { (void
 
 static inline void ppc_import_snd_core_AXSetVoiceState(PpcContext *ctx) {
     /* void AXSetVoiceState(AXVoice *voice, AXVoiceState state) */
-    ppc_store_u32(ctx, ctx->r[3] + BRAMBLE_AXVOICE_OFF_STATE, ctx->r[4]);
+    ppc_store_u32(ctx, ctx->r[3] + ARKCHEMY_AXVOICE_OFF_STATE, ctx->r[4]);
 }
 
 static inline void ppc_import_snd_core_AXSetVoiceOffsets(PpcContext *ctx) {
@@ -171,7 +171,7 @@ static inline void ppc_import_snd_core_AXSetVoiceOffsets(PpcContext *ctx) {
      * copies the 5 scalar fields; `data` (the pointer at +0x10) is
      * copied too for round-trip completeness even though nothing here
      * dereferences it. */
-    uint32_t voice = ctx->r[3], src = ctx->r[4], dst = ctx->r[3] + BRAMBLE_AXVOICE_OFF_OFFSETS;
+    uint32_t voice = ctx->r[3], src = ctx->r[4], dst = ctx->r[3] + ARKCHEMY_AXVOICE_OFF_OFFSETS;
     (void)voice;
     ppc_store_u16(ctx, dst + 0x0, ppc_load_u16(ctx, src + 0x0));
     ppc_store_u16(ctx, dst + 0x2, ppc_load_u16(ctx, src + 0x2));
@@ -183,7 +183,7 @@ static inline void ppc_import_snd_core_AXSetVoiceOffsets(PpcContext *ctx) {
 
 static inline void ppc_import_snd_core_AXGetVoiceOffsets(PpcContext *ctx) {
     /* void AXGetVoiceOffsets(AXVoice *voice, AXVoiceOffsets *offsets) -- inverse of Set above */
-    uint32_t src = ctx->r[3] + BRAMBLE_AXVOICE_OFF_OFFSETS, dst = ctx->r[4];
+    uint32_t src = ctx->r[3] + ARKCHEMY_AXVOICE_OFF_OFFSETS, dst = ctx->r[4];
     ppc_store_u16(ctx, dst + 0x0, ppc_load_u16(ctx, src + 0x0));
     ppc_store_u16(ctx, dst + 0x2, ppc_load_u16(ctx, src + 0x2));
     ppc_store_u32(ctx, dst + 0x4, ppc_load_u32(ctx, src + 0x4));
@@ -194,17 +194,17 @@ static inline void ppc_import_snd_core_AXGetVoiceOffsets(PpcContext *ctx) {
 
 static inline void ppc_import_snd_core_AXSetVoiceCurrentOffset(PpcContext *ctx) {
     /* void AXSetVoiceCurrentOffset(AXVoice *voice, uint32_t offset) */
-    ppc_store_u32(ctx, ctx->r[3] + BRAMBLE_AXVOICE_OFF_OFFSETS + 0xc, ctx->r[4]);
+    ppc_store_u32(ctx, ctx->r[3] + ARKCHEMY_AXVOICE_OFF_OFFSETS + 0xc, ctx->r[4]);
 }
 
 static inline void ppc_import_snd_core_AXSetVoiceEndOffset(PpcContext *ctx) {
     /* void AXSetVoiceEndOffset(AXVoice *voice, uint32_t offset) */
-    ppc_store_u32(ctx, ctx->r[3] + BRAMBLE_AXVOICE_OFF_OFFSETS + 0x8, ctx->r[4]);
+    ppc_store_u32(ctx, ctx->r[3] + ARKCHEMY_AXVOICE_OFF_OFFSETS + 0x8, ctx->r[4]);
 }
 
 static inline void ppc_import_snd_core_AXSetVoiceLoop(PpcContext *ctx) {
     /* void AXSetVoiceLoop(AXVoice *voice, AXVoiceLoop loop) */
-    ppc_store_u16(ctx, ctx->r[3] + BRAMBLE_AXVOICE_OFF_OFFSETS + 0x2, (uint16_t)ctx->r[4]);
+    ppc_store_u16(ctx, ctx->r[3] + ARKCHEMY_AXVOICE_OFF_OFFSETS + 0x2, (uint16_t)ctx->r[4]);
 }
 
 static inline void ppc_import_snd_core_AXSetVoiceSrcRatio(PpcContext *ctx) {
@@ -239,4 +239,4 @@ static inline void ppc_import_snd_core_AXSetVoiceAdpcmLoop(PpcContext *ctx) { (v
 static inline void ppc_import_snd_core_AXSetVoiceVe(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_snd_core_AXSetVoiceDeviceMix(PpcContext *ctx) { (void)ctx; ctx->r[3] = 0; /* AX_RESULT_SUCCESS */ }
 
-#endif /* BRAMBLE_CAFEOS_SND_CORE_H */
+#endif /* ARKCHEMY_CAFEOS_SND_CORE_H */
