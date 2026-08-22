@@ -281,11 +281,17 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
 
         switch (insn.id) {
             case PPC_INS_STWU: {
+                // See the LWZU/LBZU/STBU comment above (this instruction
+                // is almost always a stack-frame `stwu r1, -N(r1)`, which
+                // never carries a data relocation, but is_synthetic_
+                // addr_lo_reloc still needs checking for correctness/
+                // consistency with every other *U form).
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  ppc_store_u32(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", " << reg(rD)
-                    << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base) : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  ppc_store_u32(ctx, " << addr_expr << ", " << reg(rD) << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_STW: {
@@ -334,28 +340,49 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     << reg(rD) << ");\n";
                 break;
             }
+            // Update-form (rA = EA) loads/stores need the *same*
+            // is_synthetic_addr_lo_reloc fold as their plain LWZ/STW
+            // siblings above, applied to BOTH the memory address and the
+            // base-register writeback -- found real, 2026-08-22, via a
+            // hardware bisection that traced a NULL igArkCore singleton
+            // pointer back to exactly this gap: getClassMetaSafeInternal
+            // fetches it with `lwzu r3, -0x2da4(r30)` after a `lis r30,
+            // ha16(sym)` that -- per real ELF relocation data -- already
+            // gives r30 the complete resolved address (same as the STW
+            // path a few instructions earlier in the *writer*, which
+            // folds correctly because it's plain STW). Unconditionally
+            // re-applying the LO16 displacement here, as if it were a
+            // real numeric offset rather than a relocation placeholder,
+            // computes a second, never-written address and silently
+            // reads 0/NULL forever. This was LWZU-only in the one
+            // occurrence that surfaced it, but LBZU/STBU/LHZU/STHU/LHAU/
+            // STWU all had the identical unconditional-disp bug --
+            // fixed uniformly rather than patching just the one hit.
             case PPC_INS_LWZU: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
-                    << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base) : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << addr_expr << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_LBZU: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << reg(rD) << " = ppc_load_u8(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
-                    << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base) : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << reg(rD) << " = ppc_load_u8(ctx, " << addr_expr << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_STBU: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  ppc_store_u8(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", (uint8_t)"
-                    << reg(rD) << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base) : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  ppc_store_u8(ctx, " << addr_expr << ", (uint8_t)" << reg(rD) << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_LBZUX: {
@@ -1534,9 +1561,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_LHZU: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << reg(rD) << " = ppc_load_u16(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
-                    << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base) : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << reg(rD) << " = ppc_load_u16(ctx, " << addr_expr << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_LHAX: {
@@ -1644,9 +1672,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_STHU: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  ppc_store_u16(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", (uint16_t)"
-                    << reg(rD) << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base) : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  ppc_store_u16(ctx, " << addr_expr << ", (uint16_t)" << reg(rD) << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_LWBRX: {
@@ -1668,9 +1697,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_LHAU: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)ppc_load_u16(ctx, " << base_expr(m.base)
-                    << " + (int32_t)" << m.disp << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base) : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)ppc_load_u16(ctx, " << addr_expr << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_STHUX: {
