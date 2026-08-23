@@ -176,10 +176,46 @@ extern uint32_t g_arkchemy_base_heap_handle[3];
  * the real unused gap between ARKCHEMY_ERRNO_ADDR and ARKCHEMY_MEM1_BASE
  * above -- real observed allocations through this heap so far are tiny
  * (52 and 100 bytes), matching a genuine bootstrap-only heap, not a
- * general-purpose one. */
+ * general-purpose one.
+ *
+ * Real correction, 2026-08-24: "bootstrap-only" was wrong, and this
+ * heap turned out to be the single blocking issue behind a hang this
+ * project had been chasing since 2026-08-21. Traced on real hardware:
+ * Core::igMemoryContext::bootstrapInitialize drives THREE real
+ * consumers out of this one heap, not the tiny allocations assumed
+ * above --
+ *     pool id=0  (igHeapMemoryPool)   1048584 bytes
+ *     pool id=2  (igHeapMemoryPool)   5242888 bytes
+ *     id=3       (igStringPool)       2097160 bytes
+ *     real total                      8388632 bytes
+ * The chain reaching MEMAllocFromExpHeapEx is
+ * igMemoryPool::allocatePoolMemory -> reallocCommon -> a virtual
+ * dispatch into igCafeSystemMemoryPool::reallocInternal ->
+ * ::mallocInternal, using the heap handle at *(sourcePool+0x10) --
+ * confirmed by hardware's own MEMGetAllocatableSizeForExpHeapEx log to
+ * be this exact heap, not MEM1/MEM2. At 64KB every one of those
+ * requests failed, so no pool ever got a real buffer.
+ *
+ * Confirmed real consequence: with the string pool dead, execution
+ * spun permanently in Core::igStringPoolContainer::reserveMemory (real
+ * addr 0x21a4e4c) -- the exact spin ARKCHEMY_MEM1_SIZE's own comment
+ * below describes chasing on 2026-08-21, when MEM1 was doubled twice
+ * with no effect and the cause was correctly judged to be "upstream of
+ * MEM1 entirely". This heap is that upstream cause. With the sizing
+ * below, all three pools activate successfully on real hardware
+ * (both tlsf_create calls return real nonzero handles).
+ *
+ * Note this could NOT be fixed by a size bump alone: the real gap
+ * between the old base and ARKCHEMY_MEM1_BASE is 8323072 bytes,
+ * genuinely 65560 short of the 8388632 needed. Relocated into the real
+ * unreserved headroom this file's own layout comment already documents
+ * (0x9000000 - 0x10000000, clear of the guest stack region ending at
+ * 0x9000000) and sized 16MB -- comfortably past what is now actually
+ * measured, with room for further consumers, leaving 96MB of that
+ * headroom still untouched. */
 #define ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR 421248u
-#define ARKCHEMY_BOOTSTRAP_HEAP_BASE 0x810000u
-#define ARKCHEMY_BOOTSTRAP_HEAP_SIZE 0x10000u
+#define ARKCHEMY_BOOTSTRAP_HEAP_BASE 0x9000000u
+#define ARKCHEMY_BOOTSTRAP_HEAP_SIZE 0x1000000u
 /* Real, decisive diagnostic result as of 2026-08-21: MEM1 was doubled
  * twice (16MB -> 32MB -> 64MB) chasing the real boot-time sbrk/malloc
  * spin, and the real hardware log showed the fill ratio *climbing

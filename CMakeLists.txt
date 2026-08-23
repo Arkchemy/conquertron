@@ -32,3 +32,29 @@ add_executable(recomp
 )
 target_include_directories(recomp PRIVATE include "${CAPSTONE_INCLUDE_DIR}")
 target_link_libraries(recomp PRIVATE "${CAPSTONE_LIBRARY}" ZLIB::ZLIB)
+
+# Ground-truth verification tools. These answer "what does the REAL retail
+# binary actually contain at this address", by reusing this project's own
+# already-tested elf_loader/disassembler against a real dumped RPX -- no
+# emulator involved, so nothing to crash or misreport. Both were written
+# while root-causing real recompiler bugs (verify_vtable.cpp found the
+# ADDIC relocation-folding bug by comparing a computed vtable address
+# against the real .rodata; find_synth_addr.cpp reverses a synthetic
+# PpcContext::mem address observed live on hardware back to its real Wii U
+# vaddr, which is how the igCafeSystemMemoryPool vtable methods were
+# identified without another hardware round).
+#
+# They were previously buildable only by hand-typing a g++ command with the
+# right include/lib paths -- easy to get wrong, and easy to forget these
+# exist at all. Wired into the normal build so `cmake --build` produces
+# them alongside recomp itself.
+foreach(_tool verify_vtable find_synth_addr)
+    add_executable(${_tool}
+        src/${_tool}.cpp
+        src/elf_loader.cpp
+        src/disassembler.cpp
+        src/func_recovery.cpp
+    )
+    target_include_directories(${_tool} PRIVATE include "${CAPSTONE_INCLUDE_DIR}")
+    target_link_libraries(${_tool} PRIVATE "${CAPSTONE_LIBRARY}" ZLIB::ZLIB)
+endforeach()
