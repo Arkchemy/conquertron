@@ -895,11 +895,39 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_ADDIC: {
+                // Real recompiler bug, found 2026-08-24 via a real
+                // standalone tool cross-checking the actual, retail RPX's
+                // own .rodata against what this project's own runtime
+                // was reading for a real pool object's vtable pointer:
+                // GHS sometimes emits `lis`+`addic` (not `addi`) for an
+                // HA/LO address-computation pair -- same shape as the
+                // already-fixed LWZU-family bug (#2), just a different
+                // sibling instruction never given the same is_synthetic_
+                // addr_lo_reloc check PPC_INS_ADDI already has above.
+                // Unconditionally adding the immediate as literal data
+                // (the old behavior) silently computed a real, garbage-
+                // but-plausible-looking address for any lis+addic pair
+                // addressing a relocated symbol -- confirmed on this
+                // exact vtable reference: the correct address was the
+                // `lis` value alone (a real, populated igMemoryPool-
+                // family vtable sat right there in the real .rodata),
+                // and adding the addic's "immediate" on top landed 16860
+                // bytes into unrelated data (which happened to alias
+                // with three real igMetaField methods in the real
+                // binary, purely by coincidence of what data lives at
+                // that wrong offset).
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
-                out << "  " << reg(rD) << " = ppc_addic(ctx, " << reg(rA) << ", " << simm(ppc.operands[2]) << ");\n";
-                if (ppc.update_cr0) {
-                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                if (is_synthetic_addr_lo_reloc(img, insn.address)) {
+                    out << "  " << reg(rD) << " = " << reg(rA) << ";\n";
+                    if (ppc.update_cr0) {
+                        out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                    }
+                } else {
+                    out << "  " << reg(rD) << " = ppc_addic(ctx, " << reg(rA) << ", " << simm(ppc.operands[2]) << ");\n";
+                    if (ppc.update_cr0) {
+                        out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                    }
                 }
                 break;
             }
