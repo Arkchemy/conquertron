@@ -80,6 +80,30 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_last_caller_lr = 0;
 
+/* Bounded log of real indirect/virtual dispatch targets seen within a
+ * specific real call-count window, 2026-08-24 -- set at ppc_dispatch()'s
+ * own entry (a hand-inserted one-line edit in its generated_*.c
+ * definition, not a per-instruction watch, so no risk of the
+ * buffer/regen reliability issues this session's other hand-inserted
+ * watches ran into). Neither a plain overwriting "last dispatch" global
+ * nor an unconditional "first N ever" log works here: a plain global
+ * gets overwritten by millions of later unrelated steady-state
+ * dispatches before any checkpoint print sees it, and logging
+ * unconditionally from boot fills the whole cap with static-init-phase
+ * noise (confirmed on real hardware, 2026-08-24: all 64 slots used up
+ * long before reaching the real target calls around g_ppc_fn_call_count
+ * ~21100-21150) -- gating recording to ARKCHEMY_DISPATCH_LOG_WINDOW_LO/HI
+ * instead keeps only the window this session actually needs to inspect
+ * (initializePool's own two vtable-dispatched capacity-reservation
+ * calls, hit at call 21131 per w0) regardless of how long the run
+ * continues before or after it. Answers a specific question: does a
+ * particular vtable-dispatched call resolve to a real function (a value
+ * matching a real recompiled address) or 0/garbage (the vtable slot
+ * backing it was never populated). */
+#define ARKCHEMY_DISPATCH_LOG_WINDOW_LO 21100u
+
+
+
 /* Generic "dump r3-r6 the instant a specific real function is entered"
  * mechanism, added 2026-08-20 hunting a real hang inside
  * Core::igStringPool::remove: g_ppc_current_pc alone says *that* the
@@ -277,7 +301,43 @@ typedef struct PpcContext {
  * requires a power of two, so the whole space steps up to 256MB rather
  * than some tighter number -- see cafeos_coreinit_mem.h's own layout
  * comment for where that extra room actually goes. */
-#define PPC_MEM_SIZE (256u * 1024u * 1024u)
+/* Raised 256MB -> 512MB, 2026-08-24. Must stay a power of two: every
+ * accessor masks with (PPC_MEM_SIZE - 1).
+ *
+ * Measured reason, not a guess. With the default heap correctly routed
+ * to MEM2, Green Hills libc's sbrk() consumed the entire 96MB MEM2 pool
+ * during static initialisation alone (heap_used 100,582,552 of
+ * 100,663,296) and allocations began failing again. sbrk only ever
+ * grows, so the game's C heap needs real room. Real Wii U MEM2 is 2GB;
+ * the binding constraint here is this address space, not the pool
+ * layout inside it, so the space itself had to grow.
+ *
+ * 1GB again as of 2026-08-24 (late). This was tried and reverted once
+ * before, and the reasons it failed then no longer hold: malloc was
+ * broken at the time (successive sbrk allocations were not adjacent, so
+ * it never reused its heap and consumed whatever it was given), which
+ * is why extra memory bought nothing. With that contract fixed, malloc
+ * genuinely reuses memory, and the run that exposed this now reaches
+ * real engine work instead of a null-pool spin -- so headroom should
+ * now convert into progress rather than vanish. Being explicit that
+ * this is a deliberate retry of a previously-failed change under
+ * materially different conditions, not a forgotten lesson.
+ *
+ * Historical note on that first attempt: MEM2 at
+ * 928MB filled to 99.995% and produced 1,567 failures against 1,563 at
+ * 416MB. Doubling the pool moved only when the wall was hit (call
+ * 18,257 -> 38,727), not whether. sbrk consumes whatever it is given at
+ * every size from 32MB to 928MB, so this is unbounded growth and no
+ * amount of BSS fixes it -- see MEM2's note for where the real suspicion
+ * now sits.
+ *
+ * Cost: mem[] is a static array, so this is 512MB of BSS on top of
+ * ~158MB of .text. That is comfortable in application mode (the owner
+ * launches via a Sphaira forwarder from the HOME menu, so gigabytes are
+ * available) but would NOT fit applet mode's ~448MB budget -- a build
+ * launched from the Album applet will fail to allocate. Worth knowing
+ * before anyone tries that. */
+#define PPC_MEM_SIZE (1024u * 1024u * 1024u)
 
 typedef struct PpcSharedMemory {
     uint8_t mem[PPC_MEM_SIZE];

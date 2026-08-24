@@ -111,6 +111,13 @@ extern ArkchemyMemHeap g_arkchemy_mem_heaps[ARKCHEMY_MEM_MAX_HEAPS];
  * [2]=FG; 0 means "not yet lazily created". */
 extern uint32_t g_arkchemy_base_heap_handle[3];
 
+/* Bootstrap heap handle, kept host-side so it survives the game clearing
+ * its own .bss (see MEMAllocFromExpHeapEx's null-handle path). */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+uint32_t g_arkchemy_bootstrap_heap_handle = 0;
+
 /* Real layout, found necessary the hard way: these addresses used to sit
  * at 0x8000/0xB000/0x2000 -- fine as "well clear of both the 0x2000+
  * global range and the stack-top region" *only* for the tiny test
@@ -128,13 +135,30 @@ extern uint32_t g_arkchemy_base_heap_handle[3];
  *                          global range, plus safety margin) -- globals
  *   0x800000 - 0x802000  FG (foreground/overlay) arena -- tiny, rarely used
  *   0x802000             __gh_errno_ptr's real backing address
- *   0x1000000 - 0x3000000  MEM1 (32MB)
- *   0x3000000 - 0x7000000  MEM2 (64MB) -- real code's main/largest heap
- *   0x7000000 - 0x9000000  unreserved -- real guest stack space (see
- *                          switch/game/source/main.c's own r[1] init)
- *   0x9000000 - 0x10000000 unreserved headroom (real, spare, from the
- *                          256MB bump -- see ppc_runtime.h's own
- *                          PPC_MEM_SIZE comment)
+ *   0x1000000 - 0x3000000  MEM1 (32MB) -- matches real Wii U MEM1; no
+ *                          longer backs the default heap, see
+ *                          MEMAllocFromDefaultHeapEx below
+ *   0x3000000 - 0x4000000  bootstrap heap (16MB)
+ *   0x4000000 - 0x3E000000 MEM2 (928MB) -- the app default heap, and so
+ *                          the backing for the game's whole C heap via
+ *                          Green Hills libc sbrk(). Sized after 96MB was
+ *                          measured to run out during static init alone,
+ *                          then 320MB filled to 99.97%. Grown here by
+ *                          reclaiming the ~96MB of address space that
+ *                          sat unused between MEM1 and the old MEM2
+ *                          base, rather than by enlarging BSS again --
+ *                          failures were measured to plateau (3,099,
+ *                          flat for the last 116 checkpoints of a run),
+ *                          so this is a bounded shortfall, not a leak.
+ *   0x3E000000 - 0x40000000 guest stack (32MB), growing DOWN from
+ *                          PPC_MEM_SIZE-256. MEM2 deliberately stops
+ *                          short of this: sizing MEM2 to the top of the
+ *                          address space would put the stack inside the
+ *                          heap and corrupt it silently.
+ * Layout updated 2026-08-24; the three regions above that moved are the
+ * bootstrap heap and MEM2, both for reasons recorded at their own
+ * defines. Keep this map in step with those defines -- a stale copy of
+ * it is worse than none, since it is the first thing anyone reads.
  * MEM1 was widened 16MB -> 32MB on 2026-08-21: real hardware logs
  * showed the game's own boot-time MEMAllocFromExpHeapEx call spinning
  * forever on a 128KB request against this exact heap, which was
@@ -178,43 +202,78 @@ extern uint32_t g_arkchemy_base_heap_handle[3];
  * (52 and 100 bytes), matching a genuine bootstrap-only heap, not a
  * general-purpose one.
  *
- * Real correction, 2026-08-24: "bootstrap-only" was wrong, and this
- * heap turned out to be the single blocking issue behind a hang this
- * project had been chasing since 2026-08-21. Traced on real hardware:
- * Core::igMemoryContext::bootstrapInitialize drives THREE real
- * consumers out of this one heap, not the tiny allocations assumed
- * above --
- *     pool id=0  (igHeapMemoryPool)   1048584 bytes
- *     pool id=2  (igHeapMemoryPool)   5242888 bytes
- *     id=3       (igStringPool)       2097160 bytes
- *     real total                      8388632 bytes
- * The chain reaching MEMAllocFromExpHeapEx is
- * igMemoryPool::allocatePoolMemory -> reallocCommon -> a virtual
- * dispatch into igCafeSystemMemoryPool::reallocInternal ->
- * ::mallocInternal, using the heap handle at *(sourcePool+0x10) --
- * confirmed by hardware's own MEMGetAllocatableSizeForExpHeapEx log to
- * be this exact heap, not MEM1/MEM2. At 64KB every one of those
- * requests failed, so no pool ever got a real buffer.
+ * Real correction, 2026-08-24: "bootstrap-only" turned out to be wrong.
+ * Traced a real, confirmed hang (Core::igMemoryPool::allocatePoolMemory
+ * on the real pool at 0x810184 never getting its buffer backed, real
+ * args this=0x810184 sourcePool=0x810128 size=0x100000) all the way
+ * down through Core::igMemoryPool::reallocCommon -> a real virtual
+ * dispatch into Core::igCafeSystemMemoryPool::reallocInternal ->
+ * Core::igCafeSystemMemoryPool::mallocInternal -> a real
+ * MEMAllocFromExpHeapEx call requesting ~1MB against whatever heap
+ * handle lives at *(sourcePool+0x10). Real hardware's own
+ * MEMGetAllocatableSizeForExpHeapEx query log (called from
+ * igCafeSystemMemoryPool::activate itself, real addr 0x2156ccc)
+ * confirmed that handle really is heap_base=0x810000 -- this exact
+ * bootstrap heap, not MEM1/MEM2. So this comment's own earlier
+ * "confirmed... genuine bootstrap-only heap" claim was based on the
+ * *sizes* seen so far (52/100 bytes), not on tracing who else reads
+ * this same handle -- real engine code (confirmed: this same header's
+ * own note above already says this global is "read from many real
+ * places across early engine code") also uses it as the backing heap
+ * for at least one real igCafeSystemMemoryPool, which real Wii U
+ * hardware would never have sized this small. 64KB can never satisfy a
+ * real 1MB request no matter how little else uses this heap -- same
+ * category of fix as MEM1's own two earlier real widenings above
+ * (real logged shortfall, not speculative), just discovered on this
+ * heap instead. Widened with real headroom above the one confirmed
+ * 1MB need, same margin-over-minimum spirit as those MEM1 fixes;
+ * still well clear of ARKCHEMY_MEM1_BASE below.
  *
- * Confirmed real consequence: with the string pool dead, execution
- * spun permanently in Core::igStringPoolContainer::reserveMemory (real
- * addr 0x21a4e4c) -- the exact spin ARKCHEMY_MEM1_SIZE's own comment
- * below describes chasing on 2026-08-21, when MEM1 was doubled twice
- * with no effect and the cause was correctly judged to be "upstream of
- * MEM1 entirely". This heap is that upstream cause. With the sizing
- * below, all three pools activate successfully on real hardware
- * (both tlsf_create calls return real nonzero handles).
+ * Second real widening, 2026-08-24 (same day, later): 3MB was still not
+ * enough. With the first fix in place, real hardware got far enough to
+ * show `bootstrapInitialize` initialising *two* real pools out of this
+ * same heap, not one -- pool id=0 (`0x810184`) really does succeed now
+ * (real 1048584-byte carve-out, `tlsf_create` returned a real nonzero
+ * handle, confirmed on hardware), but pool id=2 (`0x9101f4`) then asks
+ * for 5242888 more and fails "out of space" with only ~2MB left. Both
+ * numbers are real, logged shortfalls, not estimates: 1048584 + 5242888
+ * = 6291472 bytes needed, against 3145728 provided. `igStringPool`'s own
+ * activation then mallocs repeatedly against whichever pool it was
+ * assigned, so a permanently-dead pool id=2 is a strong candidate for
+ * the real stall observed right after that point. Sized to 7.5MB, which
+ * covers both real requests with genuine headroom and still fits the
+ * real address-space gap between this heap's base and ARKCHEMY_MEM1_BASE
+ * below (0x1000000 - 0x810000 = 8323072 bytes available; 7864320 used,
+ * leaving ~448KB clear).
  *
- * Note this could NOT be fixed by a size bump alone: the real gap
- * between the old base and ARKCHEMY_MEM1_BASE is 8323072 bytes,
- * genuinely 65560 short of the 8388632 needed. Relocated into the real
- * unreserved headroom this file's own layout comment already documents
- * (0x9000000 - 0x10000000, clear of the guest stack region ending at
- * 0x9000000) and sized 16MB -- comfortably past what is now actually
- * measured, with room for further consumers, leaving 96MB of that
- * headroom still untouched. */
+ * Third real widening AND a relocation, 2026-08-24: 7.5MB got pools
+ * id=0 and id=2 both fully succeeding (real 1048584 and 5242888
+ * carve-outs, both `tlsf_create` calls returning real nonzero handles,
+ * confirmed on hardware) -- but then exposed a *third* real consumer
+ * this heap has to serve: `initializeStringPool` (id=3) asks for
+ * 2097160 more and failed "out of space" with ~1.5MB left. Real total
+ * across all three: 1048584 + 5242888 + 2097160 = 8388632 bytes. That
+ * no longer fits where this heap used to live -- the real gap between
+ * the old base and ARKCHEMY_MEM1_BASE is only 8323072, genuinely 65560
+ * bytes short, so this could not be fixed by another size bump alone.
+ *
+ * Confirmed real consequence of that shortfall, and why this matters:
+ * with the string pool dead, execution reached
+ * Core::igStringPoolContainer::reserveMemory (real addr 0x21a4e4c) and
+ * spun there permanently -- the exact same real spin this project
+ * chased back on 2026-08-21 (see ARKCHEMY_MEM1_SIZE's own comment
+ * below, which correctly concluded the cause was upstream of MEM1;
+ * this is that upstream cause, finally reached).
+ *
+ * Relocated into the real unreserved headroom this layout already
+ * documents above (0x9000000 - 0x10000000, 112MB genuinely spare, well
+ * clear of the guest stack region that ends at 0x9000000) rather than
+ * shuffling globals/FG/errno/MEM1/MEM2 around each other. Sized 16MB:
+ * comfortably past the 8388632 now actually measured, with real room
+ * for the further consumers this heap has revealed three separate
+ * times tonight, and still leaving 96MB of that headroom untouched. */
 #define ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR 421248u
-#define ARKCHEMY_BOOTSTRAP_HEAP_BASE 0x9000000u
+#define ARKCHEMY_BOOTSTRAP_HEAP_BASE 0x3000000u
 #define ARKCHEMY_BOOTSTRAP_HEAP_SIZE 0x1000000u
 /* Real, decisive diagnostic result as of 2026-08-21: MEM1 was doubled
  * twice (16MB -> 32MB -> 64MB) chasing the real boot-time sbrk/malloc
@@ -236,8 +295,30 @@ extern uint32_t g_arkchemy_base_heap_handle[3];
  * just not what was causing this specific hang). */
 #define ARKCHEMY_MEM1_BASE 0x1000000u
 #define ARKCHEMY_MEM1_SIZE 0x2000000u
-#define ARKCHEMY_MEM2_BASE 0x3000000u
-#define ARKCHEMY_MEM2_SIZE 0x4000000u
+/* MEM2 relocated and enlarged 2026-08-24. It used to be 64MB wedged
+ * between MEM1 and the guest stack, which left no room to grow. It is
+ * now the app's real default heap (see MEMAllocFromDefaultHeapEx below
+ * for why that changed), so it has to absorb the game's entire C heap,
+ * and the old 0x3000000-0x7000000 window could not be widened without
+ * moving the stack. Moved into the 96MB of headroom this file's own
+ * layout comment already documents as spare, immediately above the
+ * bootstrap heap (0xA000000-0x10000000). The old window is simply left
+ * unused. This is still far short of real Wii U MEM2 (2GB), but it is
+ * three times what the game just exhausted, and the whole guest address
+ * space is only 256MB. */
+#define ARKCHEMY_MEM2_BASE 0x4000000u
+#define ARKCHEMY_MEM2_SIZE 0x3A000000u
+/* MEM2 is split in two, and both halves must agree on where the line is
+ * or they will hand out the same memory twice. The low eighth is an
+ * ordinary ExpHeap (headers, free list, reusable); the rest is the
+ * strictly contiguous arena backing Green Hills libc's sbrk. Defined
+ * once here so the ExpHeap bound and the arena start cannot drift
+ * apart -- they were briefly inconsistent when the arena was added,
+ * with the ExpHeap created over the FULL pool and therefore able to
+ * bump straight into arena memory. */
+#define ARKCHEMY_MEM2_EXPHEAP_SIZE (ARKCHEMY_MEM2_SIZE / 8)
+#define ARKCHEMY_MEM2_ARENA_BASE   (ARKCHEMY_MEM2_BASE + ARKCHEMY_MEM2_EXPHEAP_SIZE)
+#define ARKCHEMY_MEM2_ARENA_END    (ARKCHEMY_MEM2_BASE + ARKCHEMY_MEM2_SIZE)
 
 static inline ArkchemyMemHeap *arkchemy_mem_heap_find(uint32_t handle) {
     int i;
@@ -287,6 +368,7 @@ static inline uint32_t arkchemy_mem_heap_create(uint32_t base, uint32_t size) {
  * into the real global every early allocator reads it from. */
 static inline void arkchemy_mem_bootstrap_heap_init(PpcContext *ctx) {
     uint32_t handle = arkchemy_mem_heap_create(ARKCHEMY_BOOTSTRAP_HEAP_BASE, ARKCHEMY_BOOTSTRAP_HEAP_SIZE);
+    g_arkchemy_bootstrap_heap_handle = handle;
     ppc_store_u32(ctx, ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR, handle);
 }
 
@@ -354,6 +436,48 @@ static inline void ppc_import_coreinit_MEMDestroyExpHeap(PpcContext *ctx) {
 
 static inline void ppc_import_coreinit_MEMAllocFromExpHeapEx(PpcContext *ctx) {
     /* void *MEMAllocFromExpHeapEx(MEMHeapHandle heap, uint32_t size, int alignment) */
+    /* Self-healing bootstrap heap, 2026-08-24. Real hardware traced a
+     * silent, total boot failure to this exact case: a heap handle of 0.
+     *
+     * The engine reads its bootstrap heap handle from a real global
+     * (.bss+306320). No recompiled function writes that global -- a
+     * static scan of all 217 generated files finds zero stores to it --
+     * because whatever real function creates that heap was never
+     * recovered, which is why the boot shim pre-writes it. But by the
+     * time igMemoryContext's constructor reads it, it is 0 again: the
+     * game clears its own .bss during entry, after our write and before
+     * the read, so the pre-write cannot survive on its own.
+     *
+     * The consequence was invisible and fatal. The constructor allocates
+     * 52 bytes from that null handle, gets NULL, and returns NULL.
+     * igArkCore::initBootstrap reaches userInstantiate only through a
+     * vtable dispatch built from that return value (r3 -> vtable ->
+     * vtable+0x34 -> bctrl), so a NULL reads a vtable from address 0 and
+     * jumps nowhere. userInstantiate never runs, the current memory
+     * context global stays 0, and every pool lookup afterwards
+     * degenerates -- 71 million calls with a null pool, no crash, no
+     * failed-allocation counter, nothing obviously wrong in a log.
+     *
+     * Rather than depend on write ordering that the game is free to
+     * undo, a zero handle is treated as "the bootstrap heap", created on
+     * demand. That is strictly better than the alternative: today a zero
+     * handle means guaranteed silent boot failure, so there is no
+     * legitimate behaviour being masked. It is logged so it stays
+     * visible, and it survives a regen, unlike a hand-patch. */
+    if (ctx->r[3] == 0) {
+        if (g_arkchemy_bootstrap_heap_handle == 0) {
+            g_arkchemy_bootstrap_heap_handle =
+                arkchemy_mem_heap_create(ARKCHEMY_BOOTSTRAP_HEAP_BASE, ARKCHEMY_BOOTSTRAP_HEAP_SIZE);
+        }
+        if (g_ppc_mem_alloc_fail_log) {
+            g_ppc_mem_alloc_fail_log("null heap handle -> bootstrap heap (self-heal)",
+                                     ctx->r[4], g_arkchemy_bootstrap_heap_handle, 0, 0);
+        }
+        ctx->r[3] = g_arkchemy_bootstrap_heap_handle;
+        /* Re-assert the global too, so the engine's own later reads see
+         * a live handle instead of repeating this every allocation. */
+        ppc_store_u32(ctx, ARKCHEMY_BOOTSTRAP_HEAP_HANDLE_ADDR, g_arkchemy_bootstrap_heap_handle);
+    }
     ArkchemyMemHeap *h = arkchemy_mem_heap_find(ctx->r[3]);
     uint32_t size = ctx->r[4];
     int32_t alignment = (int32_t)ctx->r[5];
@@ -509,7 +633,7 @@ static inline void ppc_import_coreinit_MEMGetBaseHeapHandle(PpcContext *ctx) {
     int idx = (type == 0) ? 0 : (type == 1) ? 1 : 2;
     if (g_arkchemy_base_heap_handle[idx] == 0) {
         uint32_t base = (idx == 0) ? ARKCHEMY_MEM1_BASE : (idx == 1) ? ARKCHEMY_MEM2_BASE : ARKCHEMY_FG_BASE;
-        uint32_t size = (idx == 0) ? ARKCHEMY_MEM1_SIZE : (idx == 1) ? ARKCHEMY_MEM2_SIZE : ARKCHEMY_FG_SIZE;
+        uint32_t size = (idx == 0) ? ARKCHEMY_MEM1_SIZE : (idx == 1) ? ARKCHEMY_MEM2_EXPHEAP_SIZE : ARKCHEMY_FG_SIZE;
         g_arkchemy_base_heap_handle[idx] = arkchemy_mem_heap_create(base, size);
         /* Rare (at most 3 real calls total, one per base heap type) --
          * see MEMCreateExpHeapEx's own comment on why this is safe to
@@ -534,15 +658,125 @@ static inline void ppc_import_coreinit_MEMGetBaseHeapHandle(PpcContext *ctx) {
  * coreinit/memdefaultheap.h. */
 static inline void ppc_import_coreinit_MEMAllocFromDefaultHeapEx(PpcContext *ctx) {
     /* void *MEMAllocFromDefaultHeapEx(uint32_t size, int alignment) */
+    /* Real bug found on hardware 2026-08-24: this routed to MEM1, and
+     * Green Hills libc's sbrk() grows the game's entire C heap through
+     * here. sbrk never gives memory back, so MEM1's 32MB filled
+     * monotonically (measured: 33,440,920 of 33,554,432 bytes used,
+     * 3,609 failed allocations, free=0 reuse=0) and every later
+     * allocation failed forever, leaving the engine spinning in
+     * reallocCommon/getMemoryPoolByIndex retries.
+     *
+     * MEM1 was the wrong pool. On real Wii U hardware MEM1 is the small
+     * 32MB fast pool and an application's default heap comes from MEM2,
+     * the large main-memory pool -- so a general-purpose C heap growing
+     * out of MEM1 does not match the real machine either. Routed to
+     * MEM2 (index 1), which is also now considerably larger. */
     uint32_t size = ctx->r[3];
     int32_t alignment = (int32_t)ctx->r[4];
-    if (g_arkchemy_base_heap_handle[0] == 0) {
-        g_arkchemy_base_heap_handle[0] = arkchemy_mem_heap_create(ARKCHEMY_MEM1_BASE, ARKCHEMY_MEM1_SIZE);
+    if (g_arkchemy_base_heap_handle[1] == 0) {
+        g_arkchemy_base_heap_handle[1] = arkchemy_mem_heap_create(ARKCHEMY_MEM2_BASE, ARKCHEMY_MEM2_EXPHEAP_SIZE);
     }
-    ctx->r[3] = g_arkchemy_base_heap_handle[0];
+    /* Dedicated, strictly contiguous arena for this path, 2026-08-24.
+     * Measured: every successive allocation here landed exactly 64 bytes
+     * past the previous block's end (addresses 0x4000040, 0x4020080,
+     * 0x40400c0, ... for 131072-byte requests), because the general
+     * ExpHeap path puts a private 4-byte size header before each block
+     * and then re-aligns. sbrk's contract is that successive calls
+     * return ADJACENT memory, and this is the allocator behind Green
+     * Hills libc's sbrk, so those gaps break the one assumption malloc
+     * makes about its heap.
+     *
+     * Serving this path from its own bump arena with no headers and no
+     * inter-block padding restores that contract exactly. Carved from
+     * the top of MEM2 so it cannot collide with ordinary ExpHeap use of
+     * the same pool.
+     *
+     * Honest caveat: real Cafe OS MEMAllocFromDefaultHeapEx also has
+     * block headers, so real hardware sees gaps here too and this may
+     * not be the whole story -- which is precisely why it is worth
+     * testing directly rather than reasoning about. Blocks from this
+     * arena carry no size header, so MEMGetSizeForMBlockExpHeap cannot
+     * describe them; that is safe only while nothing frees or queries
+     * them, which matches the observed behaviour (free=0, reuse=0 across
+     * every run). If that ever stops being true this needs revisiting. */
+    {
+        static uint32_t s_sbrk_next = 0;
+        static uint32_t s_sbrk_end  = 0;
+        if (s_sbrk_next == 0) {
+            /* Arena share raised from 1/2 to 7/8 of MEM2 on evidence,
+             * 2026-08-24: with contiguity restored, malloc started
+             * working properly -- ExpHeap failures went 1,563 -> 0 and
+             * static init advanced from being stuck in initializer #87
+             * all the way to #113 -- but this arena itself ran dry near
+             * the end of init (25 exhaustions from a 208MB half-share).
+             * The ordinary ExpHeap side of MEM2 is barely used (the
+             * engine's own pools live in the bootstrap heap), so the
+             * split was the wrong way round. */
+            s_sbrk_next = ARKCHEMY_MEM2_ARENA_BASE;
+            s_sbrk_end  = ARKCHEMY_MEM2_ARENA_END;
+        }
+        if (s_sbrk_next + size <= s_sbrk_end) {
+            uint32_t got = s_sbrk_next;
+            s_sbrk_next += size;              /* exactly contiguous: no header, no padding */
+            ctx->r[3] = got;
+            return;
+        }
+        /* Arena exhausted: FALL THROUGH to the general ExpHeap path
+         * rather than failing. Returning NULL here was a real regression
+         * introduced with this arena on 2026-08-24 and caught the same
+         * day: sbrk demand is unbounded, so the arena always fills
+         * eventually, and with no free list and no fallback every later
+         * allocation failed forever -- including a 24-byte request, while
+         * 52MB of ordinary ExpHeap in this same pool sat untouched.
+         *
+         * The concrete damage: igArkCore::initBootstrap runs at call
+         * ~18,340, just after the arena ran dry at ~18,337. Its
+         * igMemoryContext constructor could not allocate, returned NULL,
+         * and initBootstrap reaches userInstantiate only through a vtable
+         * dispatch built from that return value (r3 -> vtable ->
+         * vtable+0x34 -> bctrl). A NULL there reads a vtable from address
+         * 0 and jumps nowhere, so userInstantiate never ran, the current
+         * memory context global stayed 0, and every later pool lookup
+         * degenerated -- 71,343,306 getMemoryPoolByIndex calls with
+         * context=0x0. No crash, no allocation-failure counter, nothing
+         * obviously wrong in the log.
+         *
+         * Contiguity only matters while malloc is growing its main heap,
+         * which is exactly the window the arena covers. Once it is spent,
+         * ordinary header-bearing blocks are strictly better than
+         * failure. */
+        if (g_ppc_mem_alloc_fail_log) {
+            g_ppc_mem_alloc_fail_log("DEFHEAP arena spent, falling back to ExpHeap", size, s_sbrk_next, s_sbrk_end, 0);
+        }
+    }
+    ctx->r[3] = g_arkchemy_base_heap_handle[1];
     ctx->r[4] = size;
     ctx->r[5] = (uint32_t)alignment;
-    ppc_import_coreinit_MEMAllocFromExpHeapEx(ctx);
+    {
+        /* Contiguity check, 2026-08-24. sbrk()'s contract is that
+         * successive calls return ADJACENT memory -- malloc relies on
+         * that to treat the heap as one growing segment. This shim
+         * returns ordinary ExpHeap blocks, each preceded by a private
+         * 4-byte size header and then aligned, so successive returns are
+         * NOT adjacent (observed: heap_used advancing 131,136 per
+         * 131,072-byte request, a 64-byte gap). If malloc cannot see its
+         * heap as contiguous it may keep growing it forever, which is
+         * exactly the unbounded sbrk growth being chased. Logging the
+         * gap makes that provable rather than suspected. */
+        /* The per-allocation contiguity log that lived here is removed
+         * (2026-08-24). It did its job -- it proved successive sbrk-path
+         * allocations were separated by a 64-byte header+alignment gap,
+         * which is what led to the arena above -- but it keyed the log
+         * throttle on the returned address, so every call created a new
+         * budget entry. With only 12 budget slots, later allocations all
+         * collapsed onto one and burned its 40-event allowance, which
+         * silently suppressed unrelated diagnostics fired later in boot
+         * (the igMemoryContext constructor trace at call ~36,700 never
+         * appeared because of this). A diagnostic that hides other
+         * diagnostics is worse than none. */
+        ppc_import_coreinit_MEMAllocFromExpHeapEx(ctx);
+        return;
+    }
 }
 
 static inline void ppc_import_coreinit_MEMAllocFromDefaultHeap(PpcContext *ctx) {

@@ -61,6 +61,20 @@ DIR *g_ppc_fs_dirs[ARKCHEMY_FS_MAX_DIR_HANDLES];
 int g_ppc_im_dim_enabled = 1; /* real hardware default is dimming enabled */
 
 #ifdef __SWITCH__
+/* Real bug found 2026-08-24: these still pointed at "switch/Arkchemy",
+ * the pre-rename directory. The shipped .nro is Jouster and its SD
+ * folder is /switch/Jouster, which on the owner's card is fully
+ * populated with the game's real extracted content (movies/, character/,
+ * level/, item/, ...). So every asset lookup resolved to a directory
+ * that does not exist and cleanly "failed to find" the file -- which is
+ * exactly why the Bink test has reported
+ *   BinkOpen("movies/bash.mov") returned NULL
+ * on every single run, and why nothing else has ever loaded either. Not
+ * a decoder or filesystem fault at all, just a stale path left behind by
+ * the Arkchemy -> Arkchemy/Jouster rename.
+ *
+ * Kept as a variable rather than a literal at the use site so a future
+ * build can point it elsewhere without another rebuild of the shims. */
 char g_arkchemy_fs_content_root[256] = "sdmc:/switch/Jouster/content";
 char g_arkchemy_fs_save_root[256] = "sdmc:/switch/Jouster/save";
 #else
