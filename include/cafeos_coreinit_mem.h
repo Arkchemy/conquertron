@@ -320,6 +320,14 @@ uint32_t g_arkchemy_bootstrap_heap_handle = 0;
 #define ARKCHEMY_MEM2_ARENA_BASE   (ARKCHEMY_MEM2_BASE + ARKCHEMY_MEM2_EXPHEAP_SIZE)
 #define ARKCHEMY_MEM2_ARENA_END    (ARKCHEMY_MEM2_BASE + ARKCHEMY_MEM2_SIZE)
 
+/* Real PPC entry address of Green Hills libc's sbrk() in this title.
+ * Used to route only genuine heap-growth calls to the contiguous arena;
+ * see MEMAllocFromDefaultHeapEx. Title-specific by nature -- if this
+ * ever targets a different binary it must be re-derived, and a wrong
+ * value degrades safely (everything simply takes the ordinary
+ * header-bearing ExpHeap path). */
+#define ARKCHEMY_PPC_SBRK_ADDR 0x2583420u
+
 static inline ArkchemyMemHeap *arkchemy_mem_heap_find(uint32_t handle) {
     int i;
     for (i = 0; i < ARKCHEMY_MEM_MAX_HEAPS; i++) {
@@ -699,7 +707,30 @@ static inline void ppc_import_coreinit_MEMAllocFromDefaultHeapEx(PpcContext *ctx
      * describe them; that is safe only while nothing frees or queries
      * them, which matches the observed behaviour (free=0, reuse=0 across
      * every run). If that ever stops being true this needs revisiting. */
-    {
+    /* Serve the contiguous arena ONLY to real sbrk() calls.
+     *
+     * Real bug this fixes, reported by the engine itself on 2026-08-24:
+     *   "Memory pool (index %d) failed integrity check."
+     * Arena blocks deliberately carry no size header, which is what
+     * makes successive sbrk returns adjacent -- but it also means
+     * MEMGetSizeForMBlockExpHeap cannot describe them. The risk was
+     * written down when the arena was added ("safe only while nothing
+     * frees or queries them"), and a pool integrity check queries block
+     * sizes, so that condition broke exactly as anticipated.
+     *
+     * MEMAllocFromDefaultHeapEx is not sbrk-only: hardware shows real
+     * callers besides ppc_sbrk reaching it (0x217bc3c, 0x216c434,
+     * 0x215c4cc, 0x214a1d8). Those want ordinary, describable blocks;
+     * only sbrk needs adjacency, and malloc manages its own headers
+     * inside the region it gets. Gating on the caller gives each what it
+     * needs instead of trading one bug for the other -- reverting the
+     * arena is not an option, since it is what let malloc reuse its heap
+     * at all (allocation failures 1,563 -> 0, static init completing).
+     *
+     * g_ppc_current_pc is the last recompiled function entered, and this
+     * shim is not itself recompiled, so inside this call it still names
+     * the caller. */
+    if (g_ppc_current_pc == ARKCHEMY_PPC_SBRK_ADDR) {
         static uint32_t s_sbrk_next = 0;
         static uint32_t s_sbrk_end  = 0;
         if (s_sbrk_next == 0) {
