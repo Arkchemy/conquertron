@@ -337,7 +337,16 @@ typedef struct PpcContext {
  * available) but would NOT fit applet mode's ~448MB budget -- a build
  * launched from the Album applet will fail to allocate. Worth knowing
  * before anyone tries that. */
+/* Overridable at compile time (-DPPC_MEM_SIZE=...) because not every
+ * consumer of this header wants the full-game arena. jouster's native/
+ * on-hardware test suite links nine small recompiled test programs into
+ * one .nro, each with its own PpcSharedMemory for isolation -- at 1GB
+ * apiece that is 9GB of BSS in a homebrew app, which simply will not
+ * load. It builds with 4MB instead. Must stay a power of two: every
+ * accessor below masks with (PPC_MEM_SIZE - 1). */
+#ifndef PPC_MEM_SIZE
 #define PPC_MEM_SIZE (1024u * 1024u * 1024u)
+#endif
 
 typedef struct PpcSharedMemory {
     uint8_t mem[PPC_MEM_SIZE];
