@@ -358,9 +358,44 @@ typedef struct PpcSharedMemory {
     uint8_t mem[PPC_MEM_SIZE];
 } PpcSharedMemory;
 
+/* Load-side watches, added 2026-08-28 -- the mirror of
+ * g_ppc_watch_store_addr above, which had no counterpart. A store-watch
+ * can prove a location is never written; only a load-watch can tell
+ * "nothing ever consumed this" apart from "something consumed it and
+ * did the wrong thing with it", and that is exactly the distinction
+ * between an engine-ordering bug and a dispatch bug in the recompiler.
+ *
+ * Two addresses for the same reason the store side has two: a run
+ * should carry its own positive control, so a zero means something. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_watch_load_addr = 0xFFFFFFFFu;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_watch_load_addr2 = 0xFFFFFFFFu;
+
+/* ppc_load_u32 sits above the declaration that serves the store side, so
+ * it needs its own. Repeating a declaration is legal C. */
+static inline void ppc_debug_watch(uint32_t pc, uint32_t value);
+
 static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {
     const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+    uint32_t val = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+    /* Two compares on the hottest path in the whole runtime. Measurable
+     * in principle; irrelevant against a 120-second diagnostic run, and
+     * both are against a volatile that stays at its never-matching
+     * sentinel in any build that has not armed them. */
+    if (addr == g_ppc_watch_load_addr) {
+        ppc_debug_watch(0xf0000009u, val);
+        ppc_debug_watch(0xf000000au, g_ppc_current_pc);
+    }
+    if (addr == g_ppc_watch_load_addr2) {
+        ppc_debug_watch(0xf000000bu, val);
+        ppc_debug_watch(0xf000000cu, g_ppc_current_pc);
+    }
+    return val;
 }
 
 /* Real, general-purpose "watch every store to one specific real address"
