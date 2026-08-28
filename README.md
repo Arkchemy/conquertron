@@ -71,5 +71,5 @@ See [`LICENSE`](LICENSE) — Arkchemy Free & Source-Available License v2.0. It i
 so please read it before reusing anything here. Contact details and the
 project Discord are in [`llms.txt`](llms.txt).
 
-Contributors are listed in [`CONTRIBUTORS.csv`](CONTRIBUTORS.csv); the codename
+Contributors are listed in [`CONTRIBUTORS.csv`](https://github.com/Arkchemy/woodburrow/blob/main/CONTRIBUTORS.csv); the codename
 scheme is explained in [`CODENAMES.md`](CODENAMES.md).
