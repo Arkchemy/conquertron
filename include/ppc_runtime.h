@@ -126,7 +126,13 @@ volatile uint32_t g_ppc_last_caller_lr = 0;
  * constructor) actually run before `Core::igStringPool::getDefault`
  * (the real accessor) is ever called, and what does getDefault() end
  * up returning each time. */
-#define ARKCHEMY_WATCH_SLOTS 4
+/* Raised from 4 to 8 on 2026-08-28. Four slots meant every new question
+ * had to evict one of the existing watches, and two of those (w0 and w2)
+ * are what recover the engine's own error text -- losing them makes each
+ * subsequent run less informative than the last. The cost is four more
+ * comparisons at each recompiled function entry, against ~78k calls per
+ * run. */
+#define ARKCHEMY_WATCH_SLOTS 8
 typedef struct {
     volatile uint32_t pc;         /* 0xFFFFFFFF = unused/never matches */
     volatile uint32_t r3, r4, r5, r6;
