@@ -3,6 +3,8 @@
 
 #include <dirent.h>
 #include <stdio.h>
+#include <strings.h>
+#include <unistd.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -101,6 +103,77 @@ extern char g_arkchemy_fs_save_root[256]; /* real definition in cafeos_state.c -
  * before the game's own code ever runs. `out` must be at least
  * `out_size` bytes; truncates rather than overflowing if a real path
  * turns out to be pathological. */
+/* Case-insensitive component lookup, used only when an exact path misses.
+ *
+ * The Wii U tolerated case differences between what the game asks for and
+ * what is on the disc; the SD card the Switch build reads is not guaranteed
+ * to. This is not hypothetical for this title -- comparing the boot order
+ * Cemu logged against the files actually present shows two mismatches in the
+ * first handful of loads:
+ *
+ *     game asks for                on the card
+ *     character/init_setup.bld     character/Init_Setup.bld
+ *     level/title.arc              level/Title.arc
+ *
+ * Both are reached before anything renders. A miss here would surface as an
+ * ordinary "file not found" and read exactly like a bug in the loader, which
+ * is a bad way to lose a day.
+ *
+ * Returns 1 and writes the real spelling into `out` if a match exists. */
+static inline int ppc_fs_lookup_ci(const char *dir, const char *name,
+                                   char *out, size_t out_size) {
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    if (!d) return 0;
+    while ((e = readdir(d)) != NULL) {
+        if (strcasecmp(e->d_name, name) == 0) {
+            snprintf(out, out_size, "%s", e->d_name);
+            closedir(d);
+            return 1;
+        }
+    }
+    closedir(d);
+    return 0;
+}
+
+/* Rebuilds `root`/`rest` one component at a time, correcting the case of any
+ * component that does not exist as spelled. Only called after the exact path
+ * has already missed, so the common case costs nothing. A component that has
+ * no case-insensitive match either is left as-is, so a genuinely absent file
+ * still cleanly reports NOT_FOUND (-6) -- which the engine relies on: it
+ * probes for a .arc, expects -6, and falls back to the .bld. */
+static inline void ppc_fs_resolve_case(const char *root, const char *rest,
+                                       char *out, size_t out_size) {
+    char cur[512];
+    char comp[256];
+    char joined[768];
+    char fixed[256];
+    const char *p = rest;
+
+    snprintf(cur, sizeof(cur), "%s", root);
+    while (*p) {
+        const char *slash = strchr(p, '/');
+        size_t len = slash ? (size_t)(slash - p) : strlen(p);
+        if (len == 0 || len >= sizeof(comp)) {
+            snprintf(out, out_size, "%s/%s", root, rest);
+            return;
+        }
+        memcpy(comp, p, len);
+        comp[len] = '\0';
+
+        snprintf(joined, sizeof(joined), "%s/%s", cur, comp);
+        if (access(joined, F_OK) != 0 &&
+            ppc_fs_lookup_ci(cur, comp, fixed, sizeof(fixed))) {
+            snprintf(joined, sizeof(joined), "%s/%s", cur, fixed);
+        }
+        snprintf(cur, sizeof(cur), "%s", joined);
+
+        p = slash ? slash + 1 : p + len;
+        while (*p == '/') p++;
+    }
+    snprintf(out, out_size, "%s", cur);
+}
+
 static inline void ppc_fs_translate_path(const char *guest_path, char *out, size_t out_size) {
     const char *root = g_arkchemy_fs_content_root;
     const char *rest = guest_path;
@@ -128,6 +201,11 @@ static inline void ppc_fs_translate_path(const char *guest_path, char *out, size
         snprintf(out, out_size, "%s", root);
     } else {
         snprintf(out, out_size, "%s/%s", root, rest);
+        /* Exact spelling first -- it is what the disc used and what almost
+         * every path will be. Only pay for a directory scan on a miss. */
+        if (access(out, F_OK) != 0) {
+            ppc_fs_resolve_case(root, rest, out, out_size);
+        }
     }
 }
 
