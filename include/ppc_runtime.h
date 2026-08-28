@@ -377,12 +377,35 @@ static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {
 __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_watch_store_addr = 0xFFFFFFFFu;
+
+/* A second, independent store-watch address, added 2026-08-28.
+ *
+ * One watch can prove a store happened. It cannot prove the absence of
+ * one, because "no hits" and "the instrument is not wired up" look
+ * identical in the log -- and this project has already lost a run to
+ * exactly that: the watch was armed with no matching slot in the
+ * harness's sink, so every event was silently dropped and the result
+ * read as "nothing writes it".
+ *
+ * With two, a run can carry its own positive control: arm this one on an
+ * address known to be written (any literal store in init_globals will
+ * do) and the suspect on the other. If the control fires and the suspect
+ * does not, the negative result is a measurement rather than an
+ * assumption. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_watch_store_addr2 = 0xFFFFFFFFu;
 static inline void ppc_debug_watch(uint32_t pc, uint32_t value); /* real definition below */
 
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
     if (addr == g_ppc_watch_store_addr) {
         ppc_debug_watch(0xf0000001u, val);              /* the value being written */
         ppc_debug_watch(0xf0000002u, g_ppc_current_pc);  /* which real function is doing it */
+    }
+    if (addr == g_ppc_watch_store_addr2) {
+        ppc_debug_watch(0xf0000005u, val);
+        ppc_debug_watch(0xf0000006u, g_ppc_current_pc);
     }
     uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     p[0] = (uint8_t)(val >> 24);
@@ -408,6 +431,10 @@ static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
     if (addr >= g_ppc_watch_store_addr && addr < g_ppc_watch_store_addr + 4) {
         ppc_debug_watch(0xf0000003u, ((addr - g_ppc_watch_store_addr) << 8) | val);
         ppc_debug_watch(0xf0000004u, g_ppc_current_pc);
+    }
+    if (addr >= g_ppc_watch_store_addr2 && addr < g_ppc_watch_store_addr2 + 4) {
+        ppc_debug_watch(0xf0000007u, ((addr - g_ppc_watch_store_addr2) << 8) | val);
+        ppc_debug_watch(0xf0000008u, g_ppc_current_pc);
     }
     ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)] = val;
 }
