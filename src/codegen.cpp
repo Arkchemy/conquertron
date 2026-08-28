@@ -657,12 +657,30 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int32_t sh = simm(ppc.operands[2]);
                 out << "  " << reg(rD) << " = (uint32_t)((int32_t)" << reg(rA) << " >> " << sh << ");\n";
+                // Record form (Rc bit): the `.` suffix means this also
+                // compares the result against zero into CR0. Omitting it
+                // left every `srawi.` in the game testing a *stale* flag from
+                // some earlier instruction -- which is exactly how
+                // igStringBuf's `extsb.` terminator check became an
+                // infinite loop during boot (2026-08-28).
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_EXTSB: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
                 out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int8_t)" << reg(rA) << ";\n";
+                // Record form (Rc bit): the `.` suffix means this also
+                // compares the result against zero into CR0. Omitting it
+                // left every `extsb.` in the game testing a *stale* flag from
+                // some earlier instruction -- which is exactly how
+                // igStringBuf's `extsb.` terminator check became an
+                // infinite loop during boot (2026-08-28).
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_RLWINM: {
@@ -696,6 +714,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 std::string rotated = sh == 0 ? reg(rA) : ("ppc_rotl32(" + reg(rA) + ", " + std::to_string(sh) + ")");
                 out << "  " << reg(rD) << " = (" << rotated << " & " << mask << "u) | (" << reg(rD) << " & "
                     << (~mask) << "u);\n";
+                // Record form (Rc bit): the `.` suffix means this also
+                // compares the result against zero into CR0. Omitting it
+                // left every `rlwimi.` in the game testing a *stale* flag from
+                // some earlier instruction -- which is exactly how
+                // igStringBuf's `extsb.` terminator check became an
+                // infinite loop during boot (2026-08-28).
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_CLRLWI: {
@@ -704,6 +731,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int32_t n = simm(ppc.operands[2]);
                 uint32_t mask = ppc_mask(n, 31);
                 out << "  " << reg(rD) << " = " << reg(rA) << " & " << mask << "u;\n";
+                // Record form (Rc bit): the `.` suffix means this also
+                // compares the result against zero into CR0. Omitting it
+                // left every `clrlwi.` in the game testing a *stale* flag from
+                // some earlier instruction -- which is exactly how
+                // igStringBuf's `extsb.` terminator check became an
+                // infinite loop during boot (2026-08-28).
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_ROTLWI: {
@@ -717,6 +753,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
                 out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)" << reg(rA) << ";\n";
+                // Record form (Rc bit): the `.` suffix means this also
+                // compares the result against zero into CR0. Omitting it
+                // left every `extsh.` in the game testing a *stale* flag from
+                // some earlier instruction -- which is exactly how
+                // igStringBuf's `extsb.` terminator check became an
+                // infinite loop during boot (2026-08-28).
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_SUBF: {
@@ -892,6 +937,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ppc_adde(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
+                // Record form (Rc bit) -- see PPC_INS_EXTSB.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_ADDIC: {
@@ -935,6 +984,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
                 out << "  " << reg(rD) << " = ppc_addze(ctx, " << reg(rA) << ");\n";
+                // Record form (Rc bit): the `.` suffix means this also
+                // compares the result against zero into CR0. Omitting it
+                // left every `addze.` in the game testing a *stale* flag from
+                // some earlier instruction -- which is exactly how
+                // igStringBuf's `extsb.` terminator check became an
+                // infinite loop during boot (2026-08-28).
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_SUBFZE: {
@@ -1527,6 +1585,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rD) << " = ppc_subfe(ctx, " << reg(rA) << ", " << reg(rB) << ");\n";
+                // Record form (Rc bit): the `.` suffix means this also
+                // compares the result against zero into CR0. Omitting it
+                // left every `subfe.` in the game testing a *stale* flag from
+                // some earlier instruction -- which is exactly how
+                // igStringBuf's `extsb.` terminator check became an
+                // infinite loop during boot (2026-08-28).
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_XORI: {
@@ -1751,6 +1818,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
                 out << "  " << reg(rD) << " = ppc_addme(ctx, " << reg(rA) << ");\n";
+                // Record form (Rc bit) -- see PPC_INS_EXTSB.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_ROTLW: {
@@ -1772,6 +1843,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 uint32_t mask = ppc_mask(mb, me);
                 out << "  " << reg(rD) << " = ppc_rotl32(" << reg(rA) << ", " << reg(rB) << ") & " << mask
                     << "u;\n";
+                // Record form (Rc bit) -- see PPC_INS_EXTSB.
+                if (ppc.update_cr0) {
+                    out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
+                }
                 break;
             }
             case PPC_INS_STFDX: {
