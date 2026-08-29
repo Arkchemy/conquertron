@@ -526,7 +526,29 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_zero_write_val = 0;
 
-static inline void ppc_note_null_write(uint32_t addr, uint32_t val) {
+/* Returns non-zero if the caller should DROP this store.
+ *
+ * A store into the first 16 bytes is a null-pointer dereference. On real
+ * hardware it faults and the program stops at the bug. Here the mask makes it
+ * a legal write, so it silently corrupts low memory and the failure surfaces
+ * somewhere unrelated, much later, usually as a hang.
+ *
+ * Dropping such a store is not "correct" -- nothing is correct once a null
+ * pointer is being written through -- but it is strictly closer to the
+ * hardware behaviour than corrupting memory is, and it stops one bug becoming
+ * three. The Skylanders boot is the worked example: igStringMetaField's
+ * registration calls decrementRefCount on a null object, writing 0xFFFFFFFF
+ * to address 4; later a formatted "(null)/" lands at address 0; later still
+ * tlsf_free reads address 0 as a block header, takes the ASCII as a 1.8 GiB
+ * block size, and poisons the allocator's size-class bitmap so every
+ * subsequent search spins forever. Only the first of those is a real bug.
+ *
+ * The count is still recorded, so suppression never hides the diagnosis.
+ * Compile with -DARKCHEMY_DROP_NULL_WRITES=0 to let the stores through. */
+#ifndef ARKCHEMY_DROP_NULL_WRITES
+#define ARKCHEMY_DROP_NULL_WRITES 1
+#endif
+static inline int ppc_note_null_write(uint32_t addr, uint32_t val) {
 #if ARKCHEMY_TRAP_NULL_WRITES
     if (addr < ARKCHEMY_NULL_WRITE_LIMIT) {
         if (g_ppc_null_write_count == 0u) {
@@ -546,11 +568,15 @@ static inline void ppc_note_null_write(uint32_t addr, uint32_t val) {
                 g_ppc_zero_write_val  = val;
             }
             g_ppc_zero_write_count++;
+#if ARKCHEMY_DROP_NULL_WRITES
+            return 1;   /* caller drops the store */
+#endif
         }
     }
 #else
     (void)addr; (void)val;
 #endif
+    return 0;
 }
 
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
@@ -562,7 +588,7 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
         ppc_debug_watch(0xf0000005u, val);
         ppc_debug_watch(0xf0000006u, g_ppc_current_pc);
     }
-    ppc_note_null_write(addr, val);
+    if (ppc_note_null_write(addr, val)) return;
     uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     p[0] = (uint8_t)(val >> 24);
     p[1] = (uint8_t)(val >> 16);
@@ -592,7 +618,7 @@ static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
         ppc_debug_watch(0xf0000007u, ((addr - g_ppc_watch_store_addr2) << 8) | val);
         ppc_debug_watch(0xf0000008u, g_ppc_current_pc);
     }
-    ppc_note_null_write(addr, val);
+    if (ppc_note_null_write(addr, val)) return;
     ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)] = val;
 }
 
