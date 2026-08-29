@@ -526,6 +526,22 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_zero_write_val = 0;
 
+/* Indirect calls ppc_dispatch could not resolve. The generated switch has a
+ * default case that records these; without it an unknown address falls
+ * through and the call silently does nothing. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_dispatch_miss_count = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_dispatch_miss_addr = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_dispatch_miss_pc = 0;
+
 /* Returns non-zero if the caller should DROP this store.
  *
  * A store into the first 16 bytes is a null-pointer dereference. On real

@@ -310,6 +310,22 @@ int main(int argc, char **argv) {
             out << "    case " << entry.second.fake_addr << "u: ppc_import_" << entry.second.target.library << "_"
                 << entry.second.target.function << "(ctx); return;\n";
         }
+        // Default case. Without one the switch simply falls through and an
+        // indirect call to an address this table does not contain does
+        // NOTHING -- no crash, no log, no unhandled instruction. That is the
+        // same silent-no-op that made every computed jump table in the
+        // Skylanders binary do nothing until it was found, and it is far too
+        // quiet a failure to leave unreported: on 2026-08-29 it was the
+        // leading suspect for why five storage classes never registered, and
+        // there was no way to tell without adding this.
+        out << "    default: {\n";
+        out << "      if (g_ppc_dispatch_miss_count == 0u) {\n";
+        out << "        g_ppc_dispatch_miss_addr = addr;\n";
+        out << "        g_ppc_dispatch_miss_pc   = g_ppc_current_pc;\n";
+        out << "      }\n";
+        out << "      g_ppc_dispatch_miss_count++;\n";
+        out << "      return;\n";
+        out << "    }\n";
         out << "  }\n";
         out << "}\n\n";
     }
