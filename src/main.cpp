@@ -369,6 +369,15 @@ int main(int argc, char **argv) {
         // _savegpr_14_l for 277,472 misses, and _main for a low-memory write
         // before that. lr survives into the callee and names the real site.
         out << "        g_ppc_dispatch_miss_lr   = g_ppc_last_caller_lr;\n";
+        // r3 as well. A bctrl through a vtable slot is a virtual call, so r3
+        // is `this` and its first word is the object's vtable -- which is what
+        // identifies the type behind an empty slot. Neither pc nor lr can do
+        // that: g_ppc_current_pc names the innermost function ENTERED and goes
+        // stale as soon as a leaf returns (it reported igMetaField::construct,
+        // whose entire body is blr, and _savegpr_14_l before that), and lr
+        // names the return address of whatever was called last.
+        out << "        g_ppc_dispatch_miss_r3   = ctx->r[3];\n";
+        out << "        g_ppc_dispatch_miss_vt   = ctx->r[3] ? ppc_load_u32(ctx, ctx->r[3]) : 0u;\n";
         out << "      }\n";
         out << "      g_ppc_dispatch_miss_count++;\n";
         out << "      return;\n";
