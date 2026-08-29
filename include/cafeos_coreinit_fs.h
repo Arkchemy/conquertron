@@ -382,8 +382,24 @@ static inline void ppc_import_coreinit_FSCloseFile(PpcContext *ctx) {
  * Real return value is the number of *elements* (not bytes) read on
  * success, matching fread()'s own return convention -- confirmed against
  * real FS API documentation describing FSReadFile as fread()-shaped. */
+/* Read accounting. FSOpenFile has always logged; reads never did, so a run
+ * could show a file being opened and nothing at all about whether data ever
+ * came out of it. That gap mattered on 2026-08-29: BinkDoFrame returned
+ * success with completely untouched output planes, and "did the decoder get
+ * any compressed data" was unanswerable from the log. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_read_calls = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_read_bytes = 0;
+
 static inline void ppc_import_coreinit_FSReadFile(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(ctx->r[8]);
+    g_arkchemy_fs_read_calls++;
+    g_arkchemy_fs_read_bytes += ctx->r[6];
     if (!f) {
         ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
