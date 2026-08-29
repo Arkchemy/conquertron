@@ -1700,10 +1700,42 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // Only the tail-call case is modeled: ppc_dispatch
                 // resolves the target as if it were a whole other
                 // recompiled function, then this function returns. An
-                // intra-function jump-table use (branching to a label
-                // within *this* function rather than another function's
-                // entry point) isn't representable this way -- a known
-                // gap, not yet seen needing it.
+                // intra-function jump-table use branches to a label within
+                // *this* function rather than another function's entry point,
+                // and ppc_dispatch cannot express that -- it only knows
+                // function entries, so such a jump silently does nothing.
+                //
+                // That gap was recorded as "not yet seen needing it" and then
+                // measured needing it: __gh_vsprintf's conversion switch is
+                // exactly this shape, and on hardware it dispatched to
+                // 0x257d200 -- a `b` inside its own jump table -- 110,979
+                // times in a two-minute run, doing nothing each time.
+                //
+                // The table is the contiguous run of unconditional branches
+                // immediately after the bctr. Entry at address A holds `b X`,
+                // so ctr == A means goto X, and X already has a label because
+                // it is a branch target. ppc_dispatch stays as the fallback,
+                // so a genuine tail call through CTR is unaffected: this only
+                // ADDS cases.
+                {
+                    std::vector<std::pair<uint32_t, uint32_t>> table;
+                    for (size_t k = i + 1; k < insns.size(); k++) {
+                        if (insns[k].id != PPC_INS_B) break;
+                        const cs_ppc &tp = insns[k].detail->ppc;
+                        if (tp.op_count < 1 || tp.operands[0].type != PPC_OP_IMM) break;
+                        table.emplace_back((uint32_t)insns[k].address, (uint32_t)tp.operands[0].imm);
+                    }
+                    // Two or more, so an ordinary tail call that happens to be
+                    // followed by one stray branch is not mistaken for a table.
+                    if (table.size() >= 2) {
+                        out << "  switch (ctx->ctr) {\n";
+                        for (const auto &e : table) {
+                            out << "    case " << e.first << "u: goto L_" << std::hex << e.second << std::dec
+                                << ";\n";
+                        }
+                        out << "  }\n";
+                    }
+                }
                 out << "  ppc_dispatch(ctx, ctx->ctr);\n";
                 out << "  return;\n";
                 break;
