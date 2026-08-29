@@ -517,6 +517,15 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
     // Relocations inside data sections. These fill in every pointer that is
     // STORED in .rodata/.data -- vtable slots above all -- and were being
     // dropped entirely. See ElfImage::SectionReloc.
+    size_t bad_text_relocs = 0;
+    uint32_t text_size_for_bounds = 0;
+    {
+        auto si = out.section_sizes.find(".text");
+        auto bi = out.section_bytes.find(".text");
+        if (bi != out.section_bytes.end()) text_size_for_bounds = (uint32_t)bi->second.size();
+        if (si != out.section_sizes.end() && si->second > text_size_for_bounds)
+            text_size_for_bounds = si->second;
+    }
     for (int rela_idx : rela_other_indices) {
         const uint8_t *rela_sh = shdr(rela_idx);
         uint32_t rela_entsize = rd_be32(rela_sh + 36);
@@ -566,9 +575,27 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
                 // all. Doing exactly that on 2026-08-29 turned 6 unresolved
                 // indirect calls into 277,472, all to 0x700370, a synthetic
                 // .rodata-range address being called as code.
+                // The addend is relative to the section, and st_value for
+                // this symbol is NOT the section's virtual base -- adding it
+                // produced 7320928, which is nowhere near .text
+                // (0x2000020..0x258881C) and was dispatched 278,093 times as
+                // a function. section_real_addr + addend gives 0x257CF30,
+                // inside .text and next to __gh_vsprintf, which is what was
+                // calling it.
+                uint32_t text_base = 0;
+                auto ti = out.section_real_addr.find(".text");
+                if (ti != out.section_real_addr.end()) text_base = ti->second;
+                uint32_t resolved = text_base + (uint32_t)r_addend;
+                // Refuse to emit anything that is not a plausible text
+                // address. A wrong pointer here is CALLED, and a silently
+                // wrong callable address is far worse than a null one.
+                if (resolved < out.text_addr || resolved >= out.text_addr + text_size_for_bounds) {
+                    bad_text_relocs++;
+                    continue;
+                }
                 sr.is_function = true;
                 sr.func_name = ".text+" + std::to_string(r_addend);
-                sr.func_addr = sym_values[r_sym] + (uint32_t)r_addend;
+                sr.func_addr = resolved;
             } else {
                 if (sym_sec_name.empty()) continue;
                 uint32_t sec_real_base = 0;
@@ -579,6 +606,10 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
             }
             out.section_relocs.push_back(sr);
         }
+    }
+    if (bad_text_relocs) {
+        std::fprintf(stderr, "warning: %zu .text data relocations resolved outside .text and were skipped\n",
+                     bad_text_relocs);
     }
 
     return true;
