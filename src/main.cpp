@@ -368,7 +368,20 @@ int main(int argc, char **argv) {
         // names the helper and not the code responsible -- it reported
         // _savegpr_14_l for 277,472 misses, and _main for a low-memory write
         // before that. lr survives into the callee and names the real site.
-        out << "        g_ppc_dispatch_miss_lr   = g_ppc_last_caller_lr;\n";
+        // ctx->lr, NOT g_ppc_last_caller_lr.
+        //
+        // Every emitted bctrl sets ctx->lr to its own return address on the
+        // line immediately above the dispatch call, so ctx->lr is exactly the
+        // call site. g_ppc_last_caller_lr is written at function ENTRY and is
+        // therefore the lr of the last function entered, which is a different
+        // thing entirely once any leaf has been called and returned.
+        //
+        // Using the wrong one sent this project to the wrong call site four
+        // separate times in one day: _main for a low-memory write,
+        // _savegpr_14_l for 277,834 misses, igMetaField::construct (whose
+        // whole body is one blr) for the null virtual calls, and finally a
+        // field-array loop that a probe then proved was never involved.
+        out << "        g_ppc_dispatch_miss_lr   = ctx->lr;\n";
         // r3 as well. A bctrl through a vtable slot is a virtual call, so r3
         // is `this` and its first word is the object's vtable -- which is what
         // identifies the type behind an empty slot. Neither pc nor lr can do
