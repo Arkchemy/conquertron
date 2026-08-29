@@ -677,9 +677,26 @@ static inline void ppc_import_coreinit_MEMAllocFromFrmHeapEx(PpcContext *ctx) {
     if (h == NULL) { ctx->r[3] = 0; return; }
     addr = arkchemy_align_up(h->bump, align); /* no private header needed -- Frm blocks are never size-queried */
     end = addr + size;
-    if (end > h->base + h->size) { ctx->r[3] = 0; return; }
+    if (end > h->base + h->size) {
+        /* Was a silent `return 0`. MEM1 is the frame heap, and run 6/7 filled
+         * all 32MB of it and hung -- with no out-of-space line anywhere in
+         * the log, because this path never logged one. A shim that fails
+         * silently is indistinguishable from one that was never called, and
+         * that cost a whole hardware round to notice. */
+        g_arkchemy_mem_alloc_fail_total++;
+        if (g_ppc_mem_alloc_fail_log) {
+            g_ppc_mem_alloc_fail_log("MEMAllocFromFrmHeapEx (out of space)", size, h->base, h->size, h->bump - h->base);
+            arkchemy_mem_dump_sites(h->base);
+        }
+        ctx->r[3] = 0;
+        return;
+    }
     h->bump = end;
     ctx->r[3] = addr;
+    /* Frame-heap allocations were the one bump path with no accounting, so
+     * run 7's per-site table came back empty for MEM1 even though MEM1 was
+     * full -- the allocations were real, just invisible here. */
+    arkchemy_mem_record_site(h->base, size);
 }
 
 static inline void ppc_import_coreinit_MEMFreeToFrmHeap(PpcContext *ctx) {
