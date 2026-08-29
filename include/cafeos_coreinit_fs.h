@@ -398,8 +398,19 @@ volatile uint32_t g_arkchemy_fs_read_bytes = 0;
 
 static inline void ppc_import_coreinit_FSReadFile(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(ctx->r[8]);
+    /* size is r6 and count is r7; the Wii U idiom is size=1/count=N, so
+     * summing r6 alone counted calls, not bytes. Bink's decode truncates
+     * partway down each frame and the read pattern is the thing that would
+     * explain it, so log the first few reads outright rather than inferring
+     * from a total. */
     g_arkchemy_fs_read_calls++;
-    g_arkchemy_fs_read_bytes += ctx->r[6];
+    g_arkchemy_fs_read_bytes += ctx->r[6] * ctx->r[7];
+    if (g_arkchemy_fs_read_calls <= 24u && g_ppc_fs_open_log) {
+        char note[64];
+        snprintf(note, sizeof(note), "read#%u size=%u", (unsigned)g_arkchemy_fs_read_calls,
+                 (unsigned)(ctx->r[6] * ctx->r[7]));
+        g_ppc_fs_open_log(note, "(FSReadFile)", "r", 1, ctx->r[8], ppc_fs_handles_in_use());
+    }
     if (!f) {
         ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_NOT_FOUND;
         return;
