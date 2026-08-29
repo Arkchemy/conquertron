@@ -353,6 +353,11 @@ static inline void arkchemy_mem_heap_clear_free_list(ArkchemyMemHeap *h) {
     h->free_list = NULL;
 }
 
+/* Real Cafe OS MEMHeapHeader is 0x40 bytes and sits at the start of every
+ * heap block; allocations begin after it. Mirrored here so a child heap
+ * carved out of a parent can never share the parent's base address. */
+#define ARKCHEMY_MEM_HEAP_HEADER_SIZE 0x40u
+
 static inline uint32_t arkchemy_mem_heap_create(uint32_t base, uint32_t size) {
     int i;
     for (i = 0; i < ARKCHEMY_MEM_MAX_HEAPS; i++) {
@@ -360,7 +365,32 @@ static inline uint32_t arkchemy_mem_heap_create(uint32_t base, uint32_t size) {
             arkchemy_mem_heap_clear_free_list(&g_arkchemy_mem_heaps[i]);
             g_arkchemy_mem_heaps[i].base = base;
             g_arkchemy_mem_heaps[i].size = size;
-            g_arkchemy_mem_heaps[i].bump = base;
+            /* Start allocating AFTER a reserved header area, exactly as real
+             * Cafe OS does -- MEMCreateExpHeapEx/MEMCreateFrmHeapEx write a
+             * heap header at the start of the block and hand back that block
+             * as the handle.
+             *
+             * Reserving nothing here caused a handle collision that cost
+             * several hardware rounds to find. The game uses the standard
+             * Cafe OS idiom:
+             *
+             *     h     = MEMGetBaseHeapHandle(MEM1);
+             *     block = MEMAllocFromFrmHeapEx(h, <all of MEM1>);
+             *     mine  = MEMCreateExpHeapEx(block, size);
+             *
+             * With bump == base, that first allocation returned MEM1's own
+             * base address, so the game's new heap was created at 0x1000000
+             * -- the same address as MEM1 itself. Handles here ARE base
+             * addresses, so both heaps had handle 0x1000000, and
+             * arkchemy_mem_heap_find returns the first match: the parent,
+             * which the game had just emptied by taking all 32MB of it.
+             *
+             * Every allocation the game made against its own fresh 32MB heap
+             * was therefore served from the exhausted parent and returned
+             * NULL, while the real heap sat untouched and unreachable. That
+             * is what stalled the boot in igStringPool and looked, from the
+             * logs, exactly like a memory leak. */
+            g_arkchemy_mem_heaps[i].bump = base + ARKCHEMY_MEM_HEAP_HEADER_SIZE;
             g_arkchemy_mem_heaps[i].active = 1;
             return base;
         }
