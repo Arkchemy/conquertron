@@ -615,6 +615,24 @@ static inline uint32_t ppc_addc(PpcContext *ctx, uint32_t a, uint32_t b) {
     return (uint32_t)full;
 }
 
+/* srawi/sraw set XER[CA] when the value is negative AND any 1 bits are
+ * shifted out. That carry is not decorative: srawi followed by addze is the
+ * standard PowerPC idiom for dividing a signed value by a power of two with
+ * rounding toward zero, and this game uses it in 304 places. Emitting the
+ * shift without the carry leaves every negative division rounding toward
+ * negative infinity instead -- off by one, silently, only for negative
+ * inputs. Found 2026-08-29 while chasing an infinite loop inside Bink's own
+ * bitstream decoder (CheckReadDelta16Bundle). */
+static inline uint32_t ppc_srawi(PpcContext *ctx, uint32_t val, uint32_t sh) {
+    int32_t v = (int32_t)val;
+    uint32_t mask = sh ? ((1u << sh) - 1u) : 0u;
+    ctx->xer_ca = (uint8_t)((v < 0) && ((val & mask) != 0u));
+    return sh ? (uint32_t)(v >> sh) : val;
+}
+
+/* (sraw, the variable-shift form, already models this correctly below --
+ * only the immediate form srawi was missing its carry.) */
+
 static inline uint32_t ppc_adde(PpcContext *ctx, uint32_t a, uint32_t b) {
     uint64_t full = (uint64_t)a + (uint64_t)b + (uint64_t)ctx->xer_ca;
     ctx->xer_ca = (uint8_t)((full >> 32) & 1);

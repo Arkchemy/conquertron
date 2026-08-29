@@ -656,7 +656,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
                 int32_t sh = simm(ppc.operands[2]);
-                out << "  " << reg(rD) << " = (uint32_t)((int32_t)" << reg(rA) << " >> " << sh << ");\n";
+                out << "  " << reg(rD) << " = ppc_srawi(ctx, " << reg(rA) << ", " << sh << ");\n";
                 // Record form (Rc bit): the `.` suffix means this also
                 // compares the result against zero into CR0. Omitting it
                 // left every `srawi.` in the game testing a *stale* flag from
