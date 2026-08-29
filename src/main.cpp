@@ -219,6 +219,39 @@ int main(int argc, char **argv) {
             out << "  ppc_store_u32(ctx, " << entry.first << "u, " << entry.second.fake_addr << "u); /* data import: "
                 << entry.second.target.library << "." << entry.second.target.function << " */\n";
         }
+
+        // Pointers stored INSIDE data sections: vtable slots, function-pointer
+        // tables, string pointers, pointers between globals. The real RPL
+        // loader writes every one of these before the game runs; nothing here
+        // did, because only .rela.text was ever read. See
+        // ElfImage::SectionReloc for what that cost.
+        {
+            size_t wrote = 0, skipped_import = 0, skipped_unmapped = 0;
+            for (const auto &sr : img.section_relocs) {
+                auto tgt = img.global_section_base.find(sr.target_section);
+                if (tgt == img.global_section_base.end()) { skipped_unmapped++; continue; }
+                uint32_t slot = tgt->second + sr.target_offset;
+                if (sr.is_function) {
+                    out << "  ppc_store_u32(ctx, " << slot << "u, " << sr.func_addr << "u); /* &"
+                        << sr.func_name << " */\n";
+                    wrote++;
+                } else if (sr.is_import) {
+                    // An imported function's address stored in data. The
+                    // dispatchable fake_addr for these is assigned per
+                    // trampoline, not per symbol, so it is not resolvable
+                    // here yet -- counted rather than guessed at.
+                    skipped_import++;
+                } else {
+                    auto src = img.global_section_base.find(sr.section);
+                    if (src == img.global_section_base.end()) { skipped_unmapped++; continue; }
+                    out << "  ppc_store_u32(ctx, " << slot << "u, " << (src->second + (uint32_t)sr.addend)
+                        << "u); /* &" << sr.section << "+" << sr.addend << " */\n";
+                    wrote++;
+                }
+            }
+            std::cerr << "data-section relocations: " << wrote << " written, " << skipped_import
+                      << " imported-function slots skipped, " << skipped_unmapped << " unmapped\n";
+        }
         out << "}\n\n";
 
         // Real, previously-missing piece found 2026-08-20 chasing a real

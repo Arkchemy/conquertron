@@ -132,6 +132,40 @@ struct ElfImage {
     // keyed by the address of the instruction they apply to. See DataReloc.
     std::map<uint32_t, DataReloc> data_relocs;
 
+    // Relocations that live INSIDE data sections (.rela.rodata, .rela.data)
+    // rather than in code.
+    //
+    // Real gap found 2026-08-29, and by some distance the largest so far:
+    // load_elf only ever looked at ".rela.text". The retail Skylanders RPX
+    // carries 42,893 .rela.text entries -- which were processed -- alongside
+    // 17,150 .rela.rodata and 876 .rela.data entries, which were silently
+    // discarded. That is 18,026 relocations dropped.
+    //
+    // Those are every pointer STORED IN data: vtable slots, function-pointer
+    // tables, string pointers, pointers between globals. In a relocatable RPL
+    // the file holds zero (or a bare addend) in the slot and the relocation
+    // supplies the address, so dropping them leaves every such pointer NULL.
+    //
+    // Confirmed on hardware before being fixed: virtual calls through
+    // vtable+0xc dispatched to address 0 (187 unresolved indirect calls in one
+    // run, all silent because ppc_dispatch had no default case), a path
+    // formatted from a NULL string came out as "(null)/", 1,335 .bss globals
+    // read as never-written, and five storage classes never registered because
+    // the registration functions were reached only through those pointers.
+    struct SectionReloc {
+        std::string target_section;  // section the slot lives in
+        uint32_t    target_offset;   // byte offset of the slot within it
+        bool        is_function = false;
+        bool        is_import = false;
+        uint32_t    func_addr = 0;   // is_function: the function's real entry
+        std::string func_name;
+        std::string section;         // otherwise: section the value points into
+        int32_t     addend = 0;      // ...and the offset within that section
+        std::string import_library;
+        std::string import_function;
+    };
+    std::vector<SectionReloc> section_relocs;
+
     // Raw bytes of every PROGBITS section, keyed by name, so codegen can
     // read the actual constant a DataReloc points at.
     std::map<std::string, std::vector<uint8_t>> section_bytes;

@@ -124,6 +124,7 @@ constexpr uint32_t SHT_RELA = 4;
 // to use it). In-file layout when set: a 4-byte big-endian "real
 // (decompressed) size" prefix, followed by a plain zlib stream.
 constexpr uint32_t SHF_RPL_ZLIB = 0x08000000;
+constexpr uint32_t R_PPC_ADDR32 = 1;
 constexpr uint32_t R_PPC_ADDR16_LO = 4;
 constexpr uint32_t R_PPC_ADDR16_HI = 5;
 constexpr uint32_t R_PPC_ADDR16_HA = 6;
@@ -231,6 +232,7 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
     int symtab_idx = -1;
     int strtab_idx = -1;
     int rela_text_idx = -1;
+    std::vector<int> rela_other_indices;
 
     for (int i = 0; i < e_shnum; i++) {
         const uint8_t *sh = shdr(i);
@@ -243,6 +245,13 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         if (sh_type == 2 /* SHT_SYMTAB */) symtab_idx = i;
         if (name == ".strtab") strtab_idx = i;
         if (name == ".rela.text" && sh_type == SHT_RELA) rela_text_idx = i;
+        // Every OTHER relocation section too. Only .rela.text was ever read,
+        // so relocations targeting .rodata and .data -- 18,026 of them in the
+        // retail Skylanders RPX -- were discarded outright. See
+        // ElfImage::SectionReloc for what that broke.
+        if (sh_type == SHT_RELA && name != ".rela.text" && name.rfind(".rela.", 0) == 0) {
+            rela_other_indices.push_back(i);
+        }
 
         // Keep the real bytes of every real (non-bss) section so DataReloc
         // lookups can read constants directly out of e.g. .rodata.cst4.
@@ -505,6 +514,57 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         }
     }
 
+    // Relocations inside data sections. These fill in every pointer that is
+    // STORED in .rodata/.data -- vtable slots above all -- and were being
+    // dropped entirely. See ElfImage::SectionReloc.
+    for (int rela_idx : rela_other_indices) {
+        const uint8_t *rela_sh = shdr(rela_idx);
+        uint32_t rela_entsize = rd_be32(rela_sh + 36);
+        if (rela_entsize == 0) rela_entsize = 12;
+        uint32_t target_idx = rd_be32(rela_sh + 28);  // sh_info
+        if (target_idx >= (uint32_t)e_shnum) continue;
+        std::string target_name = secname(rd_be32(shdr(target_idx) + 0));
+        if (target_name.empty()) continue;
+        uint32_t target_real_base = rd_be32(shdr(target_idx) + 12);  // sh_addr
+
+        const std::vector<uint8_t> &rela_bytes = section_data[rela_idx];
+        uint32_t nrelocs = (uint32_t)(rela_bytes.size() / rela_entsize);
+        for (uint32_t i = 0; i < nrelocs; i++) {
+            const uint8_t *r = &rela_bytes[(size_t)i * rela_entsize];
+            uint32_t r_offset = rd_be32(r + 0);
+            uint32_t r_info = rd_be32(r + 4);
+            int32_t r_addend = (int32_t)rd_be32(r + 8);
+            uint32_t r_sym = r_info >> 8;
+            uint32_t r_type = r_info & 0xff;
+            if (r_sym >= all_sym_names.size()) continue;
+            // Only whole-word pointer slots. The HI/LO/HA split forms are a
+            // code idiom and do not appear in data.
+            if (r_type != R_PPC_ADDR32) continue;
+
+            ElfImage::SectionReloc sr;
+            sr.target_section = target_name;
+            sr.target_offset = r_offset - target_real_base;
+            const std::string &sym_sec_name = sym_section_names[r_sym];
+            if (sym_types[r_sym] == STT_FUNC && sym_sec_name.rfind(kImportSectionPrefix, 0) == 0) {
+                sr.is_import = true;
+                sr.import_library = strip_rpl_suffix(sym_sec_name.substr(sizeof(kImportSectionPrefix) - 1));
+                sr.import_function = all_sym_names[r_sym];
+            } else if (sym_types[r_sym] == STT_FUNC) {
+                sr.is_function = true;
+                sr.func_name = all_sym_names[r_sym];
+                sr.func_addr = sym_values[r_sym] + (uint32_t)r_addend;
+            } else {
+                if (sym_sec_name.empty()) continue;
+                uint32_t sec_real_base = 0;
+                auto it = out.section_real_addr.find(sym_sec_name);
+                if (it != out.section_real_addr.end()) sec_real_base = it->second;
+                sr.section = sym_sec_name;
+                sr.addend = (int32_t)(sym_values[r_sym] - sec_real_base) + r_addend;
+            }
+            out.section_relocs.push_back(sr);
+        }
+    }
+
     return true;
 }
 
@@ -580,6 +640,23 @@ void assign_global_addrs(ElfImage &img) {
         auto bytes_it = img.section_bytes.find(section);
         if (bytes_it != img.section_bytes.end() && bytes_it->second.size() > sz) sz = bytes_it->second.size();
         next_addr += (uint32_t)((sz + 15) & ~15u); // round up to 16
+    }
+    // Sections referenced only by relocations that live inside data (vtable
+    // slots and friends) still need a synthetic base, otherwise their targets
+    // cannot be written. Before .rela.rodata/.rela.data were read at all this
+    // loop had nothing to do; now it does.
+    for (const auto &sr : img.section_relocs) {
+        for (const std::string *s : {&sr.target_section, &sr.section}) {
+            if (s->empty()) continue;
+            if (img.global_section_base.count(*s)) continue;
+            img.global_section_base[*s] = next_addr;
+            uint32_t sz = 256;
+            auto b = img.section_bytes.find(*s);
+            auto d = img.section_sizes.find(*s);
+            if (b != img.section_bytes.end() && b->second.size() > sz) sz = (uint32_t)b->second.size();
+            if (d != img.section_sizes.end() && d->second > sz) sz = d->second;
+            next_addr += ((sz + 255u) & ~255u);
+        }
     }
 }
 
