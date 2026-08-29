@@ -74,8 +74,26 @@ crash, no warning and no unhandled instruction:
 - `divw`/`divwu` hitting C undefined behaviour on overflow and division by zero
 - computed jump tables emitted as indirect *calls*, so every jump-table `switch`
   in the binary silently did nothing — 61 sites
+- **only `.rela.text` was ever read.** Relocations targeting `.rodata` and
+  `.data` were discarded outright — 48,625 of them, 33,260 pointing at
+  functions. Those are every pointer *stored in* data: vtable slots, function
+  tables, string pointers, pointers between globals. In a relocatable RPL the
+  file holds zero in the slot and the relocation supplies the address, so
+  dropping them left every such pointer null. This one was behind a long run of
+  symptoms that each looked like a separate bug — null virtual calls, a path
+  formatted as `"(null)/"`, 1,335 globals reading as never-written, five
+  filesystem classes that never registered, and a poisoned allocator free list.
 
 ### Known design defect: the synthetic/real address split
+
+**Partly addressed.** `.text` now keeps its real address, which is measured and
+good: the module-image range check went from a synthetic `0x183190` to
+`0x02000020`, matching what Cemu reads from the retail game, and unresolved
+indirect calls fell by 60% with the remainder landing inside real `.text`.
+
+Extending the same treatment to `.rodata`, `.data` and `.bss` **broke the boot**
+— class registration went from 99 to zero — and was reverted. The reasoning
+still looks right, so what it collides with is not yet understood.
 
 Data sections are packed into a synthetic address space from `0x2000` while
 functions keep their real addresses, so a recompiled binary lives in two
