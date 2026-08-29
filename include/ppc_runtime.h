@@ -496,6 +496,36 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_null_write_val = 0;
 
+/* A second, much tighter band. The broad limit above catches any low write,
+ * and on the Skylanders boot that is 326 of them in two minutes -- useful as a
+ * signal, useless for finding one specific corruption. The bytes that
+ * destroyed a TLSF block header lived at guest addresses 0..7, so record
+ * writes into the first 16 bytes separately: that is a genuine null-pointer
+ * dereference and nothing legitimate ever lands there. */
+#ifndef ARKCHEMY_NULL_WRITE_ZERO_LIMIT
+#define ARKCHEMY_NULL_WRITE_ZERO_LIMIT 0x10u
+#endif
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_zero_write_count = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_zero_write_pc = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_zero_write_lr = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_zero_write_addr = 0xFFFFFFFFu;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_zero_write_val = 0;
+
 static inline void ppc_note_null_write(uint32_t addr, uint32_t val) {
 #if ARKCHEMY_TRAP_NULL_WRITES
     if (addr < ARKCHEMY_NULL_WRITE_LIMIT) {
@@ -505,6 +535,18 @@ static inline void ppc_note_null_write(uint32_t addr, uint32_t val) {
             g_ppc_null_write_val  = val;
         }
         g_ppc_null_write_count++;
+        if (addr < ARKCHEMY_NULL_WRITE_ZERO_LIMIT) {
+            if (g_ppc_zero_write_count == 0u) {
+                /* Both the function entered and the return address it was
+                 * called from: the entry PC alone is too coarse when the
+                 * writer is a shared helper like a string copy. */
+                g_ppc_zero_write_pc   = g_ppc_current_pc;
+                g_ppc_zero_write_lr   = g_ppc_last_caller_lr;
+                g_ppc_zero_write_addr = addr;
+                g_ppc_zero_write_val  = val;
+            }
+            g_ppc_zero_write_count++;
+        }
     }
 #else
     (void)addr; (void)val;
