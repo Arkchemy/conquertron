@@ -732,18 +732,21 @@ void assign_global_addrs(ElfImage &img) {
         }
     }
 
-    // Only sections that were going to get a base anyway. Assigning one to
-    // EVERY section with a real address also gave .text one, and
-    // ppc_init_globals then copied all 5.8MB of code into guest memory a byte
-    // at a time -- 20 million stores, 584 chunks, and a 467MB NRO against the
-    // usual 174MB. Which sections get initialised must not change here; only
-    // where they live.
-    for (auto &entry : img.global_section_base) {
-        auto real = img.section_real_addr.find(entry.first);
-        if (real != img.section_real_addr.end() && real->second != 0) entry.second = real->second;
-    }
-    // .text is referenced by data relocations but never carries initialised
-    // content of its own, so it needs a real base without being copied in.
+    // .text keeps its REAL address. Data sections deliberately do NOT.
+    //
+    // Measured, 2026-08-29. Mapping .text real is a clear win: the module
+    // range low bound went from a synthetic 0x183190 to 0x02000020, matching
+    // what Cemu reads from the retail game, and unresolved indirect calls fell
+    // from 277,834 to 109,248 with the remainder landing inside real .text.
+    //
+    // Extending the same treatment to .rodata, .data and .bss was tried and
+    // REVERTED. It looked principled -- guest memory is 1GB and the whole
+    // image fits -- and it broke the boot completely: registrations went from
+    // 99 to 0, appendToArkCore was never reached at all, the module bounds
+    // read back as zero, and dispatch misses rose to 293,840. Why is not yet
+    // understood; what is certain is that it is not a safe change on its own.
+    // See docs/address-space-split.md, which still describes the full move as
+    // the eventual goal, now with evidence that it needs more than this.
     if (img.section_real_addr.count(".text")) {
         img.global_section_base[".text"] = img.section_real_addr[".text"];
     }
