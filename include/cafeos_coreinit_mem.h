@@ -306,8 +306,15 @@ uint32_t g_arkchemy_bootstrap_heap_handle = 0;
  * unused. This is still far short of real Wii U MEM2 (2GB), but it is
  * three times what the game just exhausted, and the whole guest address
  * space is only 256MB. */
-#define ARKCHEMY_MEM2_BASE 0x4000000u
-#define ARKCHEMY_MEM2_SIZE 0x3A000000u
+/* Moved from 0x4000000 on 2026-08-29. Data sections now live at their REAL
+ * addresses rather than in a synthetic space, and the loaded image occupies
+ * 0x02000020..0x10181290 -- .rodata at 0x10000000, .data at 0x100CBE40, .bss
+ * at 0x100E6000. The old MEM2 window started at 0x4000000 and ran to
+ * 0x3E000000, so it covered all of that: the heap would have handed out the
+ * game's own globals as free memory. Starting above the image keeps 720MB,
+ * still far more than anything observed. */
+#define ARKCHEMY_MEM2_BASE 0x11000000u
+#define ARKCHEMY_MEM2_SIZE 0x2D000000u
 /* MEM2 is split in two, and both halves must agree on where the line is
  * or they will hand out the same memory twice. The low eighth is an
  * ordinary ExpHeap (headers, free list, reusable); the rest is the

@@ -629,9 +629,18 @@ void assign_global_addrs(ElfImage &img) {
     // loaded module image, where Cemu shows the retail game holding
     // 0x02000020 -- the real start of .text. That inverted the range test and
     // made the engine free every string literal it owned.
-    if (img.section_real_addr.count(".text")) {
-        img.global_section_base[".text"] = img.section_real_addr[".text"];
-    }
+    // Every section with a real address keeps it. Extended from .text alone
+    // on 2026-08-29 once that change was confirmed on hardware: the module
+    // range low bound went from a synthetic 0x183190 to 0x02000020, matching
+    // what Cemu reads out of the retail game, and unresolved indirect calls
+    // fell by 60% with the remainder now landing inside real .text instead of
+    // synthetic space.
+    //
+    // The synthetic space existed because guest memory was 4MB and real Wii U
+    // addresses would not fit. It is 1GB now and the whole loaded image spans
+    // 0x02000020..0x10181290, so it fits with room to spare. Keeping data
+    // synthetic while code was real is what made pointer comparisons across
+    // the two meaningless -- see docs/address-space-split.md.
 
     // Fixed, generous starting point in PpcContext::mem -- well clear of
     // where these small test programs' stacks operate (mem is 4MB as of
@@ -721,6 +730,22 @@ void assign_global_addrs(ElfImage &img) {
             if (d != img.section_sizes.end() && d->second > sz) sz = d->second;
             next_addr += ((sz + 255u) & ~255u);
         }
+    }
+
+    // Only sections that were going to get a base anyway. Assigning one to
+    // EVERY section with a real address also gave .text one, and
+    // ppc_init_globals then copied all 5.8MB of code into guest memory a byte
+    // at a time -- 20 million stores, 584 chunks, and a 467MB NRO against the
+    // usual 174MB. Which sections get initialised must not change here; only
+    // where they live.
+    for (auto &entry : img.global_section_base) {
+        auto real = img.section_real_addr.find(entry.first);
+        if (real != img.section_real_addr.end() && real->second != 0) entry.second = real->second;
+    }
+    // .text is referenced by data relocations but never carries initialised
+    // content of its own, so it needs a real base without being copied in.
+    if (img.section_real_addr.count(".text")) {
+        img.global_section_base[".text"] = img.section_real_addr[".text"];
     }
 }
 

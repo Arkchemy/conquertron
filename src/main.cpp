@@ -200,6 +200,14 @@ int main(int argc, char **argv) {
         for (const auto &entry : img.global_section_base) {
             auto bytes_it = img.section_bytes.find(entry.first);
             if (bytes_it == img.section_bytes.end()) continue;  // e.g. .bss: no file content, mem is already zeroed
+            // .text content IS copied, at its real address. It was briefly
+            // skipped here on the theory that translated functions make the
+            // bytes redundant; that was wrong. The original build copied
+            // .text (5.4 million byte stores of it) and any code reading a
+            // constant out of the code section would have read zeros without
+            // it. The 20-million-store explosion that prompted the skip came
+            // from assigning bases to every section including .symtab and the
+            // .rela tables, not from .text.
             const std::vector<uint8_t> &bytes = bytes_it->second;
             for (size_t i = 0; i < bytes.size(); i++) {
                 if (bytes[i] == 0) continue;  // ctx->mem starts zeroed; skip no-op stores
