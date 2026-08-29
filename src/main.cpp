@@ -355,6 +355,12 @@ int main(int argc, char **argv) {
         out << "      if (g_ppc_dispatch_miss_count == 0u) {\n";
         out << "        g_ppc_dispatch_miss_addr = addr;\n";
         out << "        g_ppc_dispatch_miss_pc   = g_ppc_current_pc;\n";
+        // The caller's return address as well. g_ppc_current_pc is the
+        // innermost function ENTERED, which for a miss inside a leaf helper
+        // names the helper and not the code responsible -- it reported
+        // _savegpr_14_l for 277,472 misses, and _main for a low-memory write
+        // before that. lr survives into the callee and names the real site.
+        out << "        g_ppc_dispatch_miss_lr   = g_ppc_last_caller_lr;\n";
         out << "      }\n";
         out << "      g_ppc_dispatch_miss_count++;\n";
         out << "      return;\n";

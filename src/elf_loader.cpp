@@ -553,6 +553,22 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
                 sr.is_function = true;
                 sr.func_name = all_sym_names[r_sym];
                 sr.func_addr = sym_values[r_sym] + (uint32_t)r_addend;
+            } else if (sym_sec_name == ".text") {
+                // A section symbol pointing into .text -- the ordinary shape
+                // for a vtable slot, where the relocation names the section
+                // and the addend picks the function within it.
+                //
+                // This must NOT go through the synthetic-section path below.
+                // Text keeps its real addresses in generated code, while data
+                // sections are relocated into a synthetic space, so resolving
+                // a .text reference against a synthetic base produces a
+                // plausible-looking number that is not a function address at
+                // all. Doing exactly that on 2026-08-29 turned 6 unresolved
+                // indirect calls into 277,472, all to 0x700370, a synthetic
+                // .rodata-range address being called as code.
+                sr.is_function = true;
+                sr.func_name = ".text+" + std::to_string(r_addend);
+                sr.func_addr = sym_values[r_sym] + (uint32_t)r_addend;
             } else {
                 if (sym_sec_name.empty()) continue;
                 uint32_t sec_real_base = 0;
