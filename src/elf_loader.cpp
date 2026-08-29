@@ -616,6 +616,23 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
 }
 
 void assign_global_addrs(ElfImage &img) {
+    // .text keeps its REAL address. Every other section is relocated into a
+    // synthetic space, but functions are emitted at their real addresses and
+    // ppc_dispatch is keyed by them, so handing .text a synthetic base makes
+    // every runtime-computed code address wrong.
+    //
+    // Measured, twice over. A folded `lis` of the synthetic .text base
+    // produced 0x700370 = 1585552 + 5754848, dispatched 277,834 times as a
+    // function from inside __gh_vsprintf and silently doing nothing each time.
+    // The same synthetic 1585552 is what
+    // igMemoryPoolFrameManager::setMemoryPool read as the low bound of the
+    // loaded module image, where Cemu shows the retail game holding
+    // 0x02000020 -- the real start of .text. That inverted the range test and
+    // made the engine free every string literal it owned.
+    if (img.section_real_addr.count(".text")) {
+        img.global_section_base[".text"] = img.section_real_addr[".text"];
+    }
+
     // Fixed, generous starting point in PpcContext::mem -- well clear of
     // where these small test programs' stacks operate (mem is 4MB as of
     // this writing, grown from an original 65536 bytes -- see
