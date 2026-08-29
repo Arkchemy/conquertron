@@ -442,6 +442,74 @@ static inline void ppc_import_coreinit_MEMDestroyExpHeap(PpcContext *ctx) {
     ctx->r[3] = handle;
 }
 
+/* Per-call-site allocation accounting, added 2026-08-29.
+ *
+ * Run 6 exhausted MEM1 (32MB, base 0x1000000) and hung: the engine asked
+ * getAvailableHeapSize, got 0, and igStringPool::remove then spun forever
+ * walking a bucket chain for an item that was no longer in it.
+ *
+ * Nothing in the logs said what filled 32MB, because the existing
+ * instrumentation only reports single allocations of 64KB or more and the
+ * run recorded just 78 frees. So it was filled by thousands of small,
+ * unlogged, never-freed allocations -- exactly the case the 64KB threshold
+ * cannot see.
+ *
+ * Rather than guess (the string pool is the obvious suspect, which is
+ * precisely why it should be measured), accumulate bytes per guest call
+ * site and name the top consumers at the moment the heap runs dry. */
+typedef struct ArkchemyAllocSite {
+    uint32_t pc;
+    uint32_t heap_base;
+    uint32_t count;
+    uint32_t bytes;
+} ArkchemyAllocSite;
+
+#define ARKCHEMY_ALLOC_SITE_SLOTS 96
+static ArkchemyAllocSite g_arkchemy_alloc_sites[ARKCHEMY_ALLOC_SITE_SLOTS];
+
+static inline void arkchemy_mem_record_site(uint32_t heap_base, uint32_t size) {
+    int i;
+    for (i = 0; i < ARKCHEMY_ALLOC_SITE_SLOTS; i++) {
+        ArkchemyAllocSite *e = &g_arkchemy_alloc_sites[i];
+        if (e->count != 0 && (e->pc != g_ppc_current_pc || e->heap_base != heap_base)) continue;
+        if (e->count == 0) { e->pc = g_ppc_current_pc; e->heap_base = heap_base; }
+        e->count++;
+        e->bytes += size;
+        return;
+    }
+    /* Table full: fold the remainder into slot 0 so the total still adds up
+     * rather than silently under-reporting. */
+    g_arkchemy_alloc_sites[0].count++;
+    g_arkchemy_alloc_sites[0].bytes += size;
+}
+
+/* Names the biggest consumers of one heap, largest first. Called only on
+ * exhaustion, so its cost never matters. */
+static inline void arkchemy_mem_dump_sites(uint32_t heap_base) {
+    int rank, i, best;
+    uint32_t seen = 0;
+    if (!g_ppc_mem_alloc_fail_log) return;
+    for (rank = 0; rank < 8; rank++) {
+        uint32_t best_bytes = 0;
+        best = -1;
+        for (i = 0; i < ARKCHEMY_ALLOC_SITE_SLOTS; i++) {
+            ArkchemyAllocSite *e = &g_arkchemy_alloc_sites[i];
+            if (e->count == 0 || e->heap_base != heap_base) continue;
+            if (e->bytes > best_bytes && e->bytes < (seen ? seen : 0xFFFFFFFFu)) {
+                best_bytes = e->bytes;
+                best = i;
+            }
+        }
+        if (best < 0) return;
+        seen = best_bytes;
+        g_ppc_mem_alloc_fail_log("MEM top consumer",
+                                 g_arkchemy_alloc_sites[best].pc,
+                                 g_arkchemy_alloc_sites[best].count,
+                                 g_arkchemy_alloc_sites[best].bytes,
+                                 (uint32_t)rank);
+    }
+}
+
 static inline void ppc_import_coreinit_MEMAllocFromExpHeapEx(PpcContext *ctx) {
     /* void *MEMAllocFromExpHeapEx(MEMHeapHandle heap, uint32_t size, int alignment) */
     /* Self-healing bootstrap heap, 2026-08-24. Real hardware traced a
@@ -513,6 +581,7 @@ static inline void ppc_import_coreinit_MEMAllocFromExpHeapEx(PpcContext *ctx) {
                 ppc_store_u32(ctx, candidate - 4, size);
                 ctx->r[3] = candidate;
                 g_arkchemy_mem_reuse_total++;
+                arkchemy_mem_record_site(h->base, size);
                 return;
             }
             pp = &n->next;
@@ -525,6 +594,7 @@ static inline void ppc_import_coreinit_MEMAllocFromExpHeapEx(PpcContext *ctx) {
         g_arkchemy_mem_alloc_fail_total++;
         if (g_ppc_mem_alloc_fail_log) {
             g_ppc_mem_alloc_fail_log("MEMAllocFromExpHeapEx (out of space)", size, h->base, h->size, h->bump - h->base);
+            arkchemy_mem_dump_sites(h->base);
         }
         ctx->r[3] = 0;
         return;
@@ -532,6 +602,7 @@ static inline void ppc_import_coreinit_MEMAllocFromExpHeapEx(PpcContext *ctx) {
     ppc_store_u32(ctx, addr - 4, size);
     h->bump = end;
     ctx->r[3] = addr;
+    arkchemy_mem_record_site(h->base, size);
     /* Real, deliberate instrumentation added 2026-08-21 chasing why
      * doubling MEM1's real size (16MB -> 32MB, see this file's own
      * layout comment) didn't fix the real boot-time sbrk/malloc spin --
