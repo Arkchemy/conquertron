@@ -316,7 +316,14 @@ uint32_t g_arkchemy_bootstrap_heap_handle = 0;
  * apart -- they were briefly inconsistent when the arena was added,
  * with the ExpHeap created over the FULL pool and therefore able to
  * bump straight into arena memory. */
-#define ARKCHEMY_MEM2_EXPHEAP_SIZE (ARKCHEMY_MEM2_SIZE / 8)
+/* Was MEM2_SIZE / 8, which is 116MB, and on 2026-08-29 the game asked this
+ * heap for a single 180,355,080-byte block and got the project's first real
+ * allocation failure. That request is not absurd -- real Wii U MEM2 is 2GB and
+ * a 172MB engine pool is ordinary there -- it simply never used to be reached,
+ * because before data relocations were applied the boot died long before any
+ * allocation of that size. Half the pool leaves 464MB for the ExpHeap and
+ * 464MB for the sbrk arena, both far beyond anything observed. */
+#define ARKCHEMY_MEM2_EXPHEAP_SIZE (ARKCHEMY_MEM2_SIZE / 2)
 #define ARKCHEMY_MEM2_ARENA_BASE   (ARKCHEMY_MEM2_BASE + ARKCHEMY_MEM2_EXPHEAP_SIZE)
 #define ARKCHEMY_MEM2_ARENA_END    (ARKCHEMY_MEM2_BASE + ARKCHEMY_MEM2_SIZE)
 
