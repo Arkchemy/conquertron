@@ -800,8 +800,20 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
-                out << "  " << reg(rD) << " = (uint32_t)((int32_t)" << reg(rA) << " / (int32_t)" << reg(rB)
-                    << ");\n";
+                /* PowerPC leaves rD UNDEFINED on a zero divisor (and on the
+                 * signed INT_MIN / -1 overflow) but does NOT trap. Emitting a
+                 * bare C `/` for those makes them undefined behaviour in C,
+                 * which is strictly worse than the hardware: the compiler may
+                 * assume the divisor is non-zero and optimise on that basis.
+                 *
+                 * Not hypothetical. igStringPool::searchForString computes
+                 * `hash %% bucketCount` as divwu/mullw/subf, and on 2026-08-29
+                 * it ran with bucketCount == 0, leaving the raw FNV basis
+                 * 0x811C9DC5 as a bucket index and hanging the boot. The zero
+                 * divisor is a real value this game really produces. */
+                out << "  " << reg(rD) << " = (uint32_t)(((int32_t)" << reg(rB) << " == 0 || ((int32_t)"
+                    << reg(rA) << " == (-2147483647-1) && (int32_t)" << reg(rB) << " == -1)) ? 0 :\n"
+                    << "      (int32_t)" << reg(rA) << " / (int32_t)" << reg(rB) << ");\n";
                 // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
                 if (ppc.update_cr0) {
                     out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
@@ -812,7 +824,18 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
-                out << "  " << reg(rD) << " = " << reg(rA) << " / " << reg(rB) << ";\n";
+                /* PowerPC leaves rD UNDEFINED on a zero divisor (and on the
+                 * signed INT_MIN / -1 overflow) but does NOT trap. Emitting a
+                 * bare C `/` for those makes them undefined behaviour in C,
+                 * which is strictly worse than the hardware: the compiler may
+                 * assume the divisor is non-zero and optimise on that basis.
+                 *
+                 * Not hypothetical. igStringPool::searchForString computes
+                 * `hash %% bucketCount` as divwu/mullw/subf, and on 2026-08-29
+                 * it ran with bucketCount == 0, leaving the raw FNV basis
+                 * 0x811C9DC5 as a bucket index and hanging the boot. The zero
+                 * divisor is a real value this game really produces. */
+                out << "  " << reg(rD) << " = " << reg(rB) << " ? (" << reg(rA) << " / " << reg(rB) << ") : 0u;\n";
                 // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
                 if (ppc.update_cr0) {
                     out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";
