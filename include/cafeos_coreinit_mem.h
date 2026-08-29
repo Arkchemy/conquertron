@@ -465,7 +465,14 @@ typedef struct ArkchemyAllocSite {
 } ArkchemyAllocSite;
 
 #define ARKCHEMY_ALLOC_SITE_SLOTS 96
-static ArkchemyAllocSite g_arkchemy_alloc_sites[ARKCHEMY_ALLOC_SITE_SLOTS];
+/* extern, defined once in cafeos_state.c -- NOT static. This header is
+ * included by every generated_*.c, so a `static` table here gives each of
+ * the hundreds of translation units its own private copy: allocations get
+ * recorded into one TU's table and the exhaustion dump reads a different
+ * one, which is exactly why runs 7 and 8 reported an empty table for a heap
+ * that was demonstrably full. g_arkchemy_mem_heaps next door was already
+ * extern for the same reason. */
+extern ArkchemyAllocSite g_arkchemy_alloc_sites[ARKCHEMY_ALLOC_SITE_SLOTS];
 
 static inline void arkchemy_mem_record_site(uint32_t heap_base, uint32_t size) {
     int i;

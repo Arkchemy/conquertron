@@ -88,6 +88,7 @@ pthread_key_t g_arkchemy_current_thread_key;
 pthread_once_t g_arkchemy_thread_tls_once = PTHREAD_ONCE_INIT;
 
 ArkchemyMemHeap g_arkchemy_mem_heaps[ARKCHEMY_MEM_MAX_HEAPS];
+ArkchemyAllocSite g_arkchemy_alloc_sites[ARKCHEMY_ALLOC_SITE_SLOTS];
 ppc_mem_alloc_fail_log_fn g_ppc_mem_alloc_fail_log = NULL;
 uint32_t g_arkchemy_base_heap_handle[3];
 uint64_t g_arkchemy_mem_alloc_fail_total = 0;
