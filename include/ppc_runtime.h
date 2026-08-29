@@ -419,6 +419,18 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_watch_store_addr = 0xFFFFFFFFu;
 
+/* Published by the setCapacity registry probe so the harness can census the
+ * class-registry table once a second, right up to the point the game thread
+ * stops. Needs its OWN weak attribute: this header is included by every
+ * generated_*.c, and every definition here carries one so the hundreds of
+ * copies collapse at link time. Inserting a variable between an existing
+ * __attribute__((weak)) and the definition it applies to silently steals it
+ * and breaks the neighbour instead. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_registry_table = 0;
+
 /* A second, independent store-watch address, added 2026-08-28.
  *
  * One watch can prove a store happened. It cannot prove the absence of
