@@ -451,6 +451,66 @@ __attribute__((weak))
 volatile uint32_t g_ppc_watch_store_addr2 = 0xFFFFFFFFu;
 static inline void ppc_debug_watch(uint32_t pc, uint32_t value); /* real definition below */
 
+/* Null-write trap.
+ *
+ * Every accessor masks with (PPC_MEM_SIZE - 1), which is what lets a
+ * recompiled binary use guest addresses directly. The cost is that a null or
+ * wild pointer becomes a perfectly legal access to low memory instead of a
+ * fault, so the program does not stop where the bug is -- it carries on and
+ * fails somewhere unrelated, usually as a hang.
+ *
+ * That is not hypothetical. On 2026-08-29 a store of the formatted string
+ * "(null)/" landed at guest address 0. Nothing complained. Much later
+ * tlsf_free followed a null neighbour pointer, read address 0 as a block
+ * header, took the ASCII "l)/\0" (0x6C292F00) as a block size, mapped it to
+ * size class fls(size)-7 = 24 -- one past the last valid class -- and set a
+ * bitmap bit that made every subsequent search walk off the end of the free
+ * list table and spin forever. Three separate hangs that day traced back to
+ * masking hiding the original bad access.
+ *
+ * These record the FIRST store below ARKCHEMY_NULL_WRITE_LIMIT together with
+ * g_ppc_current_pc, which names the function doing it. Reading them is the
+ * harness's business; the runtime only records.
+ *
+ * Compile with -DARKCHEMY_TRAP_NULL_WRITES=0 to remove the check entirely. */
+#ifndef ARKCHEMY_TRAP_NULL_WRITES
+#define ARKCHEMY_TRAP_NULL_WRITES 1
+#endif
+#ifndef ARKCHEMY_NULL_WRITE_LIMIT
+#define ARKCHEMY_NULL_WRITE_LIMIT 0x1000u
+#endif
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_null_write_count = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_null_write_pc = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_null_write_addr = 0xFFFFFFFFu;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_null_write_val = 0;
+
+static inline void ppc_note_null_write(uint32_t addr, uint32_t val) {
+#if ARKCHEMY_TRAP_NULL_WRITES
+    if (addr < ARKCHEMY_NULL_WRITE_LIMIT) {
+        if (g_ppc_null_write_count == 0u) {
+            g_ppc_null_write_pc   = g_ppc_current_pc;
+            g_ppc_null_write_addr = addr;
+            g_ppc_null_write_val  = val;
+        }
+        g_ppc_null_write_count++;
+    }
+#else
+    (void)addr; (void)val;
+#endif
+}
+
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
     if (addr == g_ppc_watch_store_addr) {
         ppc_debug_watch(0xf0000001u, val);              /* the value being written */
@@ -460,6 +520,7 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
         ppc_debug_watch(0xf0000005u, val);
         ppc_debug_watch(0xf0000006u, g_ppc_current_pc);
     }
+    ppc_note_null_write(addr, val);
     uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     p[0] = (uint8_t)(val >> 24);
     p[1] = (uint8_t)(val >> 16);
@@ -489,6 +550,7 @@ static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
         ppc_debug_watch(0xf0000007u, ((addr - g_ppc_watch_store_addr2) << 8) | val);
         ppc_debug_watch(0xf0000008u, g_ppc_current_pc);
     }
+    ppc_note_null_write(addr, val);
     ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)] = val;
 }
 
