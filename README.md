@@ -59,10 +59,55 @@ They read a real dumped `.rpx` directly, with no emulator in the loop.
 
 ## Status
 
-Actively developed and **not** finished. Every real function in the target
-binary translates and links, but that is a statement about coverage, not
-correctness — real silent codegen bugs are still being found and fixed. Treat
-output as under active repair rather than trustworthy.
+Actively developed and **not** finished. Every function in the target binary
+translates and links — 1,450,489 instructions, 100.00% of `.text`, with 28
+bytes unrecovered as 7 isolated unhandled opcodes — but that is a statement
+about coverage, not correctness. Silent codegen bugs are still being found and
+fixed. Treat output as under active repair rather than trustworthy.
+
+Bugs found and fixed so far, all of which produced wrong behaviour with no
+crash, no warning and no unhandled instruction:
+
+- record forms (`Rc` bit) not updating `CR0` — 6,745 sites
+- `srawi` not setting the carry, breaking the standard signed-divide idiom —
+  2,890 sites
+- `divw`/`divwu` hitting C undefined behaviour on overflow and division by zero
+- computed jump tables emitted as indirect *calls*, so every jump-table `switch`
+  in the binary silently did nothing — 61 sites
+
+### Known design defect: the synthetic/real address split
+
+Data sections are packed into a synthetic address space from `0x2000` while
+functions keep their real addresses, so a recompiled binary lives in two
+address spaces at once. Any guest code that compares two pointers, or
+range-tests one, gets a meaningless answer when the sides come from different
+spaces — confirmed in the field against Cemu, where a module-image range check
+came out inverted and caused every string literal in the game to be freed.
+
+The justification recorded in the code is that guest memory was 4MB and real
+Wii U addresses would not fit. It is 1GB now and they fit comfortably, so the
+reason has expired. Written up with measurements in
+[`docs/address-space-split.md`](docs/address-space-split.md).
+
+### Validating against a reference
+
+Cemu can be driven as an oracle for questions this recompiler's output cannot
+answer on its own — what a global is *supposed* to contain, what a structure
+really looks like at runtime:
+
+```sh
+flatpak run info.cemu.Cemu -g <game>/code/<title>.rpx --enable-gdbstub
+```
+
+```
+set architecture powerpc:750
+set endian big                    # required: without it gdb decodes backwards
+target remote localhost:1337      # not gdb's default 1234
+```
+
+`set endian big` is not optional. Without it gdb both disassembles garbage and
+writes byte-swapped breakpoint traps, so breakpoints silently never fire. The
+stub has no detach, so restart the emulator between sessions.
 
 ## Licence
 
