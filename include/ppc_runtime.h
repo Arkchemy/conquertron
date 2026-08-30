@@ -643,7 +643,7 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
          * instruction getter containing no store at all, for four writes that
          * corrupted the memory-context global. lr survives into the callee and
          * points at the code responsible. */
-        ppc_debug_watch(0xf0000007u, ctx->lr);
+        ppc_debug_watch(0xf0000020u, ctx->lr);
     }
     if (addr == g_ppc_watch_store_addr2) {
         ppc_debug_watch(0xf0000005u, val);
