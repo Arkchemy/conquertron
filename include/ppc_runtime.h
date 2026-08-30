@@ -663,6 +663,33 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_pcsample_lr[ARKCHEMY_PCSAMPLE_SLOTS];
 
+/* Cafe OS import calls, counted.
+ *
+ * A shim is not a recompiled function: it does not set g_ppc_current_pc and
+ * does not increment g_ppc_fn_call_count. So a loop built only from shims and
+ * inline code advances no counter in the harness, and the frozen call count
+ * looks identical to a hang inside the last recompiled function entered --
+ * which on 2026-08-30 sent an investigation into __gh_memclr32, whose loops
+ * are bounded at 192 iterations and could not possibly be it.
+ *
+ * The return address written immediately before each import call uniquely
+ * identifies the call site, so recording it names which shim is spinning. A
+ * climbing import count beside a frozen call count is the signature of
+ * exactly this: forward progress that no other counter can see. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_import_count = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_last_import_lr = 0;
+
+static inline void ppc_note_import(const PpcContext *ctx) {
+    g_ppc_import_count++;
+    g_ppc_last_import_lr = ctx->lr;
+}
+
 /* Returns non-zero if the caller should DROP this store.
  *
  * A store into the first 16 bytes is a null-pointer dereference. On real

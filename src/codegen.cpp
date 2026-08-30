@@ -155,7 +155,10 @@ std::string resolve_call_stmt(const ElfImage &img, const std::map<uint32_t, std:
     // relocation-based lookup, same precedence as call_relocs below.
     auto it_call_import = img.import_trampolines.find(insn_addr);
     if (it_call_import != img.import_trampolines.end()) {
-        return "ppc_import_" + it_call_import->second.library + "_" + it_call_import->second.function + "(ctx);";
+        // A shim sets no PC and bumps no call counter, so a loop of shims is
+        // invisible to every counter the harness has. Note the call first;
+        // ctx->lr was written on the line above and names the site.
+        return "ppc_note_import(ctx); ppc_import_" + it_call_import->second.library + "_" + it_call_import->second.function + "(ctx);";
     }
     auto it = img.call_relocs.find(insn_addr);
     if (it != img.call_relocs.end()) {
@@ -171,7 +174,10 @@ std::string resolve_call_stmt(const ElfImage &img, const std::map<uint32_t, std:
     // address (see ImportTrampoline).
     auto it3 = img.import_trampolines.find(target);
     if (it3 != img.import_trampolines.end()) {
-        return "ppc_import_" + it3->second.library + "_" + it3->second.function + "(ctx);";
+        // A shim sets no PC and bumps no call counter, so a loop of shims is
+        // invisible to every counter the harness has. Note the call first;
+        // ctx->lr was written on the line above and names the site.
+        return "ppc_note_import(ctx); ppc_import_" + it3->second.library + "_" + it3->second.function + "(ctx);";
     }
     return "";
 }
