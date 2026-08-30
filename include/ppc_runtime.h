@@ -634,7 +634,16 @@ static inline int ppc_note_null_write(uint32_t addr, uint32_t val) {
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
     if (addr == g_ppc_watch_store_addr) {
         ppc_debug_watch(0xf0000001u, val);              /* the value being written */
-        ppc_debug_watch(0xf0000002u, g_ppc_current_pc);  /* which real function is doing it */
+        ppc_debug_watch(0xf0000002u, g_ppc_current_pc);  /* innermost function ENTERED */
+        /* And the link register. g_ppc_current_pc is set at function entry and
+         * is never restored on return, so for a store made by a Cafe OS shim
+         * or a memory helper -- code that calls ppc_store_u32 without being a
+         * recompiled function -- it names whatever ran last instead. On
+         * 2026-08-30 it reported igMetaField::getDefaultMemory, a nine
+         * instruction getter containing no store at all, for four writes that
+         * corrupted the memory-context global. lr survives into the callee and
+         * points at the code responsible. */
+        ppc_debug_watch(0xf0000007u, ctx->lr);
     }
     if (addr == g_ppc_watch_store_addr2) {
         ppc_debug_watch(0xf0000005u, val);
