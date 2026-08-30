@@ -569,6 +569,14 @@ volatile uint32_t g_ppc_dispatch_miss_last_addr = 0;
 __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_dispatch_miss_last_lr = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_dispatch_miss_last_r3 = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_dispatch_miss_last_vt = 0;
 
 /* Returns non-zero if the caller should DROP this store.
  *

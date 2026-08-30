@@ -405,6 +405,13 @@ int main(int argc, char **argv) {
         out << "        g_ppc_dispatch_miss_real++;\n";
         out << "        g_ppc_dispatch_miss_last_addr = addr;\n";
         out << "        g_ppc_dispatch_miss_last_lr   = ctx->lr;\n";
+        // this and its vtable for the LAST real miss as well. The first-miss
+        // fields describe one arbitrary arrival, and on this project that
+        // arrival turned out to be a one-off whose object was null while the
+        // other ~75,000 were not -- several builds followed it into machinery
+        // that Cemu then showed was behaving correctly.
+        out << "        g_ppc_dispatch_miss_last_r3   = ctx->r[3];\n";
+        out << "        g_ppc_dispatch_miss_last_vt   = ctx->r[3] ? ppc_load_u32(ctx, ctx->r[3]) : 0u;\n";
         out << "      }\n";
         out << "      g_ppc_dispatch_miss_count++;\n";
         out << "      return;\n";
