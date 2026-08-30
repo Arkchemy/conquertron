@@ -635,6 +635,34 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_memwatch_last = 0xFFFFFFFFu;
 
+/* A sampling profiler, sharing the poll's existing call site.
+ *
+ * When a boot stops making progress the useful question is not "where is it
+ * now" -- the per-frame last_pc answers that, and it flickers between half a
+ * dozen addresses without saying which loop they belong to -- but "where is
+ * it spending its calls". On 2026-08-30 the boot settled into a dead-steady
+ * 20,000 calls per 60 frames, which is a loop rather than slow progress, and
+ * nothing in the harness could name it.
+ *
+ * Every 4096th function entry is recorded into a small ring. Duplicates in
+ * the ring are the loop: a body that runs constantly appears many times,
+ * anything incidental appears once. The stride keeps the cost negligible
+ * against the poll that is already here. */
+#define ARKCHEMY_PCSAMPLE_SLOTS 32
+#define ARKCHEMY_PCSAMPLE_STRIDE 4096u
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_pcsample[ARKCHEMY_PCSAMPLE_SLOTS];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_pcsample_n = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_pcsample_lr[ARKCHEMY_PCSAMPLE_SLOTS];
+
 /* Returns non-zero if the caller should DROP this store.
  *
  * A store into the first 16 bytes is a null-pointer dereference. On real
@@ -703,6 +731,13 @@ static inline void ppc_poll_watch_mem(const PpcContext *ctx) {
         g_ppc_memwatch_lr[n]   = ctx->lr;
     }
     g_ppc_memwatch_n = n + 1u;
+}
+
+static inline void ppc_sample_pc(const PpcContext *ctx) {
+    if ((g_ppc_fn_call_count & (ARKCHEMY_PCSAMPLE_STRIDE - 1u)) != 0u) return;
+    uint32_t i = g_ppc_pcsample_n++ & (ARKCHEMY_PCSAMPLE_SLOTS - 1u);
+    g_ppc_pcsample[i]    = g_ppc_current_pc;
+    g_ppc_pcsample_lr[i] = ctx->lr;
 }
 
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {

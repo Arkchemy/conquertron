@@ -270,6 +270,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
     // ctx->shared->mem directly -- a memset shim, a memcpy -- is invisible
     // to it. Polling here catches the value changing whoever changed it.
     out << "  ppc_poll_watch_mem(ctx);\n";
+    out << "  ppc_sample_pc(ctx);\n";
 
     for (size_t i = 0; i < insns.size(); i++) {
         const cs_insn &insn = insns[i];
