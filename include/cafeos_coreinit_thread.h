@@ -56,6 +56,22 @@
  * guest memory, only passes it back into these same functions.
  */
 
+/* Threads created and actually started, counted.
+ *
+ * A guest thread here is a real host pthread, but nothing in the harness said
+ * how many existed. That mattered on 2026-08-30: the boot settled into a
+ * steady state with jqWorkerSleep calling OSWaitEventWithTimeout 146,000 times
+ * a second, which reads identically whether the job queue has workers that are
+ * idle or no workers at all. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_threads_created = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_threads_started = 0;
+
 #define ARKCHEMY_THREAD_TABLE_SIZE 32
 #define ARKCHEMY_THREAD_SPECIFIC_SLOTS 14 /* OS_THREAD_SPECIFIC_0..13; 14/15 are wut-reserved */
 
@@ -166,6 +182,7 @@ static inline void ppc_import_coreinit_OSCreateThread(PpcContext *ctx) {
     te->detached = 0;
     te->suspend_count = 1; /* real: created suspended, confirmed via Cemu's __OSCreateThreadInternal2 */
     te->shared = ctx->shared; /* genuine shared memory with the creating thread */
+    g_ppc_threads_created++;
     ctx->r[3] = 1; /* BOOL TRUE */
 }
 
@@ -176,6 +193,7 @@ static inline void ppc_import_coreinit_OSResumeThread(PpcContext *ctx) {
     if (te->suspend_count > 0) te->suspend_count--;
     if (te->suspend_count == 0 && !te->started) {
         te->started = 1;
+        g_ppc_threads_started++;
         pthread_create(&te->pthread, NULL, arkchemy_thread_trampoline, te);
     }
     ctx->r[3] = (uint32_t)prev;
