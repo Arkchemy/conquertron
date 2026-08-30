@@ -644,6 +644,16 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
          * corrupted the memory-context global. lr survives into the callee and
          * points at the code responsible. */
         ppc_debug_watch(0xf0000020u, ctx->lr);
+        /* Registers at the moment of the store. Which register, plus what
+         * displacement, produced this address is otherwise guesswork -- and
+         * guessing it once already cost a build: the address was 24 bytes past
+         * a global, an atomic refcount increment sat at exactly +0x18 in the
+         * function lr pointed into, and the inference that its `this` was
+         * therefore the culprit was disproved by a probe that never fired.
+         * Recording the registers turns that into a lookup. */
+        ppc_debug_watch(0xf0000021u, ctx->r[3]);
+        ppc_debug_watch(0xf0000022u, ctx->r[29]);
+        ppc_debug_watch(0xf0000023u, ctx->r[31]);
     }
     if (addr == g_ppc_watch_store_addr2) {
         ppc_debug_watch(0xf0000005u, val);
