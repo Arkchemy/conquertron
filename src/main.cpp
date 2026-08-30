@@ -392,6 +392,20 @@ int main(int argc, char **argv) {
         out << "        g_ppc_dispatch_miss_r3   = ctx->r[3];\n";
         out << "        g_ppc_dispatch_miss_vt   = ctx->r[3] ? ppc_load_u32(ctx, ctx->r[3]) : 0u;\n";
         out << "      }\n";
+        // Characterise the POPULATION, not just the first arrival.
+        //
+        // Recording only the first miss made a rare one-off look like the main
+        // event: its this=0 sent the investigation down a chain that turned
+        // out to be normal retail behaviour (Cemu confirms the real game also
+        // passes a null pool to igPool::activate and reaches the same branch).
+        // Splitting null targets from real unresolved addresses, and keeping
+        // the most recent real one, says what the other ~74,000 actually are.
+        out << "      if (addr == 0u) g_ppc_dispatch_miss_null++;\n";
+        out << "      else {\n";
+        out << "        g_ppc_dispatch_miss_real++;\n";
+        out << "        g_ppc_dispatch_miss_last_addr = addr;\n";
+        out << "        g_ppc_dispatch_miss_last_lr   = ctx->lr;\n";
+        out << "      }\n";
         out << "      g_ppc_dispatch_miss_count++;\n";
         out << "      return;\n";
         out << "    }\n";
