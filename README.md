@@ -119,6 +119,28 @@ above, so `lr` is exact. The dispatch-miss counter and the store watch both
 record `lr` and the relevant registers now; inference had been choosing the
 wrong function and, twice, the wrong argument.
 
+### Instrumentation: a store watch cannot answer ordering questions
+
+The store watch lives inside `ppc_store_u32`, so it sees only writes routed
+through that helper. A memset shim, a memcpy, anything writing
+`ctx->shared->mem` directly, is invisible to it. It also reports the most
+recent write, which is right for catching a corrupting store and useless for
+asking *when* a value changed.
+
+Both limits bit at once. A global was written correctly at call 3,625 and read
+back as zero at call 414,746, while the watch reported four writes whose latest
+arrived at 428,352 — after the null had already been read, so a consequence
+rather than the cause. Which write zeroed it, or whether any of them did, was
+not answerable from what the watch kept.
+
+`ppc_poll_watch_mem` reads the watched address at every function entry and
+records each *transition* — call count, new value, and the `pc`/`lr` running at
+the time — keeping the first several rather than only the latest. It sees
+changes whoever made them. `ppc_sample_pc` shares that call site and records
+every 4096th entry into a small ring, which is what names a loop: the
+per-frame `last_pc` flickers between half a dozen addresses without saying
+which loop they belong to.
+
 ### Known design defect: the synthetic/real address split
 
 **Partly addressed.** `.text` now keeps its real address, which is measured and
