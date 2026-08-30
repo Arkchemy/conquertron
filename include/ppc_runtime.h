@@ -577,6 +577,18 @@ volatile uint32_t g_ppc_dispatch_miss_last_r3 = 0;
 __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_dispatch_miss_last_vt = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_first_store_count = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_first_store_val = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_first_store_lr = 0;
 
 /* Returns non-zero if the caller should DROP this store.
  *
@@ -654,6 +666,17 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
         ppc_debug_watch(0xf0000021u, ctx->r[3]);
         ppc_debug_watch(0xf0000022u, ctx->r[29]);
         ppc_debug_watch(0xf0000023u, ctx->r[31]);
+        /* The FIRST write, kept separately. The watch otherwise reports only
+         * the latest, which is fine for finding a corrupting store and useless
+         * for ordering questions -- and the current one is an ordering
+         * question: a global is read while still zero, and something publishes
+         * it later. Recording when it is first written, against
+         * g_ppc_fn_call_count, makes "before or after" a measurement. */
+        if (g_ppc_first_store_count == 0u) {
+            g_ppc_first_store_count = (uint32_t)g_ppc_fn_call_count;
+            g_ppc_first_store_val   = val;
+            g_ppc_first_store_lr    = ctx->lr;
+        }
     }
     if (addr == g_ppc_watch_store_addr2) {
         ppc_debug_watch(0xf0000005u, val);
