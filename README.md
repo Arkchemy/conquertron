@@ -84,6 +84,41 @@ crash, no warning and no unhandled instruction:
   formatted as `"(null)/"`, 1,335 globals reading as never-written, five
   filesystem classes that never registered, and a poisoned allocator free list.
 
+### Known design defect: guest-memory masking hides the bug
+
+Every memory accessor masks its address with `(PPC_MEM_SIZE - 1)`, which is
+what lets recompiled code use guest addresses directly. The cost is that a null
+or wild pointer becomes a **legal** access instead of a fault, so the program
+never stops where the bug is.
+
+Traced in full on 2026-08-30: a null memory pool produced a null allocation,
+element addresses computed from that null base came out as small integers —
+`0xc`, `0x34D4`, `0x47430` — used as pointers, and an ordinary flag write four
+bytes into one of them landed on the engine's memory-context global. Every
+later read then treated that value as an object and called through it, giving
+24,152 silent indirect calls. On real hardware the first bad write would have
+crashed. Here it produced days of symptoms in unrelated subsystems.
+
+Two mitigations exist: stores into the first 16 bytes are dropped rather than
+performed (`ARKCHEMY_DROP_NULL_WRITES`), and `ppc_dispatch` counts the calls it
+cannot resolve instead of returning silently. Neither is a fix for the design.
+
+### Instrumentation: record `lr`, not the entry PC
+
+`g_ppc_current_pc` is set when a recompiled function is entered and never
+restored when it returns, so any probe reporting it names the innermost
+function **entered** rather than the code responsible.
+
+Over one investigation it named `_main` for a low-memory write,
+`_savegpr_14_l` for 277,834 dispatch misses, `igMetaField::construct` — whose
+entire body is a single `blr` — for null virtual calls, and a nine-instruction
+getter for a store that corrupted a global. Four wrong answers from one field.
+
+Every emitted call writes its own return address into `ctx->lr` on the line
+above, so `lr` is exact. The dispatch-miss counter and the store watch both
+record `lr` and the relevant registers now; inference had been choosing the
+wrong function and, twice, the wrong argument.
+
 ### Known design defect: the synthetic/real address split
 
 **Partly addressed.** `.text` now keeps its real address, which is measured and
