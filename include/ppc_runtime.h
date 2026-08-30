@@ -590,6 +590,51 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_first_store_lr = 0;
 
+/* A POLLED memory watch, as distinct from the store watch above.
+ *
+ * The store watch only sees writes that go through ppc_store_u32 or
+ * ppc_store_u8. A memset shim, a memcpy, or anything else that writes
+ * ctx->shared->mem directly is invisible to it. On 2026-08-30 that gap
+ * mattered: the store watch reported exactly four writes to the memory
+ * context global, the first of them correct, yet the value read 411,121
+ * calls later was zero. Either one of the other three wrote zero, or
+ * something that never calls ppc_store_u32 did, and the store watch cannot
+ * distinguish those.
+ *
+ * Polling the address at every function entry can. It records the value
+ * changing whoever changed it, with the function running at the time, and
+ * keeps the first few transitions rather than only the latest -- the
+ * question is which write zeroed it, which is a question about history.
+ * Cost is one load per recompiled call, alongside the watch-slot loop that
+ * is already there. */
+#define ARKCHEMY_MEMWATCH_HISTORY 8
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_memwatch_n = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_memwatch_call[ARKCHEMY_MEMWATCH_HISTORY];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_memwatch_val[ARKCHEMY_MEMWATCH_HISTORY];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_memwatch_pc[ARKCHEMY_MEMWATCH_HISTORY];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_memwatch_lr[ARKCHEMY_MEMWATCH_HISTORY];
+/* 0xFFFFFFFF, not 0: the value being watched starts at zero, and starting
+ * the comparison there would silently swallow the first transition. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_memwatch_last = 0xFFFFFFFFu;
+
 /* Returns non-zero if the caller should DROP this store.
  *
  * A store into the first 16 bytes is a null-pointer dereference. On real
@@ -641,6 +686,23 @@ static inline int ppc_note_null_write(uint32_t addr, uint32_t val) {
     (void)addr; (void)val;
 #endif
     return 0;
+}
+
+static inline void ppc_poll_watch_mem(const PpcContext *ctx) {
+    if (g_ppc_watch_store_addr == 0u) return;
+    const uint8_t *p = &ctx->shared->mem[g_ppc_watch_store_addr & (PPC_MEM_SIZE - 1)];
+    uint32_t v = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+                 ((uint32_t)p[2] << 8)  | (uint32_t)p[3];
+    if (v == g_ppc_memwatch_last) return;
+    g_ppc_memwatch_last = v;
+    uint32_t n = g_ppc_memwatch_n;
+    if (n < ARKCHEMY_MEMWATCH_HISTORY) {
+        g_ppc_memwatch_call[n] = (uint32_t)g_ppc_fn_call_count;
+        g_ppc_memwatch_val[n]  = v;
+        g_ppc_memwatch_pc[n]   = g_ppc_current_pc;
+        g_ppc_memwatch_lr[n]   = ctx->lr;
+    }
+    g_ppc_memwatch_n = n + 1u;
 }
 
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {

@@ -265,6 +265,11 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
     out << "  for (int __w = 0; __w < ARKCHEMY_WATCH_SLOTS; __w++) { if (g_ppc_current_pc == g_ppc_watch[__w].pc) { "
            "g_ppc_watch[__w].r3 = ctx->r[3]; g_ppc_watch[__w].r4 = ctx->r[4]; g_ppc_watch[__w].r5 = ctx->r[5]; g_ppc_watch[__w].r6 = ctx->r[6]; "
            "g_ppc_watch[__w].hit_count++; g_ppc_watch[__w].last_hit_call_count = g_ppc_fn_call_count; } }\n";
+    // And a polled read of the watched address. The store watch beside it
+    // only sees writes routed through ppc_store_u32/u8; anything writing
+    // ctx->shared->mem directly -- a memset shim, a memcpy -- is invisible
+    // to it. Polling here catches the value changing whoever changed it.
+    out << "  ppc_poll_watch_mem(ctx);\n";
 
     for (size_t i = 0; i < insns.size(); i++) {
         const cs_insn &insn = insns[i];
