@@ -385,6 +385,40 @@ volatile uint32_t g_arkchemy_fs_last_cb = 0;
 __attribute__((weak))
 #endif
 volatile uint32_t g_arkchemy_fs_last_msgq = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+/* Enough detail to settle the whole read in one hardware round rather than
+ * one question per round: what was asked for, what came back, what the data
+ * looks like, how big the file actually is, and whether the completion
+ * callback did any work or returned immediately. bootstrap.bld is 198,695
+ * bytes and the engine read 131,072 at offset 0, so a second read is owed
+ * and was never issued -- these say which link in that chain is broken. */
+volatile uint32_t g_arkchemy_fs_last_size = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_last_count = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile int32_t  g_arkchemy_fs_last_result = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_last_buf = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_last_filesize = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_head[4] = {0,0,0,0};   /* first 16 bytes read */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint64_t g_arkchemy_fs_cb_work = 0;           /* guest calls made inside the callback */
 
 static inline void ppc_import_coreinit_FSOpenFile(PpcContext *ctx) {
     char guest_path[512], real_path[512], mode[8];
@@ -730,11 +764,16 @@ static inline void ppc_fs_invoke_async_callback(PpcContext *ctx, uint32_t async_
     g_arkchemy_fs_last_msgq = ppc_load_u32(ctx, async_data_addr + 0x8);
     if (callback_addr == 0) { g_arkchemy_fs_cb_skipped++; return; } /* ioMsgQueue-style completion -- known gap */
     g_arkchemy_fs_cb_invoked++;
+    extern volatile uint64_t g_ppc_fn_call_count;
+    uint64_t before = g_ppc_fn_call_count;
     ctx->r[3] = client;
     ctx->r[4] = block;
     ctx->r[5] = (uint32_t)status;
     ctx->r[6] = param;
     ppc_dispatch(ctx, callback_addr);
+    /* A completion that returns having called nothing is a completion that
+     * did not advance the loader's state machine. */
+    g_arkchemy_fs_cb_work = g_ppc_fn_call_count - before;
 }
 
 static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
@@ -747,6 +786,11 @@ static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
     g_arkchemy_fs_async_read_bytes += size * count;
     g_arkchemy_fs_last_read_handle = handle;
     g_arkchemy_fs_last_read_pos = pos;
+    g_arkchemy_fs_last_size = size;
+    g_arkchemy_fs_last_count = count;
+    g_arkchemy_fs_last_buf = buffer_addr;
+    if (f) { long cur = ftell(f); fseek(f, 0, SEEK_END);
+             g_arkchemy_fs_last_filesize = (uint32_t)ftell(f); fseek(f, cur, SEEK_SET); }
     if (!f) {
         result = ARKCHEMY_FS_STATUS_NOT_FOUND;
     } else if (size == 0 || count == 0) {
@@ -767,6 +811,8 @@ static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
         }
         result = (int32_t)elements_read;
     }
+    g_arkchemy_fs_last_result = result;
+    for (int w = 0; w < 4; w++) g_arkchemy_fs_head[w] = ppc_load_u32(ctx, buffer_addr + w * 4);
     ppc_fs_invoke_async_callback(ctx, async_data_addr, client, block, result);
     ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
