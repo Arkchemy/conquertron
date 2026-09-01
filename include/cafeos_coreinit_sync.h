@@ -76,7 +76,32 @@ enum {
  * for both OSSignalEvent and OSSignalEventAll in AUTO mode.
  */
 
-#define ARKCHEMY_SYNC_TABLE_SIZE 64
+/* Was 64. An engine of this size uses far more than 64 OSMutexes --
+ * igCafeMutex alone is constructed freely -- and the old value was only
+ * ever "enough" because the boot had not got far enough to need more.
+ * Raising it postpones exhaustion; the handling below is what stops
+ * exhaustion being a null dereference. */
+#define ARKCHEMY_SYNC_TABLE_SIZE 256
+
+/* Sync-table diagnostics. Indices: 0 = mutex, 1 = event, 2 = semaphore.
+ *
+ * These tables never free an entry, so the claim count IS the high-water
+ * mark. Exposed so a run can report how close it came to the limit rather
+ * than discovering the limit by crashing. */
+extern unsigned g_arkchemy_sync_used[3];
+extern unsigned g_arkchemy_sync_exhausted[3];
+
+/* Event signalling, for the open question of whether the job queue's
+ * sleeping workers are ever woken: signals counts OSSignalEvent and
+ * OSSignalEventAll, wakes counts waits that returned because the event was
+ * signalled, and timeouts counts waits that gave up. A signal count that
+ * climbs beside a flat wake count means the wrong event is being signalled;
+ * both flat means nothing is producing work at all. */
+extern unsigned g_arkchemy_event_signals;
+extern unsigned g_arkchemy_event_wakes;
+extern unsigned g_arkchemy_event_timeouts;
+extern uint32_t g_arkchemy_event_last_signal;
+extern uint32_t g_arkchemy_event_last_wait;
 
 /* --- OSMutex (real, recursive) --- */
 typedef struct {
@@ -87,6 +112,8 @@ typedef struct {
 /* Real definitions in cafeos_state.c -- see its own file comment. */
 extern ArkchemyMutexEntry g_arkchemy_mutexes[ARKCHEMY_SYNC_TABLE_SIZE];
 extern pthread_mutex_t g_arkchemy_mutex_table_lock;
+/* Aliasing fallback used only once the table is full -- see arkchemy_mutex_get. */
+extern pthread_mutex_t g_arkchemy_mutex_fallback;
 
 /* Finds (or, if requested, lazily creates) the real pthread_mutex_t
  * backing a given guest OSMutex address. Lazy creation on first use
@@ -108,6 +135,7 @@ static inline pthread_mutex_t *arkchemy_mutex_get(uint32_t addr) {
     }
     if (result == NULL && free_slot >= 0) {
         pthread_mutexattr_t attr;
+        g_arkchemy_sync_used[0]++;
         pthread_mutexattr_init(&attr);
         pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
         pthread_mutex_init(&g_arkchemy_mutexes[free_slot].mutex, &attr);
@@ -115,6 +143,16 @@ static inline pthread_mutex_t *arkchemy_mutex_get(uint32_t addr) {
         g_arkchemy_mutexes[free_slot].guest_addr = addr;
         g_arkchemy_mutexes[free_slot].active = 1;
         result = &g_arkchemy_mutexes[free_slot].mutex;
+    }
+    if (result == NULL) {
+        /* Table full. Every caller here dereferences the result immediately,
+         * so returning NULL is a null dereference with nothing to point at
+         * the cause. A shared recursive fallback is wrong -- unrelated
+         * OSMutexes alias onto one lock -- but it is wrong *visibly*: the
+         * exhausted counter is reported every frame. Prefer a diagnosable
+         * wrong answer to an undiagnosable crash. */
+        g_arkchemy_sync_exhausted[0]++;
+        result = &g_arkchemy_mutex_fallback;
     }
     pthread_mutex_unlock(&g_arkchemy_mutex_table_lock);
     return result;
@@ -141,6 +179,7 @@ typedef struct {
 /* Real definitions in cafeos_state.c -- see its own file comment. */
 extern ArkchemyEventEntry g_arkchemy_events[ARKCHEMY_SYNC_TABLE_SIZE];
 extern pthread_mutex_t g_arkchemy_event_table_lock;
+extern ArkchemyEventEntry g_arkchemy_event_fallback;
 
 static inline ArkchemyEventEntry *arkchemy_event_get(uint32_t addr, int create_with_value, int create_with_mode) {
     int i, free_slot = -1;
@@ -155,6 +194,7 @@ static inline ArkchemyEventEntry *arkchemy_event_get(uint32_t addr, int create_w
     }
     if (result == NULL && free_slot >= 0) {
         ArkchemyEventEntry *e = &g_arkchemy_events[free_slot];
+        g_arkchemy_sync_used[1]++;
         pthread_mutex_init(&e->lock, NULL);
         pthread_cond_init(&e->cond, NULL);
         e->guest_addr = addr;
@@ -164,6 +204,10 @@ static inline ArkchemyEventEntry *arkchemy_event_get(uint32_t addr, int create_w
         e->epoch = 0;
         e->waiting_count = 0;
         result = e;
+    }
+    if (result == NULL) {                    /* see arkchemy_mutex_get */
+        g_arkchemy_sync_exhausted[1]++;
+        result = &g_arkchemy_event_fallback;
     }
     pthread_mutex_unlock(&g_arkchemy_event_table_lock);
     return result;
@@ -187,6 +231,7 @@ static inline void ppc_import_coreinit_OSInitEvent(PpcContext *ctx) {
 
 static inline void ppc_import_coreinit_OSSignalEvent(PpcContext *ctx) {
     ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1 /* AUTO default if never Init'd */);
+    g_arkchemy_event_signals++; g_arkchemy_event_last_signal = ctx->r[3];
     pthread_mutex_lock(&e->lock);
     if (!e->signaled) {
         if (e->mode == 1 /* AUTO */) {
@@ -206,6 +251,7 @@ static inline void ppc_import_coreinit_OSSignalEvent(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSSignalEventAll(PpcContext *ctx) {
+    g_arkchemy_event_signals++; g_arkchemy_event_last_signal = ctx->r[3];
     ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
     pthread_mutex_lock(&e->lock);
     if (!e->signaled) {
@@ -267,6 +313,7 @@ static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) {
      * sweep did not look at. */
     int64_t timeout_ticks = (int64_t)((((uint64_t)ctx->r[5]) << 32) | (uint64_t)ctx->r[6]);
     int woke_signaled = 1;
+    g_arkchemy_event_last_wait = ctx->r[3];
     pthread_mutex_lock(&e->lock);
     if (e->signaled) {
         if (e->mode == 1) e->signaled = 0;
@@ -304,6 +351,7 @@ static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) {
         }
     }
     pthread_mutex_unlock(&e->lock);
+    if (woke_signaled) g_arkchemy_event_wakes++; else g_arkchemy_event_timeouts++;
     ctx->r[3] = (uint32_t)woke_signaled;
 }
 
@@ -356,6 +404,7 @@ typedef struct {
 /* Real definitions in cafeos_state.c -- see its own file comment. */
 extern ArkchemySemEntry g_arkchemy_sems[ARKCHEMY_SYNC_TABLE_SIZE];
 extern pthread_mutex_t g_arkchemy_sem_table_lock;
+extern ArkchemySemEntry g_arkchemy_sem_fallback;
 
 static inline ArkchemySemEntry *arkchemy_sem_get(uint32_t addr, int create_with_count) {
     int i, free_slot = -1;
@@ -375,7 +424,12 @@ static inline ArkchemySemEntry *arkchemy_sem_get(uint32_t addr, int create_with_
         s->guest_addr = addr;
         s->active = 1;
         s->count = create_with_count;
+        g_arkchemy_sync_used[2]++;
         result = s;
+    }
+    if (result == NULL) {                    /* see arkchemy_mutex_get */
+        g_arkchemy_sync_exhausted[2]++;
+        result = &g_arkchemy_sem_fallback;
     }
     pthread_mutex_unlock(&g_arkchemy_sem_table_lock);
     return result;

@@ -102,6 +102,21 @@ pthread_mutex_t g_arkchemy_event_table_lock = PTHREAD_MUTEX_INITIALIZER;
 ArkchemySemEntry g_arkchemy_sems[ARKCHEMY_SYNC_TABLE_SIZE];
 pthread_mutex_t g_arkchemy_sem_table_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Aliasing fallbacks, used only after a sync table fills. Wrong semantics
+ * on purpose, and counted so the wrongness is visible -- see
+ * arkchemy_mutex_get in cafeos_coreinit_sync.h. */
+pthread_mutex_t g_arkchemy_mutex_fallback = PTHREAD_MUTEX_INITIALIZER;
+ArkchemyEventEntry g_arkchemy_event_fallback = { 0, 1, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0, 1, 0, 0 };
+ArkchemySemEntry g_arkchemy_sem_fallback = { 0, 1, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0 };
+
+unsigned g_arkchemy_sync_used[3];
+unsigned g_arkchemy_sync_exhausted[3];
+unsigned g_arkchemy_event_signals;
+unsigned g_arkchemy_event_wakes;
+unsigned g_arkchemy_event_timeouts;
+uint32_t g_arkchemy_event_last_signal;
+uint32_t g_arkchemy_event_last_wait;
+
 int g_ax_initialized = 0;
 int g_arkchemy_ax_voice_used[ARKCHEMY_AXVOICE_MAX];
 
