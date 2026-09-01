@@ -362,6 +362,29 @@ volatile uint32_t g_arkchemy_fs_last_read_handle = 0;
 __attribute__((weak))
 #endif
 volatile uint32_t g_arkchemy_fs_last_read_pos = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+/* The async completion path has two shapes: a callback pointer, or an
+ * ioMsgQueue the caller polls. The shim serves the first and silently
+ * returns for the second, which is a documented gap -- but nothing recorded
+ * WHICH shape the game actually used, so the gap was never known to be hit.
+ * One 128 KB read at position 0 and then nothing forever is exactly what an
+ * undelivered completion looks like, and exactly what a delivered-but-
+ * mishandled one looks like too. These separate them. */
+volatile uint32_t g_arkchemy_fs_cb_invoked = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_cb_skipped = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_last_cb = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_last_msgq = 0;
 
 static inline void ppc_import_coreinit_FSOpenFile(PpcContext *ctx) {
     char guest_path[512], real_path[512], mode[8];
@@ -703,7 +726,10 @@ static inline void ppc_import_coreinit_FSRemove(PpcContext *ctx) {
 static inline void ppc_fs_invoke_async_callback(PpcContext *ctx, uint32_t async_data_addr, uint32_t client, uint32_t block, int32_t status) {
     uint32_t callback_addr = ppc_load_u32(ctx, async_data_addr + 0x0);
     uint32_t param = ppc_load_u32(ctx, async_data_addr + 0x4);
-    if (callback_addr == 0) return; /* ioMsgQueue-style completion -- known gap, see file comment */
+    g_arkchemy_fs_last_cb = callback_addr;
+    g_arkchemy_fs_last_msgq = ppc_load_u32(ctx, async_data_addr + 0x8);
+    if (callback_addr == 0) { g_arkchemy_fs_cb_skipped++; return; } /* ioMsgQueue-style completion -- known gap */
+    g_arkchemy_fs_cb_invoked++;
     ctx->r[3] = client;
     ctx->r[4] = block;
     ctx->r[5] = (uint32_t)status;
