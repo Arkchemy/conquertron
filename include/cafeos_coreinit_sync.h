@@ -159,7 +159,15 @@ static inline pthread_mutex_t *arkchemy_mutex_get(uint32_t addr) {
 }
 
 static inline void ppc_import_coreinit_OSInitMutex(PpcContext *ctx) { (void)arkchemy_mutex_get(ctx->r[3]); }
-static inline void ppc_import_coreinit_OSLockMutex(PpcContext *ctx) { pthread_mutex_lock(arkchemy_mutex_get(ctx->r[3])); }
+/* Pump deferred FS completions here. While the file scheduler is idle these
+ * mutex calls are the hot path -- roughly 31 per frame -- so a completion
+ * queued by a read is delivered within a frame, and always after the function
+ * that issued the read has returned. cafeos_coreinit_fs.h is included before
+ * this header, which is what makes the call legal. */
+static inline void ppc_import_coreinit_OSLockMutex(PpcContext *ctx) {
+    arkchemy_fs_pump_completions(ctx);
+    pthread_mutex_lock(arkchemy_mutex_get(ctx->r[3]));
+}
 static inline void ppc_import_coreinit_OSUnlockMutex(PpcContext *ctx) { pthread_mutex_unlock(arkchemy_mutex_get(ctx->r[3])); }
 static inline void ppc_import_coreinit_OSTryLockMutex(PpcContext *ctx) {
     ctx->r[3] = (pthread_mutex_trylock(arkchemy_mutex_get(ctx->r[3])) == 0) ? 1u : 0u;

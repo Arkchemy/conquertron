@@ -420,6 +420,55 @@ __attribute__((weak))
 #endif
 volatile uint64_t g_arkchemy_fs_cb_work = 0;           /* guest calls made inside the callback */
 
+/* ---- Deferred async completion ------------------------------------------
+ *
+ * Cafe OS delivers an FS completion callback LATER, on its own I/O thread,
+ * after the FSReadFileWithPosAsync call has already returned to the caller.
+ * This shim used to invoke it inline, before returning, which inverts the
+ * order the game is written against. Measured on hardware 2026-09-01:
+ *
+ *   2155cd0: bl FSReadFileWithPosAsync   <- callback ran inside this
+ *   2155cd4: stw r29, 0x1c(r31)          <- caller writes state AFTER it
+ *
+ * igCafeStorageDevice::read sets up the work item, issues the read, and then
+ * stores into the object. Running the completion inside the call meant
+ * igFileWorkItem::setStatus marked the item done and igMemoryPool::free
+ * released the async block BEFORE that store -- so the caller then wrote over
+ * completed state, with a pointer to a block that had just been freed. The
+ * read itself was perfect: a valid IGA archive header, version 8, 106 files,
+ * landed correctly in guest memory, and the callback took its success path.
+ * Only the ordering was wrong, and the boot stalled for it.
+ *
+ * Completions are now queued and delivered at the next safe preemption point
+ * -- a later import call, which is always between guest instructions and
+ * after the initiating function has returned. */
+#define ARKCHEMY_FS_ASYNC_QUEUE 16
+typedef struct { uint32_t async_data, client, block; int32_t status; } ArkchemyFsPending;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+ArkchemyFsPending g_arkchemy_fs_pending[ARKCHEMY_FS_ASYNC_QUEUE];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_pending_n = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_queued = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_delivered = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_dropped = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile int g_arkchemy_fs_pumping = 0;
+
 static inline void ppc_import_coreinit_FSOpenFile(PpcContext *ctx) {
     char guest_path[512], real_path[512], mode[8];
     g_arkchemy_fs_open_calls++;
@@ -776,6 +825,25 @@ static inline void ppc_fs_invoke_async_callback(PpcContext *ctx, uint32_t async_
     g_arkchemy_fs_cb_work = g_ppc_fn_call_count - before;
 }
 
+
+/* Deliver any queued FS completions. Safe to call from any import site: it is
+ * between guest instructions, and the function that issued the read has
+ * already returned. Re-entrancy guarded, because a completion callback may
+ * itself call into a shim that pumps. */
+static inline void arkchemy_fs_pump_completions(PpcContext *ctx) {
+    if (g_arkchemy_fs_pending_n == 0 || g_arkchemy_fs_pumping) return;
+    g_arkchemy_fs_pumping = 1;
+    while (g_arkchemy_fs_pending_n > 0) {
+        ArkchemyFsPending p = g_arkchemy_fs_pending[0];
+        for (uint32_t k = 1; k < g_arkchemy_fs_pending_n; k++)
+            g_arkchemy_fs_pending[k-1] = g_arkchemy_fs_pending[k];
+        g_arkchemy_fs_pending_n--;
+        g_arkchemy_fs_delivered++;
+        ppc_fs_invoke_async_callback(ctx, p.async_data, p.client, p.block, p.status);
+    }
+    g_arkchemy_fs_pumping = 0;
+}
+
 static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
     uint32_t client = ctx->r[3], block = ctx->r[4];
     uint32_t buffer_addr = ctx->r[5], size = ctx->r[6], count = ctx->r[7], pos = ctx->r[8], handle = ctx->r[9];
@@ -813,7 +881,13 @@ static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
     }
     g_arkchemy_fs_last_result = result;
     for (int w = 0; w < 4; w++) g_arkchemy_fs_head[w] = ppc_load_u32(ctx, buffer_addr + w * 4);
-    ppc_fs_invoke_async_callback(ctx, async_data_addr, client, block, result);
+    if (g_arkchemy_fs_pending_n < ARKCHEMY_FS_ASYNC_QUEUE) {
+        ArkchemyFsPending *q = &g_arkchemy_fs_pending[g_arkchemy_fs_pending_n++];
+        q->async_data = async_data_addr; q->client = client; q->block = block; q->status = result;
+        g_arkchemy_fs_queued++;
+    } else {
+        g_arkchemy_fs_dropped++;   /* never silently: reported every frame */
+    }
     ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
