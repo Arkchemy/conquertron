@@ -336,8 +336,36 @@ static inline void ppc_import_coreinit_FSIsEof(PpcContext *ctx) {
 /* FSStatus FSOpenFile(FSClient *client, FSCmdBlock *block, const char *path,
  *                      const char *mode, FSFileHandle *handle, FSErrorFlag errorMask);
  * r3=client r4=block r5=path r6=mode r7=out_handle r8=errorMask */
+/* The counters above cover the SYNCHRONOUS read only. An engine with a file
+ * scheduler and worker threads reads asynchronously, so those two said
+ * nothing about the path that matters -- an instrument that reports nothing
+ * proves nothing until it is shown capable of reporting something. Counted
+ * separately rather than folded in, because "reads are happening, just not
+ * synchronously" and "no reads at all" are different answers. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_async_read_calls = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_async_read_bytes = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_open_calls = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_last_read_handle = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_fs_last_read_pos = 0;
+
 static inline void ppc_import_coreinit_FSOpenFile(PpcContext *ctx) {
     char guest_path[512], real_path[512], mode[8];
+    g_arkchemy_fs_open_calls++;
     ppc_fs_read_cstr(ctx, ctx->r[5], guest_path, sizeof(guest_path));
     ppc_fs_read_cstr(ctx, ctx->r[6], mode, sizeof(mode));
     ppc_fs_translate_path(guest_path, real_path, sizeof(real_path));
@@ -395,6 +423,7 @@ volatile uint32_t g_arkchemy_fs_read_calls = 0;
 __attribute__((weak))
 #endif
 volatile uint32_t g_arkchemy_fs_read_bytes = 0;
+
 
 static inline void ppc_import_coreinit_FSReadFile(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(ctx->r[8]);
@@ -688,6 +717,10 @@ static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
     uint32_t async_data_addr = ppc_load_u32(ctx, ctx->r[1] + 12);
     FILE *f = ppc_fs_get_handle(handle);
     int32_t result;
+    g_arkchemy_fs_async_read_calls++;
+    g_arkchemy_fs_async_read_bytes += size * count;
+    g_arkchemy_fs_last_read_handle = handle;
+    g_arkchemy_fs_last_read_pos = pos;
     if (!f) {
         result = ARKCHEMY_FS_STATUS_NOT_FOUND;
     } else if (size == 0 || count == 0) {
