@@ -258,7 +258,14 @@ static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) {
      * uses. Returns real TRUE if actually signaled, FALSE on a real
      * timeout -- not the old "always true, never times out" stand-in. */
     ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
-    int64_t timeout_ticks = ((int64_t)ctx->r[4] << 32) | (int64_t)ctx->r[5];
+    /* PPC EABI: a 64-bit argument starts on an ODD register, so with the
+     * OSEvent* in r3 the OSTime is in r5:r6 -- NOT r4:r5. This read r4:r5
+     * until 2026-09-01. r4 is never written by the caller, so the high word
+     * was whatever the previous code left behind; the observed spin had
+     * r4=0x0452cfac against a real timeout of 0x1f:0x0010a444. Same defect
+     * as the Atomic64 shims fixed on 2026-08-30, in the file that fix's
+     * sweep did not look at. */
+    int64_t timeout_ticks = (int64_t)((((uint64_t)ctx->r[5]) << 32) | (uint64_t)ctx->r[6]);
     int woke_signaled = 1;
     pthread_mutex_lock(&e->lock);
     if (e->signaled) {
@@ -267,10 +274,22 @@ static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) {
         woke_signaled = 0; /* zero/negative timeout, not yet signaled -- immediate timeout */
     } else {
         struct timespec deadline;
-        int64_t ns = (timeout_ticks * 1000000000LL) / ARKCHEMY_ESPRESSO_TIMER_CLOCK;
+        /* Split seconds from the remainder before scaling. ticks * 1000000000
+         * overflows int64 above ~9.2e9 ticks, which is only ~148 seconds at
+         * this clock -- well inside the range real timeouts use, and the wrap
+         * lands negative as often as not, producing an already-expired
+         * deadline and a busy spin. OSTicksToCalendarTime below already does
+         * it this way. The remainder is < TIMER_CLOCK, so the multiply is
+         * bounded by ~6.2e16 and cannot overflow. */
+        int64_t secs = timeout_ticks / ARKCHEMY_ESPRESSO_TIMER_CLOCK;
+        int64_t rem  = timeout_ticks % ARKCHEMY_ESPRESSO_TIMER_CLOCK;
+        long    ns   = (long)((rem * 1000000000LL) / ARKCHEMY_ESPRESSO_TIMER_CLOCK);
+        /* A deadline further out than this is indistinguishable from waiting
+         * forever, and keeps time_t away from its own overflow. */
+        if (secs > 31536000LL) secs = 31536000LL;   /* one year */
         clock_gettime(CLOCK_REALTIME, &deadline);
-        deadline.tv_sec += (time_t)(ns / 1000000000LL);
-        deadline.tv_nsec += (long)(ns % 1000000000LL);
+        deadline.tv_sec += (time_t)secs;
+        deadline.tv_nsec += ns;
         if (deadline.tv_nsec >= 1000000000L) { deadline.tv_nsec -= 1000000000L; deadline.tv_sec += 1; }
         uint64_t my_epoch = e->epoch;
         e->waiting_count++;
@@ -477,12 +496,17 @@ static inline void ppc_import_coreinit_OSGetSystemInfo(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSSleepTicks(PpcContext *ctx) {
-    int64_t ticks = ((int64_t)ctx->r[3] << 32) | (int64_t)ctx->r[4];
+    /* OSSleepTicks(OSTime ticks) -- the 64-bit value is the FIRST argument,
+     * so r3:r4 is correct here; EABI's odd-register rule is already
+     * satisfied by r3. Only the scaling needed fixing. */
+    int64_t ticks = (int64_t)((((uint64_t)ctx->r[3]) << 32) | (uint64_t)ctx->r[4]);
     if (ticks > 0) {
-        int64_t ns = (ticks * 1000000000LL) / ARKCHEMY_ESPRESSO_TIMER_CLOCK;
+        /* Same overflow as OSWaitEventWithTimeout had: divide first. */
+        int64_t secs = ticks / ARKCHEMY_ESPRESSO_TIMER_CLOCK;
+        int64_t rem  = ticks % ARKCHEMY_ESPRESSO_TIMER_CLOCK;
         struct timespec ts;
-        ts.tv_sec = (time_t)(ns / 1000000000LL);
-        ts.tv_nsec = (long)(ns % 1000000000LL);
+        ts.tv_sec  = (time_t)secs;
+        ts.tv_nsec = (long)((rem * 1000000000LL) / ARKCHEMY_ESPRESSO_TIMER_CLOCK);
         nanosleep(&ts, NULL);
     }
 }
