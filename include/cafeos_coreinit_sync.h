@@ -311,6 +311,15 @@ static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) {
      * ARKCHEMY_ESPRESSO_TIMER_CLOCK this file's OSSleepTicks already
      * uses. Returns real TRUE if actually signaled, FALSE on a real
      * timeout -- not the old "always true, never times out" stand-in. */
+    /* Deliver any queued FS completion BEFORE parking. This is the path that
+     * still runs when every other thread is blocked -- jqWorkerSleep's two
+     * workers keep calling this even with the game thread stopped dead. The
+     *2026-09-01 mutex-only pump deadlocked exactly here: the completion was
+     * queued, the main thread blocked waiting for it, the workers parked, and
+     * nothing ever took a mutex again to run the pump. Delivering from a
+     * parked worker is also nearer what Cafe OS does than delivering from
+     * whoever next happens to lock something. */
+    arkchemy_fs_pump_completions(ctx);
     ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
     /* PPC EABI: a 64-bit argument starts on an ODD register, so with the
      * OSEvent* in r3 the OSTime is in r5:r6 -- NOT r4:r5. This read r4:r5
@@ -464,6 +473,7 @@ static inline void ppc_import_coreinit_OSSignalSemaphore(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSWaitSemaphore(PpcContext *ctx) {
+    arkchemy_fs_pump_completions(ctx);   /* liveness: see OSWaitEventWithTimeout */
     ArkchemySemEntry *s = arkchemy_sem_get(ctx->r[3], 0);
     int32_t prev;
     pthread_mutex_lock(&s->lock);
@@ -477,6 +487,7 @@ static inline void ppc_import_coreinit_OSWaitSemaphore(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSTryWaitSemaphore(PpcContext *ctx) {
+    arkchemy_fs_pump_completions(ctx);   /* liveness: see OSWaitEventWithTimeout */
     ArkchemySemEntry *s = arkchemy_sem_get(ctx->r[3], 0);
     int32_t prev;
     pthread_mutex_lock(&s->lock);
