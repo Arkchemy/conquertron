@@ -418,8 +418,27 @@ static inline void ppc_debug_watch(uint32_t pc, uint32_t value);
  * are endian-agnostic, but a compare-exchange has to operate on the stored
  * representation, so these convert with an explicit byte swap. */
 
-static inline void ppc_mem_fence(void) {
+static inline void ppc_mem_fence(void) {          /* sync   -- full barrier */
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
+
+/* lwsync is PowerPC's lightweight barrier: it orders loads and stores against
+ * each other but not against I/O, which is acquire-release, not sequential
+ * consistency. Emitting SEQ_CST for it would be correct but needlessly
+ * strong -- on ARM64 that is a full dmb ish at every site. */
+static inline void ppc_mem_fence_acqrel(void) {   /* lwsync -- acquire/release */
+    __atomic_thread_fence(__ATOMIC_ACQ_REL);
+}
+
+/* isync is an INSTRUCTION-stream barrier, not a data barrier. There is no
+ * pipeline or icache to flush here, and no self-modifying guest code. It is
+ * kept as an acquire fence only because the classic PowerPC lock-acquire
+ * idiom ends `lwarx; ...; stwcx.; bne-; isync`, where it does carry acquire
+ * meaning. Acquire is the honest strength for that role and far cheaper than
+ * a full barrier -- which matters, because isync outnumbers the real data
+ * barriers in this binary by roughly eighty to one (1,436 against 18). */
+static inline void ppc_mem_fence_acq(void) {      /* isync  -- acquire only */
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
 }
 
 /* lwarx: load word and reserve. Takes the reservation on this context (one

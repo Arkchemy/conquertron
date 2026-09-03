@@ -1551,10 +1551,12 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_DCBST:
             case PPC_INS_ISYNC:
             case PPC_INS_EIEIO: {
-                // DCBST is a cache hint with no meaning here, but ISYNC and
-                // EIEIO are ordering barriers, and on weakly-ordered ARM64
-                // with real guest threads the host needs a real one.
-                if (ppc.id != PPC_INS_DCBST) out << "  ppc_mem_fence();\n";
+                // DCBST is a cache hint with no meaning here. ISYNC is an
+                // instruction-stream barrier that only carries acquire
+                // meaning as the tail of the PowerPC lock-acquire idiom.
+                // EIEIO orders stores, so acquire/release is its strength.
+                if (ppc.id == PPC_INS_ISYNC) out << "  ppc_mem_fence_acq();\n";
+                else if (ppc.id == PPC_INS_EIEIO) out << "  ppc_mem_fence_acqrel();\n";
                 // Cache-management/memory-ordering barriers -- meaningless
                 // in this purely sequential single-threaded interpreter
                 // model (no cache, no reordering to synchronize against),
@@ -1945,7 +1947,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_LWSYNC: {
                 // Real memory-ordering barrier: guest threads are real host
                 // threads sharing one address space on weakly-ordered ARM64.
-                out << "  ppc_mem_fence();\n";
+                // lwsync is acquire-release, not sequentially consistent.
+                out << "  ppc_mem_fence_acqrel();\n";
                 break;
             }
             case PPC_INS_LFDX: {
