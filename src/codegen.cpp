@@ -1551,6 +1551,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_DCBST:
             case PPC_INS_ISYNC:
             case PPC_INS_EIEIO: {
+                // DCBST is a cache hint with no meaning here, but ISYNC and
+                // EIEIO are ordering barriers, and on weakly-ordered ARM64
+                // with real guest threads the host needs a real one.
+                if (ppc.id != PPC_INS_DCBST) out << "  ppc_mem_fence();\n";
                 // Cache-management/memory-ordering barriers -- meaningless
                 // in this purely sequential single-threaded interpreter
                 // model (no cache, no reordering to synchronize against),
@@ -1564,24 +1568,31 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_LWARX: {
+                // Real reserving load. This was a plain ppc_load_u32 while the
+                // runtime was genuinely single-threaded; OSCreateThread now
+                // spawns real host pthreads sharing one PpcSharedMemory, so
+                // the guest's synchronisation has to be honoured for real.
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
-                out << "  " << reg(rD) << " = ppc_load_u32(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
+                out << "  " << reg(rD) << " = ppc_lwarx(ctx, " << base_expr(rA) << " + " << reg(rB) << ");\n";
                 break;
             }
             case PPC_INS_STWCX: {
                 // stwcx. (always dotted -- Rc=1 is baked into the real
-                // encoding). Reservation-based atomicity isn't modeled at
-                // all: no multi-core/multi-threaded execution exists in
-                // this runtime, so the store always "succeeds" (CR0 EQ=1).
-                // Correct for the single-threaded case this runtime
-                // actually executes; not real multi-core contention.
+                // encoding). Now a real compare-exchange against the
+                // reservation the paired lwarx took, with CR0[EQ] set from
+                // whether it succeeded. It used to hardcode EQ=1, which made
+                // every "someone else won the race, retry" branch in every
+                // guest atomic loop unreachable -- fine while nothing could
+                // race, wrong once OSCreateThread began spawning real host
+                // threads that share guest memory.
                 int rS = reg_idx(ppc.operands[0].reg);
                 int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
-                out << "  ppc_store_u32(ctx, " << base_expr(rA) << " + " << reg(rB) << ", " << reg(rS) << ");\n";
-                out << "  ctx->cr0_lt = 0; ctx->cr0_gt = 0; ctx->cr0_eq = 1;\n";
+                out << "  { int __sc_ok = ppc_stwcx(ctx, " << base_expr(rA) << " + " << reg(rB) << ", "
+                    << reg(rS) << ");\n";
+                out << "    ctx->cr0_lt = 0; ctx->cr0_gt = 0; ctx->cr0_eq = (uint8_t)__sc_ok; }\n";
                 break;
             }
             case PPC_INS_SLW: {
@@ -1932,9 +1943,9 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_LWSYNC: {
-                // Memory-ordering barrier -- see the DCBST/ISYNC no-op
-                // rationale above; no reordering model exists to
-                // synchronize against here.
+                // Real memory-ordering barrier: guest threads are real host
+                // threads sharing one address space on weakly-ordered ARM64.
+                out << "  ppc_mem_fence();\n";
                 break;
             }
             case PPC_INS_LFDX: {
@@ -2035,8 +2046,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_SYNC: {
-                // Full memory barrier -- see the DCBST/ISYNC/LWSYNC no-op
-                // rationale above.
+                // Real full memory barrier -- see PPC_INS_LWSYNC.
+                out << "  ppc_mem_fence();\n";
                 break;
             }
             case PPC_INS_LHZUX: {

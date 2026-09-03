@@ -269,6 +269,25 @@ typedef struct PpcContext {
      * a silent wrong-answer bug.
      */
     struct PpcSharedMemory *shared;
+    /* Reservation state for lwarx/stwcx., added 2026-09-03.
+     *
+     * These were previously translated as a plain load and a plain store
+     * with cr0_eq hardcoded to 1 -- correct while this runtime was
+     * genuinely single-threaded, and unsound the moment
+     * cafeos_coreinit_thread.h's OSCreateThread began spawning real host
+     * pthreads that share one PpcSharedMemory. Two real cores then
+     * performed unsynchronised read-modify-write on the same array, with
+     * no atomicity, no contention path, and no ordering -- on ARM64,
+     * which is weakly ordered, exactly like the PowerPC these barriers
+     * came from.
+     *
+     * Reservation is per-context, which is per-guest-thread, matching
+     * real hardware where each core holds its own reservation.
+     * reserve_valid == 0 means "no reservation held", so a zero-
+     * initialised context starts correctly with none. */
+    uint32_t reserve_addr;
+    uint32_t reserve_raw;   /* the raw stored word observed at reservation time */
+    uint8_t  reserve_valid;
 } PpcContext;
 
 /* Real, found-the-hard-way sizing: the previous 4MB was "an arbitrary,
@@ -355,7 +374,12 @@ typedef struct PpcContext {
 #endif
 
 typedef struct PpcSharedMemory {
-    uint8_t mem[PPC_MEM_SIZE];
+    /* Aligned so that a 4-byte-aligned guest address maps to a 4-byte-
+     * aligned host address, which ppc_lwarx/ppc_stwcx need in order to
+     * do a real atomic compare-exchange on the word. PowerPC already
+     * requires lwarx/stwcx. operands to be word-aligned, so this is the
+     * only alignment guarantee needed. */
+    __attribute__((aligned(16))) uint8_t mem[PPC_MEM_SIZE];
 } PpcSharedMemory;
 
 /* Load-side watches, added 2026-08-28 -- the mirror of
@@ -379,6 +403,59 @@ volatile uint32_t g_ppc_watch_load_addr2 = 0xFFFFFFFFu;
 /* ppc_load_u32 sits above the declaration that serves the store side, so
  * it needs its own. Repeating a declaration is legal C. */
 static inline void ppc_debug_watch(uint32_t pc, uint32_t value);
+
+/* ---- Real atomics and memory barriers, added 2026-09-03 ----------------
+ *
+ * Why these exist: OSCreateThread spawns real host pthreads that share one
+ * PpcSharedMemory, so guest code that synchronises through memory needs the
+ * host to actually honour that synchronisation. Translating lwarx/stwcx. as
+ * a plain load and store, and sync/lwsync/eieio as nothing at all, silently
+ * removed every ordering guarantee the guest was relying on. The symptom is
+ * not a crash: one thread simply never observes another's writes.
+ *
+ * Endianness: guest memory holds big-endian words; the host is little-endian
+ * (ARM64 and x86 alike). The byte-assembling accessors elsewhere in this file
+ * are endian-agnostic, but a compare-exchange has to operate on the stored
+ * representation, so these convert with an explicit byte swap. */
+
+static inline void ppc_mem_fence(void) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
+
+/* lwarx: load word and reserve. Takes the reservation on this context (one
+ * per guest thread, as on real hardware) and remembers the raw word seen, so
+ * the paired stwcx. can compare-exchange against exactly that value. */
+static inline uint32_t ppc_lwarx(PpcContext *ctx, uint32_t addr) {
+    addr &= (PPC_MEM_SIZE - 1u);
+    addr &= ~3u;   /* lwarx operands are architecturally word-aligned */
+    uint32_t raw;
+    __atomic_load((uint32_t *)&ctx->shared->mem[addr], &raw, __ATOMIC_ACQUIRE);
+    ctx->reserve_addr  = addr;
+    ctx->reserve_raw   = raw;
+    ctx->reserve_valid = 1u;
+    return __builtin_bswap32(raw);
+}
+
+/* stwcx.: store word conditional. Returns 1 if the store happened, 0 if the
+ * reservation was lost -- which is what CR0[EQ] must be set from. Previously
+ * this was hardcoded to 1, making every "someone else won the race, retry"
+ * branch in every guest atomic loop unreachable. */
+static inline int ppc_stwcx(PpcContext *ctx, uint32_t addr, uint32_t val) {
+    addr &= (PPC_MEM_SIZE - 1u);
+    addr &= ~3u;
+    if (!ctx->reserve_valid || ctx->reserve_addr != addr) {
+        ctx->reserve_valid = 0u;
+        return 0;
+    }
+    uint32_t expected = ctx->reserve_raw;
+    uint32_t desired  = __builtin_bswap32(val);
+    int ok = __atomic_compare_exchange_n((uint32_t *)&ctx->shared->mem[addr],
+                                         &expected, desired, 0 /* strong */,
+                                         __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+    /* A reservation is consumed by stwcx. whether or not it succeeded. */
+    ctx->reserve_valid = 0u;
+    return ok ? 1 : 0;
+}
 
 static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {
     const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
