@@ -1,6 +1,8 @@
 #ifndef ARKCHEMY_CAFEOS_COREINIT_MISC_H
 #define ARKCHEMY_CAFEOS_COREINIT_MISC_H
 
+#include <sched.h>   /* sched_yield for OSYieldThread */
+
 #include "ppc_runtime.h"
 
 /*
@@ -54,7 +56,24 @@ static inline void ppc_import_coreinit_OSIsDebuggerInitialized(PpcContext *ctx) 
 static inline void ppc_import_coreinit_OSIsDebuggerPresent(PpcContext *ctx) { ctx->r[3] = 0; }
 
 static inline void ppc_import_coreinit_OSSavesDone_ReadyToRelease(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_coreinit_OSYieldThread(PpcContext *ctx) { (void)ctx; }
+/* OSYieldThread must genuinely yield. It was a no-op, which was harmless
+ * while this runtime was single-threaded and is not any more:
+ * OSCreateThread spawns real host pthreads, and the guest's lock-free code
+ * spins with a yield between attempts --
+ *   jqAddBatchToQueue (4 sites), __jqPopNextBatchFromQueue (2),
+ *   igJobQueue::AtomicHeap::alloc (2), jqWorkerSleep, quick_global_lock,
+ *   igThread::yield
+ * -- so a no-op yield turns every one of those into a busy spin that never
+ * lets the thread it is waiting on make progress.
+ *
+ * This got worse, not better, when lwarx/stwcx. became real atomics on
+ * 2026-09-03: before that stwcx. always reported success, so the retry
+ * branches were dead and each loop ran exactly once. Now they can genuinely
+ * retry, against a yield that does nothing. */
+static inline void ppc_import_coreinit_OSYieldThread(PpcContext *ctx) {
+    (void)ctx;
+    sched_yield();
+}
 
 static inline void ppc_import_coreinit_OSGetCoreId(PpcContext *ctx) { ctx->r[3] = 0; }
 
