@@ -418,6 +418,29 @@ static inline void ppc_debug_watch(uint32_t pc, uint32_t value);
  * are endian-agnostic, but a compare-exchange has to operate on the stored
  * representation, so these convert with an explicit byte swap. */
 
+/* stwcx. success/failure counters, added 2026-09-04.
+ *
+ * Before the atomics fix, stwcx. always reported success and every retry
+ * branch in the guest was dead code. Now the compare-exchange can genuinely
+ * fail. If it is failing where the original silently succeeded, an atomic
+ * increment would be LOST -- which is exactly the shape of the job queue's
+ * ring pointers cycling while its counters stay at zero.
+ *
+ * There is no pre-atomics log that recorded those counters, so this is
+ * measured rather than inferred. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile unsigned long long g_ppc_stwcx_ok = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile unsigned long long g_ppc_stwcx_fail = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile unsigned long long g_ppc_stwcx_nores = 0;   /* failed for want of a reservation */
+
 static inline void ppc_mem_fence(void) {          /* sync   -- full barrier */
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
 }
@@ -464,6 +487,8 @@ static inline int ppc_stwcx(PpcContext *ctx, uint32_t addr, uint32_t val) {
     addr &= ~3u;
     if (!ctx->reserve_valid || ctx->reserve_addr != addr) {
         ctx->reserve_valid = 0u;
+        g_ppc_stwcx_nores++;
+        g_ppc_stwcx_fail++;
         return 0;
     }
     uint32_t expected = ctx->reserve_raw;
@@ -473,6 +498,7 @@ static inline int ppc_stwcx(PpcContext *ctx, uint32_t addr, uint32_t val) {
                                          __ATOMIC_RELEASE, __ATOMIC_RELAXED);
     /* A reservation is consumed by stwcx. whether or not it succeeded. */
     ctx->reserve_valid = 0u;
+    if (ok) g_ppc_stwcx_ok++; else g_ppc_stwcx_fail++;
     return ok ? 1 : 0;
 }
 
