@@ -404,6 +404,13 @@ volatile uint32_t g_ppc_watch_load_addr2 = 0xFFFFFFFFu;
  * it needs its own. Repeating a declaration is legal C. */
 static inline void ppc_debug_watch(uint32_t pc, uint32_t value);
 
+/* Forward declarations: the store-watch globals and reporter are defined
+ * further down this header, but ppc_stwcx below needs them so that atomic
+ * stores are visible to the watches. */
+extern volatile uint32_t g_ppc_watch_store_addr;
+extern volatile uint32_t g_ppc_watch_store_addr2;
+static inline void ppc_debug_watch(uint32_t pc, uint32_t value);
+
 /* ---- Real atomics and memory barriers, added 2026-09-03 ----------------
  *
  * Why these exist: OSCreateThread spawns real host pthreads that share one
@@ -490,6 +497,23 @@ static inline int ppc_stwcx(PpcContext *ctx, uint32_t addr, uint32_t val) {
         g_ppc_stwcx_nores++;
         g_ppc_stwcx_fail++;
         return 0;
+    }
+    /* Atomic stores must be visible to the store watches. Before the
+     * atomics fix every guest write went through ppc_store_u32, which hooks
+     * them; stwcx. now bypasses that, so a watched address updated
+     * atomically reported hits=0 while its value plainly changed. That made
+     * "never written" unreliable for exactly the lock-free counters this
+     * project keeps investigating. Reported the same way a plain store
+     * does. */
+    if (addr == g_ppc_watch_store_addr) {
+        ppc_debug_watch(0xf0000001u, val);
+        ppc_debug_watch(0xf0000002u, g_ppc_current_pc);
+        ppc_debug_watch(0xf0000020u, ctx->lr);
+        ppc_debug_watch(0xf0000021u, ctx->r[3]);
+    }
+    if (addr == g_ppc_watch_store_addr2) {
+        ppc_debug_watch(0xf0000005u, val);
+        ppc_debug_watch(0xf0000006u, g_ppc_current_pc);
     }
     uint32_t expected = ctx->reserve_raw;
     uint32_t desired  = __builtin_bswap32(val);
