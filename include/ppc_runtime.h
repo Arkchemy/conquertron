@@ -133,6 +133,292 @@ volatile uint32_t g_ppc_last_caller_lr = 0;
  * comparisons at each recompiled function entry, against ~78k calls per
  * run. */
 #define ARKCHEMY_WATCH_SLOTS 8
+
+/* Batch-completion probe (2026-09-04). The Cemu comparison showed retail's
+ * per-file parent object filling in +0x18 (total blocks) and draining +0x1c,
+ * while ours sits at the pre-count transient 1/0/1 forever. The suspect is
+ * jqWorkerLoop's completion gate at 0x21da638: the job itself runs, but if
+ * [batch+8] is zero the worker skips the counter update entirely, so nothing
+ * ever advances. These count that gate directly -- the watch slots only
+ * sample at function entry, so this one is probed in place. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_bc_hits = 0, g_ark_bc_zero = 0, g_ark_bc_batch = 0,
+                  g_ark_bc_plus8 = 0, g_ark_bc_plus4 = 0;
+
+/* Per-call snapshot of igArchive::addWork's arguments (2026-09-04). A watch
+ * slot keeps only the most recent hit, and addWork is called several times
+ * with a REUSED igFileWorkItem, so both the slot and any read at report time
+ * describe the last call rather than the one that produced the work item the
+ * boot is stuck on. Snapshot offset and size at the moment of each call. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_aw_n = 0, g_ark_aw[8][3];
+
+/* decompressBatch checks its decompressor's return against exactly 1 and
+ * branches to the failure path otherwise, in which case the block task is
+ * never marked complete and the work item's outstanding count never drains
+ * -- which is the boot symptom. Capture what ours actually returns. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_inf_lzma_n = 0, g_ark_inf_lzma_ret = 0xdeadbeefu,
+                  g_ark_inf_zlib_n = 0, g_ark_inf_zlib_ret = 0xdeadbeefu,
+                  g_ark_inf_fail = 0, g_ark_inf_ok = 0;
+
+/* lzmaInflate returns 1 on FAILURE (the addic/subfe idiom at 0x216b81c turns
+ * a non-zero internal error code into 1). Ours returns 1, so the decode is
+ * failing -- these break out which of the three error sources it is:
+ * the props/allocate call, the decoder itself, or the size cross-check that
+ * sets error 11 when the produced/consumed lengths disagree. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_lz_alloc = 0xdeadbeefu, g_ark_lz_dec = 0xdeadbeefu,
+                  g_ark_lz_outgot = 0, g_ark_lz_outexp = 0,
+                  g_ark_lz_ingot = 0, g_ark_lz_inexp = 0, g_ark_lz_err = 0xdeadbeefu;
+
+/* LzmaDec_Allocate returned SZ_ERROR_MEM (2). Its dictionary allocation goes
+ * through the engine's own ISzAlloc callback and returned NULL. The size it
+ * asked for separates "garbage props gave an absurd dicSize" from "the
+ * allocator genuinely failed a reasonable request". */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_lza_props = 0xdeadbeefu, g_ark_lza_probs = 0xdeadbeefu,
+                  g_ark_lza_dicsize = 0, g_ark_lza_dicptr = 0xdeadbeefu,
+                  g_ark_lza_allocobj = 0, g_ark_lza_allocfn = 0, g_ark_lza_n = 0;
+
+/* The failure is one step earlier than the dictionary: LzmaDec_AllocateProbs2
+ * asks the engine's ISzAlloc for numProbs*2 bytes (about 16KB for lc=3,lp=0)
+ * and gets NULL. The props decoded cleanly, so the compressed data is valid
+ * and this is purely an allocator refusal. Capture the request and the
+ * allocator it went through. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_pr_n = 0, g_ark_pr_size = 0, g_ark_pr_ptr = 0xdeadbeefu,
+                  g_ark_pr_lc = 0, g_ark_pr_lp = 0, g_ark_pr_alloc = 0,
+                  g_ark_pr_allocfn = 0;
+
+/* The ISzAlloc callback at 0x216b6f4 allocates out of a memory pool held in a
+ * global (ours 421612, &.bss+306684). It returns NULL for a plain 15,980-byte
+ * request, so either that global is null or the allocator behind it refuses.
+ * Capture the pool pointer, what the resolve call turns it into, and what the
+ * allocation returns. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_al_n = 0, g_ark_al_poolglobal = 0xdeadbeefu,
+                  g_ark_al_resolved = 0xdeadbeefu, g_ark_al_size = 0,
+                  g_ark_al_ret = 0xdeadbeefu;
+
+/* The pool "global" is an INDEX (0x1c), resolved through the igMemoryContext
+ * at ours 13528 (.data+5336) -- the same global earlier work suspected of
+ * being null. With context+0x30 clear, any index outside 1/2/4 falls to the
+ * default pool at context+0xc, and that is what came back NULL. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_mc_n = 0, g_ark_mc_ctx = 0xdeadbeefu,
+                  g_ark_mc_flag = 0xdeadbeefu, g_ark_mc_idx = 0xdeadbeefu,
+                  g_ark_mc_defpool = 0xdeadbeefu, g_ark_mc_pool4 = 0xdeadbeefu;
+
+/* The registry lookup walks the frame stack backwards; for each frame it needs
+ * index < that frame's pool count and a non-null pools[index]. Index 28 comes
+ * back NULL. These fire only for index 28, and record the current frame and
+ * the top frame's pool count, which separates "28 is out of range" from
+ * "the slot exists but is empty". */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_gp_n = 0, g_ark_gp_frame = 0xdeadbeefu,
+                  g_ark_gp_count = 0xdeadbeefu, g_ark_gp_slot = 0xdeadbeefu,
+                  g_ark_gp_mgr = 0xdeadbeefu;
+
+/* Pool registration. The archive wants pool index 28, that index is static and
+ * never written at runtime, so it matches retail by construction -- meaning the
+ * difference has to be in how many pools we actually register. Count every
+ * igMemoryPoolFrameManager::setMemoryPool call, track the highest index used,
+ * and note whether 28 is ever among them. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_sp_n = 0, g_ark_sp_maxidx = 0, g_ark_sp_got28 = 0,
+                  g_ark_sp_lastidx = 0xdeadbeefu, g_ark_sp_lastpool = 0xdeadbeefu,
+                  g_ark_sp_bulk = 0, g_ark_sp_idxmask = 0;
+
+/* A pool DOES exist at index 28 when sampled, yet the LZMA resolve returns
+ * NULL -- so the two observations are at different moments and the frame stack
+ * must differ in between. This flag marks the window of the LZMA allocator's
+ * own resolve, so the frame walk is recorded at exactly that instant. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+/* igThread::getCallingThread() is OSGetThreadSpecific(0). On the job worker
+ * it returns NULL, so the engine falls back to an empty pool-frame manager
+ * and the archive's 16KB LZMA allocation fails -- the boot stall. Declared
+ * here rather than in the thread shim so main.c can report them too. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ts_set = 0, g_ark_ts_get = 0, g_ark_ts_getnull = 0,
+                  g_ark_ts_set0 = 0, g_ark_ts_lastset0 = 0;
+
+/* Slot 0 is set 3 times and one of those stores NULL, which is what sends the
+ * archive's LZMA allocation to the empty fallback pool manager. Record each
+ * set with its caller and thread, and the caller of each NULL-returning get,
+ * so the site that registers a null thread can be named rather than guessed. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ts_setlog[6][3], g_ark_ts_setn = 0,
+                  g_ark_ts_nulllr[4], g_ark_ts_nulln = 0;
+
+/* jqWorkerThread deliberately clears thread-specific slot 0, so on the job
+ * workers getCallingThread() is NULL by design -- retail included -- and the
+ * pool lookup falls back to context+0x18. Ours is an EMPTY manager while the
+ * 52 registered pools live in a different one. Record which manager each
+ * registration targets, to see whether the pools go somewhere the workers
+ * can never reach. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_mgrs[4][2], g_ark_mgrn = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint64_t g_ark_mgrt[4][2];   /* per-manager first/last registration */
+
+/* The source manager is NOT empty when setDefaultFrame copies it (its pools
+ * start at call 39877, the copy runs at 160826), so the earlier "derived too
+ * early" reading was wrong. What the copy yields is a manager with no frame
+ * stack at all -- the 0 was a missing table, not an empty one. Dump both
+ * objects' structural fields immediately after the copy. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_cp_n = 0, g_ark_cp[2][6];
+
+/* copyDeep DOES carry the frame stack and array (both non-null on the new
+ * manager), so that theory is out too. The zero must come from further along
+ * the chain mgr -> stack -> arr -> arr[frame] -> +8 -> +8, which has been
+ * walked on assumption rather than measured. Dump every link, at the failing
+ * LZMA lookup itself. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ch_n = 0, g_ark_ch[10];
+
+/* Full retain/release ledger for the default pool-frame manager. It is
+ * installed at refcount 2 and later driven to 0 by two unrelated call sites,
+ * while context+0x18 still points at it -- so one reference is unbalanced.
+ * Record every entry into the refcount helpers that names this object, with
+ * the caller and the count before and after. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
+
+/* No retain/release ever touches the manager after setDefaultFrame, so it is
+ * not over-released -- its memory is invalidated wholesale. It is allocated
+ * from whatever pool the index at 421508 names. If that is a scratch or
+ * frame-scoped pool, everything in it dies at once while context+0x18 keeps
+ * pointing into it. Record the index and the resolved pool. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ap_idx = 0xdeadbeefu, g_ark_ap_pool = 0xdeadbeefu,
+                  g_ark_ap_n = 0;
+
+/* Is the block still a manager, or someone else's memory? Capture its vtable
+ * word right after construction and again at the failing lookup. A changed
+ * vtable means the object was freed and the block reused (an allocator or
+ * ownership bug); an intact vtable with a null frame stack means the object
+ * is still ours and something cleared its fields. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+/* The pool is NOT torn down (its vtable is written only at construction, calls
+ * 2036/2038, and never again), so the pool-lifetime theory is dead. Yet the
+ * manager's block is zeroed at ~440612 by the release path. Log every release
+ * in that window with its target, to see what is actually being destroyed. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_rel_n = 0, g_ark_rel[10][3];
+
+/* Does the list's newly grown buffer actually OVERLAP the pool-frame manager
+ * at 0x45f3964? If it does, the allocator handed out a block that was still
+ * live -- the manager was never released (its refcount ledger is empty), so
+ * this would be allocator corruption rather than a lifetime bug in the game
+ * code. Record every list growth whose buffer range covers that address. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ov_n = 0, g_ark_ov[6][4], g_ark_grow_n = 0;
+
+/* igMetaImage::userRegister allocates its objects in a loop from pool index 2
+ * -- the SAME pool the default frame manager lives in. The list-buffer overlap
+ * check came back clean over 352 growths, but these object allocations were
+ * never checked. Record any allocation landing on the manager's block. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_mi_n = 0, g_ark_mi_hit = 0, g_ark_mi[6][3],
+                  g_ark_mi_first = 0, g_ark_mi_last = 0;
+
+/* All 123 of those allocations return NULL, and the loop then dereferences the
+ * null result. Is the POOL null (resolve failing) or is the pool fine and the
+ * allocation failing? Capture the pool going in alongside the object coming
+ * out, plus how many NULL-pool vs NULL-result cases there are. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_mp_pool = 0xdeadbeefu, g_ark_mp_nullpool = 0,
+                  g_ark_mp_nullobj = 0, g_ark_mp_idx = 0xdeadbeefu;
+
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_vt_new = 0xdeadbeefu, g_ark_vt_use = 0xdeadbeefu,
+                  g_ark_vt_src = 0xdeadbeefu, g_ark_vt_w0 = 0, g_ark_vt_w1 = 0,
+                  g_ark_vt_w2 = 0, g_ark_vt_w3 = 0;
+
+/* setMemoryPools picks its registration target through the same per-thread
+ * resolver the workers use. On the main thread that hands back the thread's
+ * CACHED manager rather than the default it just installed at context+0x18,
+ * so the pools land where no worker can reach them. Record both, at each of
+ * the resolver calls inside setMemoryPools. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_smp[4][2], g_ark_smpn = 0;
+
+/* Ordering: setDefaultFrame derives the new default manager from whatever the
+ * per-thread resolver returns at that instant, so a default created before the
+ * pools are registered inherits nothing and stays empty forever. The default
+ * was installed at call counts 37316 / 160833 / 262726; these record when the
+ * registrations actually happen, and when setDefaultFrame runs. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint64_t g_ark_reg_first = 0, g_ark_reg_last = 0,
+                  g_ark_sdf_at[4];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_sdf_n = 0, g_ark_sdf_src[4], g_ark_sdf_new[4];
+
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_inlz = 0, g_ark_lzframe = 0xdeadbeefu,
+                  g_ark_lzcount = 0xdeadbeefu, g_ark_lzslot = 0xdeadbeefu,
+                  g_ark_lzhit = 0, g_ark_lzmgr = 0xdeadbeefu,
+                  g_ark_lznframes = 0xdeadbeefu;
 typedef struct {
     volatile uint32_t pc;         /* 0xFFFFFFFF = unused/never matches */
     volatile uint32_t r3, r4, r5, r6;
@@ -505,21 +791,29 @@ static inline int ppc_stwcx(PpcContext *ctx, uint32_t addr, uint32_t val) {
      * "never written" unreliable for exactly the lock-free counters this
      * project keeps investigating. Reported the same way a plain store
      * does. */
-    if (addr == g_ppc_watch_store_addr) {
-        ppc_debug_watch(0xf0000001u, val);
-        ppc_debug_watch(0xf0000002u, g_ppc_current_pc);
-        ppc_debug_watch(0xf0000020u, ctx->lr);
-        ppc_debug_watch(0xf0000021u, ctx->r[3]);
-    }
-    if (addr == g_ppc_watch_store_addr2) {
-        ppc_debug_watch(0xf0000005u, val);
-        ppc_debug_watch(0xf0000006u, g_ppc_current_pc);
-    }
     uint32_t expected = ctx->reserve_raw;
     uint32_t desired  = __builtin_bswap32(val);
     int ok = __atomic_compare_exchange_n((uint32_t *)&ctx->shared->mem[addr],
                                          &expected, desired, 0 /* strong */,
                                          __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+    /* Report to the store watches only when the store ACTUALLY LANDED.
+     * Corrected 2026-09-04: this reporting used to run before the
+     * compare-exchange, so a failed stwcx. -- which stores nothing, and which
+     * the generated code retries in a loop -- was logged as a write. Every
+     * retry showed up in the history as a real store, which is precisely the
+     * kind of phantom data this watch exists to rule out. */
+    if (ok) {
+        if (addr == g_ppc_watch_store_addr) {
+            ppc_debug_watch(0xf0000001u, val);
+            ppc_debug_watch(0xf0000002u, g_ppc_current_pc);
+            ppc_debug_watch(0xf0000020u, ctx->lr);
+            ppc_debug_watch(0xf0000021u, ctx->r[3]);
+        }
+        if (addr == g_ppc_watch_store_addr2) {
+            ppc_debug_watch(0xf0000005u, val);
+            ppc_debug_watch(0xf0000006u, g_ppc_current_pc);
+        }
+    }
     /* A reservation is consumed by stwcx. whether or not it succeeded. */
     ctx->reserve_valid = 0u;
     if (ok) g_ppc_stwcx_ok++; else g_ppc_stwcx_fail++;
@@ -629,6 +923,24 @@ static inline void ppc_debug_watch(uint32_t pc, uint32_t value); /* real definit
 __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_null_write_count = 0;
+
+/* Distinct sources of null-pointer writes (2026-09-05). The count alone said
+ * 2,261 without saying where from, and only the first site was kept -- which
+ * is not enough to find what is handing out the NULLs. This keeps a small
+ * table of distinct (pc, lr) pairs with a hit count and a sample address, so
+ * one run maps every place the guest dereferences a null. The writes
+ * themselves are still dropped, so this is diagnosis only. */
+#ifndef ARKCHEMY_NULL_WRITE_SITES
+#define ARKCHEMY_NULL_WRITE_SITES 12
+#endif
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_nullsite_n = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_nullsite[ARKCHEMY_NULL_WRITE_SITES][4]; /* pc, lr, count, addr */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
@@ -753,7 +1065,7 @@ volatile uint32_t g_ppc_first_store_lr = 0;
  * question is which write zeroed it, which is a question about history.
  * Cost is one load per recompiled call, alongside the watch-slot loop that
  * is already there. */
-#define ARKCHEMY_MEMWATCH_HISTORY 8
+#define ARKCHEMY_MEMWATCH_HISTORY 20
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
@@ -867,6 +1179,21 @@ static inline int ppc_note_null_write(uint32_t addr, uint32_t val) {
             g_ppc_null_write_val  = val;
         }
         g_ppc_null_write_count++;
+        {   /* attribute it to a distinct (pc, lr) site */
+            uint32_t __pc = g_ppc_current_pc, __lr = g_ppc_last_caller_lr, __i;
+            for (__i = 0; __i < g_ppc_nullsite_n
+                          && __i < (uint32_t)ARKCHEMY_NULL_WRITE_SITES; __i++) {
+                if (g_ppc_nullsite[__i][0] == __pc && g_ppc_nullsite[__i][1] == __lr) {
+                    g_ppc_nullsite[__i][2]++; break;
+                }
+            }
+            if (__i == g_ppc_nullsite_n
+                && g_ppc_nullsite_n < (uint32_t)ARKCHEMY_NULL_WRITE_SITES) {
+                g_ppc_nullsite[__i][0] = __pc; g_ppc_nullsite[__i][1] = __lr;
+                g_ppc_nullsite[__i][2] = 1u;   g_ppc_nullsite[__i][3] = addr;
+                g_ppc_nullsite_n++;
+            }
+        }
         if (addr < ARKCHEMY_NULL_WRITE_ZERO_LIMIT) {
             if (g_ppc_zero_write_count == 0u) {
                 /* Both the function entered and the return address it was

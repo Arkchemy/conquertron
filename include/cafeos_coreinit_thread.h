@@ -259,6 +259,9 @@ static inline void ppc_import_coreinit_OSGetThreadSpecific(PpcContext *ctx) {
     uint32_t id = ctx->r[3];
     ArkchemyThreadEntry *te = arkchemy_thread_get(arkchemy_current_thread_addr(), 1);
     ctx->r[3] = (id < ARKCHEMY_THREAD_SPECIFIC_SLOTS) ? te->specific[id] : 0;
+    if (id == 0u) { g_ark_ts_get++;
+        if (ctx->r[3] == 0u) { g_ark_ts_getnull++;
+            if (g_ark_ts_nulln < 4u) g_ark_ts_nulllr[g_ark_ts_nulln++] = ctx->lr; } }
 }
 
 static inline void ppc_import_coreinit_OSSetThreadSpecific(PpcContext *ctx) {
@@ -267,6 +270,11 @@ static inline void ppc_import_coreinit_OSSetThreadSpecific(PpcContext *ctx) {
     uint32_t value = ctx->r[4];
     ArkchemyThreadEntry *te = arkchemy_thread_get(arkchemy_current_thread_addr(), 1);
     if (id < ARKCHEMY_THREAD_SPECIFIC_SLOTS) te->specific[id] = value;
+    if (id == 0u) { g_ark_ts_set++; g_ark_ts_set0++; g_ark_ts_lastset0 = value; }
+    if (id == 0u && g_ark_ts_setn < 6u) { uint32_t __i = g_ark_ts_setn++;
+        g_ark_ts_setlog[__i][0] = value;
+        g_ark_ts_setlog[__i][1] = ctx->lr;
+        g_ark_ts_setlog[__i][2] = (uint32_t)(uintptr_t)te; }
 }
 
 static inline void ppc_import_coreinit_OSBlockThreadsOnExit(PpcContext *ctx) {
