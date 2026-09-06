@@ -326,6 +326,24 @@ volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
  * runs 574 times -- the interesting one is at call ~440,610, long before the
  * end, so the last hit says nothing. Record only the calls whose destination
  * range actually covers the manager. */
+/* ARKCHEMY-OWNER: every allocation whose returned block covers the default
+   pool-frame manager. Two live allocations covering it with no free between
+   is a double allocation; a clean hand-off means the engine expects a
+   re-registration we never do. Ring of 12: call, ret, size, lr, pool.
+
+   Every definition in this header carries its own weak attribute -- 220 TUs
+   include it, so one that loses the attribute collides in all of them. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_own_n = 0, g_ark_own[12][5];   /* call, ret, size, lr, pool */
+/* Retargetable from watch.cfg (owner=0x...) so the next address can be
+   chased without another rebuild. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_own_target = 0x45f3964u;
+
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
