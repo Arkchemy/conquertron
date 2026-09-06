@@ -336,7 +336,7 @@ volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_own_n = 0, g_ark_own[16][6];
+volatile uint32_t g_ark_own_n = 0, g_ark_own[24][6];
 /* per entry: call, ret, ptr, size, lr, kind
    kind 1 = an allocation handed back a block covering the target
         2 = a free/realloc was given a block covering the target
@@ -357,13 +357,18 @@ static inline void ark_own_note(uint32_t ret, uint32_t ptr, uint32_t size,
                                 uint32_t lr, uint32_t call)
 {
     uint32_t t = g_ark_own_target;
-    if (!t || g_ark_own_n >= 16u) return;
+    if (!t || g_ark_own_n >= 24u) return;
     uint32_t kind = 0;
-    /* An allocation's size is its own; a free's block size is unknown here, so
-       a covering free is matched on the pointer landing in the same 4 KB. */
+    /* An allocation is recorded when the block it hands back covers the
+       target. A free is recorded only for the block's OWN address: matching
+       any free in the same 4 KB filled all 16 slots with neighbours before
+       the interesting event, which is the whole reason this ring exists. */
     if (ret && size && ret <= t && (uint64_t)ret + size > (uint64_t)t) kind = 1;
-    else if (ptr && (ptr >> 12) == (t >> 12) && ptr <= t)              kind = 2;
+    else if (ptr && ptr == t)                                          kind = 2;
     if (!kind) return;
+    /* The arena itself is a 5 MB block that covers everything in the pool and
+       says nothing; record it once so it is visible, then stop. */
+    if (kind == 1 && size > 0x100000u && g_ark_own_n > 0u) return;
     uint32_t i = g_ark_own_n++;
     g_ark_own[i][0] = call; g_ark_own[i][1] = ret;  g_ark_own[i][2] = ptr;
     g_ark_own[i][3] = size; g_ark_own[i][4] = lr;   g_ark_own[i][5] = kind;
