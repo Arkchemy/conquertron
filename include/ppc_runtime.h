@@ -338,6 +338,28 @@ volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
    address and the stack grows down, but nothing here has ever verified that
    and nothing bounds-checks the region. Per entry: guest thread, stack arg,
    stackSize arg, entry point. */
+/* ARKCHEMY-BOOTSTRAP: the engine has an explicit bootstrap PHASE --
+   igMemoryContext::bootstrapInitialize/bootstrapUninitialize,
+   igArkCore::initBootstrap/exitBootstrap, igStringPool likewise. If the
+   default pool-frame manager belongs to that phase, then its memory being
+   reused afterwards is a lifecycle we are not following rather than
+   corruption. Per slot: call count, first call number, last call number. */
+/* ARKCHEMY-FIXUP: does igIGZLoader actually walk the fixup tables? An igz
+   packs pointers as (pool in the top 10 bits, offset in the low 22), and they
+   have to be translated at load time. Our LZMA path reads a global still
+   holding the raw packed 0x0000001C, so either these never run or they skip
+   the section that owns that field. Per slot: count, first call, last call,
+   and the last section argument seen. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_fx[6][4];
+
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_bs[8][3];
+
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
