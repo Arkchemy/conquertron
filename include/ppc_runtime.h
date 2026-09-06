@@ -370,11 +370,19 @@ static inline void ark_own_note(uint32_t ret, uint32_t ptr, uint32_t size,
     if (!t || g_ark_own_n >= 24u) return;
     uint32_t kind = 0;
     /* An allocation is recorded when the block it hands back covers the
-       target. A free is recorded only for the block's OWN address: matching
-       any free in the same 4 KB filled all 16 slots with neighbours before
-       the interesting event, which is the whole reason this ring exists. */
+       target. */
     if (ret && size && ret <= t && (uint64_t)ret + size > (uint64_t)t) kind = 1;
-    else if (ptr && ptr == t)                                          kind = 2;
+    /* A free carries no size, so it cannot be range-matched. Matching only
+       ptr == target missed the case that matters: an ENCLOSING block being
+       freed. So a free is also recorded when it releases a block this ring
+       already saw allocated -- which is exactly the set of blocks whose
+       lifetime decides whether an overlap is a legal reuse or reissued live
+       memory. Matching any free in the same page flooded the ring instead. */
+    else if (ptr) {
+        if (ptr == t) kind = 2;
+        else for (uint32_t k = 0; k < g_ark_own_n; k++)
+            if (g_ark_own[k][5] == 1u && g_ark_own[k][1] == ptr) { kind = 2; break; }
+    }
     if (!kind) return;
     /* The arena itself is a 5 MB block that covers everything in the pool and
        says nothing; record it once so it is visible, then stop. */
