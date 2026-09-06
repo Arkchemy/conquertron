@@ -1354,6 +1354,16 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
          * instrumentation can see, because a stack is not allocated through
          * the allocator. */
         ppc_debug_watch(0xf0000024u, ctx->r[1]);
+        /* The value stored has to have come out of some register. Capturing the
+         * plausible sources means the one whose value MATCHES names the source
+         * register, and so the instruction -- which is what g_ppc_current_pc
+         * cannot do, since the recompiler only sets it at function entry.
+         * Ruled out this way already: stw r31, 8(r30), the only non-stack store
+         * in resizeAndSetCount, because value.last is 0 while r31.last is 0x62. */
+        ppc_debug_watch(0xf0000025u, ctx->r[30]);
+        ppc_debug_watch(0xf0000026u, ctx->r[0]);
+        ppc_debug_watch(0xf0000027u, ctx->r[4]);
+        ppc_debug_watch(0xf0000028u, ctx->r[5]);
         /* Registers at the moment of the store. Which register, plus what
          * displacement, produced this address is otherwise guesswork -- and
          * guessing it once already cost a build: the address was 24 bytes past
