@@ -350,6 +350,17 @@ volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
    holding the raw packed 0x0000001C, so either these never run or they skip
    the section that owns that field. Per slot: count, first call, last call,
    and the last section argument seen. */
+/* ARKCHEMY-ALLOCFAIL: igMemoryPool::reallocCommon returns 0 for 301 of 589
+   allocations from pool 0x4500274, all at the same exit. A failed grow still
+   has its capacity written by setCapacity, so the list believes it grew and
+   igObjectList::append then walks off the end. This captures what was asked
+   for and what the pool looked like when it refused.
+   Per entry: call, size requested, [pool+0x18], [pool+0x50], [pool+0x44], lr. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_af_n = 0, g_ark_af[10][6];
+
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
