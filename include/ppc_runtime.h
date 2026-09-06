@@ -321,6 +321,15 @@ volatile uint32_t g_ark_ch_n = 0, g_ark_ch[10];
 __attribute__((weak))
 #endif
 volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
+/* Conditional capture for the block that lands on the default frame manager.
+ * The plain PC watches keep only their LAST hit, and the move at 0x2184e1c
+ * runs 574 times -- the interesting one is at call ~440,610, long before the
+ * end, so the last hit says nothing. Record only the calls whose destination
+ * range actually covers the manager. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_wipe_n = 0, g_ark_wipe[8][5];  /* pc, lr, dest, bytes, call */
 
 /* No retain/release ever touches the manager after setDefaultFrame, so it is
  * not over-released -- its memory is invalidated wholesale. It is allocated
