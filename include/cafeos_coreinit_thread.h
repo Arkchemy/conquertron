@@ -173,6 +173,13 @@ static inline void ppc_import_coreinit_OSCreateThread(PpcContext *ctx) {
     te->argc = (int32_t)ctx->r[5];
     te->argv = ctx->r[6];
     te->stack_top = ctx->r[7];
+    if (g_ark_thr_n < 8u) {
+        uint32_t i = g_ark_thr_n++;
+        g_ark_thr[i][0] = thread_addr;
+        g_ark_thr[i][1] = ctx->r[7];   /* stack argument, exactly as passed */
+        g_ark_thr[i][2] = ctx->r[8];   /* stackSize, otherwise unused here */
+        g_ark_thr[i][3] = ctx->r[4];   /* entry point */
+    }
     /* r8 (stackSize) not separately tracked -- the caller's own stack_top
      * already lives in the shared address space it owns; nothing here
      * needs to carve out or bounds-check that region itself. */

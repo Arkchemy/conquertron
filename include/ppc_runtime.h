@@ -333,6 +333,16 @@ volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
 
    Every definition in this header carries its own weak attribute -- 220 TUs
    include it, so one that loses the attribute collides in all of them. */
+/* ARKCHEMY-THREADS: what OSCreateThread was handed for each worker, so the
+   guest stacks can be placed on a map. Cafe OS passes the stack as the HIGH
+   address and the stack grows down, but nothing here has ever verified that
+   and nothing bounds-checks the region. Per entry: guest thread, stack arg,
+   stackSize arg, entry point. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_thr_n = 0, g_ark_thr[8][4];
+
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
@@ -1329,6 +1339,13 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
          * corrupted the memory-context global. lr survives into the callee and
          * points at the code responsible. */
         ppc_debug_watch(0xf0000020u, ctx->lr);
+        /* The stack pointer at the moment of the store. If the watched
+         * address is within a frame's reach of r1, the write is an ordinary
+         * prologue spilling registers onto a guest stack that is sitting on
+         * top of somebody else's memory -- which no amount of allocator
+         * instrumentation can see, because a stack is not allocated through
+         * the allocator. */
+        ppc_debug_watch(0xf0000024u, ctx->r[1]);
         /* Registers at the moment of the store. Which register, plus what
          * displacement, produced this address is otherwise guesswork -- and
          * guessing it once already cost a build: the address was 24 bytes past
