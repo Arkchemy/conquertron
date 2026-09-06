@@ -336,13 +336,38 @@ volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_own_n = 0, g_ark_own[12][5];   /* call, ret, size, lr, pool */
+volatile uint32_t g_ark_own_n = 0, g_ark_own[16][6];
+/* per entry: call, ret, ptr, size, lr, kind
+   kind 1 = an allocation handed back a block covering the target
+        2 = a free/realloc was given a block covering the target
+   mallocAligned turned out not to serve this memory at all (OWNER n=0 with
+   mallocret calls=3 against 1839 frees), so the hook that matters is
+   igMemoryPool::reallocCommon, which both allocates and frees. */
 /* Retargetable from watch.cfg (owner=0x...) so the next address can be
    chased without another rebuild. */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
 volatile uint32_t g_ark_own_target = 0x45f3964u;
+
+/* Called at every exit of igMemoryPool::reallocCommon. Entry values come in
+   as arguments because the registers holding them are long gone by the exit,
+   and as C locals at the call site they survive recursion. */
+static inline void ark_own_note(uint32_t ret, uint32_t ptr, uint32_t size,
+                                uint32_t lr, uint32_t call)
+{
+    uint32_t t = g_ark_own_target;
+    if (!t || g_ark_own_n >= 16u) return;
+    uint32_t kind = 0;
+    /* An allocation's size is its own; a free's block size is unknown here, so
+       a covering free is matched on the pointer landing in the same 4 KB. */
+    if (ret && size && ret <= t && (uint64_t)ret + size > (uint64_t)t) kind = 1;
+    else if (ptr && (ptr >> 12) == (t >> 12) && ptr <= t)              kind = 2;
+    if (!kind) return;
+    uint32_t i = g_ark_own_n++;
+    g_ark_own[i][0] = call; g_ark_own[i][1] = ret;  g_ark_own[i][2] = ptr;
+    g_ark_own[i][3] = size; g_ark_own[i][4] = lr;   g_ark_own[i][5] = kind;
+}
 
 #ifdef __GNUC__
 __attribute__((weak))
