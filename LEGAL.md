@@ -52,22 +52,36 @@ Details that matter:
 **This is the project's largest legal exposure and it is not solved by a
 policy document.**
 
-These repositories contain material derived from commercially released games
-and from fan wikis:
+These repositories contain material derived from fan wikis:
 
-* voice clips extracted from a retail disc
 * character renders and roster portraits from the Skylanders wiki
 * game logos and box art
+
+They deliberately do **not** contain the extracted voice-line corpus. 1,848
+clips lifted from a retail disc were committed on 2026-09-06 and removed the
+same day: the project's entire legal position is that it distributes no game
+content, and an asset dump of that size contradicts it. The comparison to the
+wiki does not hold at that scale -- the wiki hosts a handful of catchphrases as
+citations, not most of a game's voice track. The extraction method is
+documented in `branding/voicelines/FINDINGS.md`, so anyone with their own disc
+can reproduce it locally. The 14 short catchphrases the site plays remain, as
+citations.
 
 That material is copyrighted by its owners. It is included for documentation
 and preservation, non-commercially, and the project makes no ownership claim.
 Whether any given use is defensible varies by jurisdiction, and "fan project"
 is not itself a legal defence anywhere.
 
-Note the tension deliberately: **LICENSE clause 6 states that no project under
-it hosts or distributes game content.** The repositories currently do. Either
-the clause or the content should change; this file exists so that is a
-decision rather than an oversight.
+This is consistent with LICENSE clause 6 and with the project plan, which
+records the local-tool architecture as an owner decision taken for exactly this
+reason: the tool "never touches or redistributes Activision's assets/code
+itself". The wiki images remain a weaker but real risk -- third-party
+promotional art, used nominatively to identify the characters, which is
+standard practice for fan sites but is not a licence.
+
+Note on history: removing the clips from the working tree does not remove them
+from git history. Doing that needs a history rewrite and a force push across
+the affected repository, which has not been done.
 
 The recompiler itself contains no game code or assets. It transforms a copy the
 user already owns, on the user's own machine, and no build output is
