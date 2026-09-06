@@ -27,6 +27,25 @@ grant permission to do any of the above.
    repository's readme, the tool's "About"/"Credits" screen, or an
    equivalent, easily accessible user-visible location.
 
+   Where a derivative work has any interactive or visual front end --
+   a game, an emulator front end, a launcher, a website, a video, or
+   anything else a person looks at -- it must additionally show the
+   Arkchemy identity to the user, by one of:
+
+     (a) playing the Arkchemy intro sting unmodified at startup, before
+         the derivative work's own content, where a startup sequence
+         exists; or
+     (b) displaying the Arkchemy logo and the words "Built on Arkchemy"
+         (or "Affiliated with Arkchemy", where accurate) on a title,
+         splash, menu, or about screen that a user reaches in normal
+         use.
+
+   The sting and the logo files are distributed with this project. They
+   may be scaled to fit the target display but must not be cropped,
+   recoloured, obscured, shortened, or made skippable-by-default in a
+   way that prevents a first-time user from seeing them at least once.
+
+
 3. ABSOLUTE PROHIBITION OF SALES
    Neither the Software nor any fork, port, or derivative work built
    upon it may be sold, commercialized, placed behind a paywall, or

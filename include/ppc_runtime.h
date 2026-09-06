@@ -941,6 +941,25 @@ volatile uint32_t g_ppc_nullsite_n = 0;
 __attribute__((weak))
 #endif
 volatile uint32_t g_ppc_nullsite[ARKCHEMY_NULL_WRITE_SITES][4]; /* pc, lr, count, addr */
+
+/* igMemoryPool::reallocCommon is where a 36-byte request on the archive pool
+ * returns NULL. It has four exits; this records which one the failing calls
+ * take, with the arguments, so the branch is identified rather than guessed. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_rc_calls = 0, g_ark_rc_null = 0, g_ark_rc_exit[5],
+                  g_ark_rc_args[4][4], g_ark_rc_argn = 0;
+
+/* The exit counters above conflate failed allocations with ordinary frees --
+ * a free legitimately returns 0, and they were not filtered by pool. Track
+ * only true allocations (ptr == 0) on the archive pool, so the exit taken by
+ * an actual FAILURE is identified. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_rt_on = 0, g_ark_rt_allocs = 0, g_ark_rt_fail[5],
+                  g_ark_rt_ok = 0, g_ark_rt_size = 0;
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
