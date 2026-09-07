@@ -539,10 +539,23 @@ static inline void ark_note_bulk(uint32_t lr, uint32_t dst, uint32_t n,
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_hs_n = 0, g_ark_hs[10];
-/* 0 walks  1 maxSpanEnd  2 firstBadCall  3 firstBadSpanEnd  4 lastSpanEnd
-   5 firstBadBlocks  6 lastBlocks  7 arenaEnd  8 maxSpanBeforeBad
-   9 blocksBeforeBad */
+volatile uint32_t g_ark_hs_n = 0, g_ark_hs[4][16];
+/* Keyed by control address, because more than one igHeapMemoryPool exists and
+   sharing one set of slots let a second pool overwrite the first's history --
+   the run that found this reported arenaEnd 0x4500270 for a pool whose arena
+   ends at 0x4a002e0.
+    0 ctrl          1 arenaEnd       2 walks
+    3 lastGoodCall  4 lastGoodSpan   5 lastGoodBlocks
+    6 firstBadCall  7 firstBadSpan   8 firstBadBlocks
+    9 firstCall    10 firstSpan     11 firstBlocks   12 currentSpan
+   13 lastGoodPtr 14 lastGoodSize  15 lastGoodLr
+   The walk runs at reallocCommon's ENTRY, before the call does its work, so
+   lastGood and firstShort are consecutive calls on the same pool and the
+   culprit is whatever the lastGood call went on to do. Recording its
+   arguments names that allocation outright instead of leaving a call number
+   to be matched up afterwards.
+   lastGood against firstBad brackets the single allocation that lost the
+   tail; first* says whether this pool was ever seen whole at all. */
 
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
@@ -1216,9 +1229,10 @@ static inline void ark_heapwalk(const PpcContext *ctx, uint32_t ctrl, uint32_t p
 }
 
 static inline void ark_heapscan(const PpcContext *ctx, uint32_t ctrl,
-                                uint32_t psize, uint32_t call)
+                                uint32_t psize, uint32_t call,
+                                uint32_t ptr, uint32_t size, uint32_t lr)
 {
-    uint32_t b, end, n = 0;
+    uint32_t b, end, n = 0, i;
     if (!ctrl || !psize) return;
     b   = ctrl + 0xc70u;
     end = ctrl + psize;
@@ -1232,18 +1246,22 @@ static inline void ark_heapscan(const PpcContext *ctx, uint32_t ctrl,
         n++;
         b += 4u + sz;
     }
-    g_ark_hs_n++;
-    g_ark_hs[7] = end;
-    g_ark_hs[4] = b;
-    g_ark_hs[6] = n;
+    for (i = 0; i < g_ark_hs_n; i++) if (g_ark_hs[i][0] == ctrl) break;
+    if (i == g_ark_hs_n) {
+        if (g_ark_hs_n >= 4u) return;
+        i = g_ark_hs_n++;
+        g_ark_hs[i][0] = ctrl; g_ark_hs[i][1] = end;
+        g_ark_hs[i][9] = call; g_ark_hs[i][10] = b; g_ark_hs[i][11] = n;
+    }
+    g_ark_hs[i][2]++;
+    g_ark_hs[i][12] = b;
     /* b + 8 == end is the sentinel, i.e. the chain still spans the arena */
     if (b + 8u >= end) {
-        if (b > g_ark_hs[1]) g_ark_hs[1] = b;
-        g_ark_hs[8] = b; g_ark_hs[9] = n;
-    } else if (!g_ark_hs[2]) {
-        g_ark_hs[2] = call ? call : 1u;
-        g_ark_hs[3] = b;
-        g_ark_hs[5] = n;
+        g_ark_hs[i][3] = call; g_ark_hs[i][4] = b; g_ark_hs[i][5] = n;
+        g_ark_hs[i][13] = ptr; g_ark_hs[i][14] = size; g_ark_hs[i][15] = lr;
+    } else if (!g_ark_hs[i][6]) {
+        g_ark_hs[i][6] = call ? call : 1u;
+        g_ark_hs[i][7] = b; g_ark_hs[i][8] = n;
     }
 }
 
