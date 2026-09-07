@@ -524,6 +524,26 @@ static inline void ark_note_bulk(uint32_t lr, uint32_t dst, uint32_t n,
     g_ark_bw[i][3] = v;  g_ark_bw[i][4] = kind;
 }
 
+/* HEAPSPAN: when did the chain stop reaching the sentinel?
+
+   The arena is provably whole at boot -- tlsf_create writes its sentinel at
+   0x4a002d8, exactly where poolBytes puts it, and HEAPTAIL finds it there.
+   Yet by the first refusal the physical chain ends at 0x4663a04 with 3.79 MB
+   of untouched zeros beyond it, and neither watch sees anything write that
+   region. So TLSF stopped splitting off remainders at some point, and the
+   only thing left worth measuring is exactly when.
+
+   A healthy walk ends on the sentinel header, 8 bytes below the arena end.
+   Walking on every call and recording the first walk that falls short names
+   the allocation that lost the tail, which OWNER can then identify. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_hs_n = 0, g_ark_hs[10];
+/* 0 walks  1 maxSpanEnd  2 firstBadCall  3 firstBadSpanEnd  4 lastSpanEnd
+   5 firstBadBlocks  6 lastBlocks  7 arenaEnd  8 maxSpanBeforeBad
+   9 blocksBeforeBad */
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
@@ -1192,6 +1212,38 @@ static inline void ark_heapwalk(const PpcContext *ctx, uint32_t ctrl, uint32_t p
             }
         }
         g_ark_hz[0] = nz; g_ark_hz[1] = first; g_ark_hz[2] = last; g_ark_hz[3] = scanned;
+    }
+}
+
+static inline void ark_heapscan(const PpcContext *ctx, uint32_t ctrl,
+                                uint32_t psize, uint32_t call)
+{
+    uint32_t b, end, n = 0;
+    if (!ctrl || !psize) return;
+    b   = ctrl + 0xc70u;
+    end = ctrl + psize;
+    for (;;) {
+        uint32_t w, sz;
+        if (n >= 40000u) return;                  /* refuse to trust a loop */
+        if (b < ctrl || b + 8u > end) return;
+        w  = ppc_load_u32(ctx, b + 4u);
+        sz = w & ~3u;
+        if (sz == 0u) break;
+        n++;
+        b += 4u + sz;
+    }
+    g_ark_hs_n++;
+    g_ark_hs[7] = end;
+    g_ark_hs[4] = b;
+    g_ark_hs[6] = n;
+    /* b + 8 == end is the sentinel, i.e. the chain still spans the arena */
+    if (b + 8u >= end) {
+        if (b > g_ark_hs[1]) g_ark_hs[1] = b;
+        g_ark_hs[8] = b; g_ark_hs[9] = n;
+    } else if (!g_ark_hs[2]) {
+        g_ark_hs[2] = call ? call : 1u;
+        g_ark_hs[3] = b;
+        g_ark_hs[5] = n;
     }
 }
 
