@@ -609,10 +609,19 @@ static inline void ark_splitverify(uint32_t call, uint32_t lr, uint32_t size,
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_sw_n = 0, g_ark_sw[4][8];
-/* 0 ctrl  1 maxSpan  2 curSpan  3 dropCall  4 dropSpan  5 who  6 walks
-   7 blocks at the drop.  who: 1 reallocCommon entry, 2 memalign exit,
-   3 free exit, 4 realloc exit */
+volatile uint32_t g_ark_sw_n = 0, g_ark_sw[4][10];
+/* 0 ctrl  1 arenaEnd  2 lastSpan  3 dropCall  4 dropSpan  5 who  6 walks
+   7 blocksAtDrop  8 runaways  9 lastGoodCall
+   who: 1 reallocCommon entry, 2 memalign exit, 3 free exit, 4 realloc exit
+
+   The first version of this used a high-water mark instead of the arena end,
+   so it would not need psize at the tlsf hooks. That was wrong: once the
+   chain is damaged the walk runs past the sentinel into unrelated memory --
+   it reported max=0x8fd7fec for an arena ending at 0x4a002e0, 73 MB out --
+   and every healthy walk afterwards then read as "below max". The arena end
+   is learned once from reallocCommon, which knows psize, and cached; hooks
+   that do not know it skip until the row exists. A walk that leaves the
+   arena is counted as a runaway and recorded as nothing, never as a drop. */
 
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
@@ -1323,31 +1332,32 @@ static inline void ark_heapscan(const PpcContext *ctx, uint32_t ctrl,
 }
 
 static inline void ark_spanwatch(const PpcContext *ctx, uint32_t ctrl,
-                                 uint32_t who, uint32_t call)
+                                 uint32_t who, uint32_t call, uint32_t psize)
 {
-    uint32_t b, n = 0, i;
+    uint32_t b, end, n = 0, i;
     if (!ctrl) return;
-    b = ctrl + 0xc70u;
+    for (i = 0; i < g_ark_sw_n; i++) if (g_ark_sw[i][0] == ctrl) break;
+    if (i == g_ark_sw_n) {
+        if (!psize || g_ark_sw_n >= 4u) return;   /* arena not known yet */
+        i = g_ark_sw_n++;
+        g_ark_sw[i][0] = ctrl; g_ark_sw[i][1] = ctrl + psize;
+    }
+    end = g_ark_sw[i][1];
+    b   = ctrl + 0xc70u;
     for (;;) {
         uint32_t w, sz;
-        if (n >= 40000u) return;
-        if (b < ctrl || b - ctrl > 0x40000000u) return;
+        if (n >= 40000u || b < ctrl || b + 8u > end) { g_ark_sw[i][8]++; return; }
         w  = ppc_load_u32(ctx, b + 4u);
         sz = w & ~3u;
         if (sz == 0u) break;
         n++;
         b += 4u + sz;
     }
-    for (i = 0; i < g_ark_sw_n; i++) if (g_ark_sw[i][0] == ctrl) break;
-    if (i == g_ark_sw_n) {
-        if (g_ark_sw_n >= 4u) return;
-        i = g_ark_sw_n++;
-        g_ark_sw[i][0] = ctrl;
-    }
     g_ark_sw[i][6]++;
     g_ark_sw[i][2] = b;
-    if (b > g_ark_sw[i][1]) g_ark_sw[i][1] = b;
-    else if (b < g_ark_sw[i][1] && !g_ark_sw[i][3]) {
+    if (b + 8u >= end) {                 /* reached the sentinel: still whole */
+        g_ark_sw[i][9] = call;
+    } else if (!g_ark_sw[i][3]) {
         g_ark_sw[i][3] = call ? call : 1u;
         g_ark_sw[i][4] = b; g_ark_sw[i][5] = who; g_ark_sw[i][7] = n;
     }
