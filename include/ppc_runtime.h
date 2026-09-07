@@ -356,6 +356,16 @@ volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
    igObjectList::append then walks off the end. This captures what was asked
    for and what the pool looked like when it refused.
    Per entry: call, size requested, [pool+0x18], [pool+0x50], [pool+0x44], lr. */
+/* ARKCHEMY-SIZECALC: igDataList::setCapacity works out how much to ask for as
+   (capacity * elemSize) / virtualCall(). Six allocations were seen asking for
+   44 to 350 MB from a 5 MB arena, which is the shape a wrong term in that
+   expression produces. Capture every term so the bad one names itself.
+   Per entry: call, capacity, elemSize, product, divisor, result. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_sz_n = 0, g_ark_sz[10][6];
+
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
