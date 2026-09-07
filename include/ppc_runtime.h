@@ -593,6 +593,27 @@ static inline void ark_splitverify(uint32_t call, uint32_t lr, uint32_t size,
     g_ark_sv[i][6] = bsz;   g_ark_sv[i][7] = succ;
 }
 
+/* SPANWATCH: which TLSF entry point shortens the chain?
+
+   SPLITVERIFY cleared tlsf_memalign -- 8,650 calls, not one returned a block
+   whose successor was missing -- yet the chain still ends 3.79 MB short, and
+   both watches agree nothing ever wrote the header at 0x4663a08. So the
+   shrink happens somewhere not yet watched. tlsf_free and tlsf_realloc also
+   rewrite the physical chain, and igMemoryPool::freeUntracked reaches
+   tlsf_free without passing through reallocCommon, so no walk fires for it.
+
+   This needs no arena size: walk to the terminator and remember the furthest
+   the chain has ever reached for that control block. Any later walk falling
+   short of that high-water mark is the damage, and the `who` tag names the
+   entry point that first saw it. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_sw_n = 0, g_ark_sw[4][8];
+/* 0 ctrl  1 maxSpan  2 curSpan  3 dropCall  4 dropSpan  5 who  6 walks
+   7 blocks at the drop.  who: 1 reallocCommon entry, 2 memalign exit,
+   3 free exit, 4 realloc exit */
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
@@ -1298,6 +1319,37 @@ static inline void ark_heapscan(const PpcContext *ctx, uint32_t ctrl,
     } else if (!g_ark_hs[i][6]) {
         g_ark_hs[i][6] = call ? call : 1u;
         g_ark_hs[i][7] = b; g_ark_hs[i][8] = n;
+    }
+}
+
+static inline void ark_spanwatch(const PpcContext *ctx, uint32_t ctrl,
+                                 uint32_t who, uint32_t call)
+{
+    uint32_t b, n = 0, i;
+    if (!ctrl) return;
+    b = ctrl + 0xc70u;
+    for (;;) {
+        uint32_t w, sz;
+        if (n >= 40000u) return;
+        if (b < ctrl || b - ctrl > 0x40000000u) return;
+        w  = ppc_load_u32(ctx, b + 4u);
+        sz = w & ~3u;
+        if (sz == 0u) break;
+        n++;
+        b += 4u + sz;
+    }
+    for (i = 0; i < g_ark_sw_n; i++) if (g_ark_sw[i][0] == ctrl) break;
+    if (i == g_ark_sw_n) {
+        if (g_ark_sw_n >= 4u) return;
+        i = g_ark_sw_n++;
+        g_ark_sw[i][0] = ctrl;
+    }
+    g_ark_sw[i][6]++;
+    g_ark_sw[i][2] = b;
+    if (b > g_ark_sw[i][1]) g_ark_sw[i][1] = b;
+    else if (b < g_ark_sw[i][1] && !g_ark_sw[i][3]) {
+        g_ark_sw[i][3] = call ? call : 1u;
+        g_ark_sw[i][4] = b; g_ark_sw[i][5] = who; g_ark_sw[i][7] = n;
     }
 }
 
