@@ -557,6 +557,42 @@ volatile uint32_t g_ark_hs_n = 0, g_ark_hs[4][16];
    lastGood against firstBad brackets the single allocation that lost the
    tail; first* says whether this pool was ever seen whole at all. */
 
+/* SPLITVERIFY: catch the allocation that orphans a block.
+
+   tlsf_memalign's split writes the remainder header at (block+8)+size, and
+   the walk shows a chain whose last block simply stops covering the tail --
+   204 blocks reaching the sentinel before one call, 204 blocks ending
+   0x39C8D0 short after it, which is the shape of a split that shrank a block
+   without writing its remainder.
+
+   Reading the disassembly further has not settled which of the two split
+   paths does it, so this checks the result instead of the reasoning: after
+   every successful tlsf_memalign, follow the returned block to its physical
+   successor and look at that successor's size word.  A live chain always has
+   something there -- a real block, or the sentinel's 2 or 3.  A zero means
+   the successor was never written and everything beyond it is orphaned.
+
+   Recorded on that predicate rather than on arrival, so the ring holds the
+   allocations that actually did damage instead of the first few to run. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_sv_n = 0, g_ark_sv_calls = 0, g_ark_sv[6][8];
+/* 0 call  1 lr  2 requested size  3 alignment  4 returned ptr
+   5 block  6 block size  7 successor address */
+
+static inline void ark_splitverify(uint32_t call, uint32_t lr, uint32_t size,
+                                   uint32_t align, uint32_t ret, uint32_t blk,
+                                   uint32_t bsz, uint32_t succ)
+{
+    uint32_t i;
+    if (g_ark_sv_n >= 6u) return;
+    i = g_ark_sv_n++;
+    g_ark_sv[i][0] = call; g_ark_sv[i][1] = lr;  g_ark_sv[i][2] = size;
+    g_ark_sv[i][3] = align; g_ark_sv[i][4] = ret; g_ark_sv[i][5] = blk;
+    g_ark_sv[i][6] = bsz;   g_ark_sv[i][7] = succ;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
