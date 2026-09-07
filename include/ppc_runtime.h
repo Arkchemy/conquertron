@@ -722,6 +722,35 @@ static inline void ark_race_enter(uint32_t thread)
 }
 static inline void ark_race_exit(void) { if (g_ark_ar_depth) g_ark_ar_depth--; }
 
+/* GX2CENSUS: which graphics calls does the engine actually make?
+
+   With the stack fix in, boot no longer stalls: the archive drains, LZMA
+   decodes correctly, and the main thread is sampled inside
+   igPlatformVisualContext::setSurfaces, igMatrix44f::invert, setViewMatrix
+   and igCommonTraversal::end -- scene graph traversal and view matrices. The
+   engine is running a render loop.
+
+   The next question is whether that loop reaches the graphics hardware at all,
+   and if so what it asks for. Keyed by the import's own lr, which is unique per
+   call site, so the names can be resolved offline against the retail symbol
+   table rather than needing a table on device. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_gx_n = 0, g_ark_gx_total = 0, g_ark_gx[24][2];
+/* per entry: 0 call-site lr, 1 count */
+
+static inline void ark_gx2_note(uint32_t lr)
+{
+    uint32_t i;
+    g_ark_gx_total++;
+    for (i = 0; i < g_ark_gx_n; i++)
+        if (g_ark_gx[i][0] == lr) { g_ark_gx[i][1]++; return; }
+    if (g_ark_gx_n >= 24u) return;
+    i = g_ark_gx_n++;
+    g_ark_gx[i][0] = lr; g_ark_gx[i][1] = 1u;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
