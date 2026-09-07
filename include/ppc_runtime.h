@@ -366,6 +366,40 @@ volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
    44-350 MB requests names itself. setCapacity's own terms came back sane,
    so the size is going wrong somewhere between there and here.
    Per entry: call, size, caller lr, this. */
+/* ARKCHEMY-POOLMAP / POOLDIST: the boot igz names eight pools and the runtime
+   registers 52, yet every measured allocation comes out of the single 5 MB
+   Default arena at 0x4500274, which then fills and starts refusing 64-byte
+   grows. These answer whether pool lookup is collapsing onto one pool.
+   POOLMAP: which pool each index resolves to. POOLDIST: allocations per pool. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_pm_n = 0, g_ark_pm[16][3];   /* index, pool, hits */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_pd_n = 0, g_ark_pd[12][3];   /* pool, calls, ok */
+
+/* Tally one (index -> pool) resolution, collapsing repeats. */
+static inline void ark_poolmap(uint32_t idx, uint32_t pool)
+{
+    for (uint32_t i = 0; i < g_ark_pm_n; i++)
+        if (g_ark_pm[i][0] == idx) { g_ark_pm[i][1] = pool; g_ark_pm[i][2]++; return; }
+    if (g_ark_pm_n >= 16u) return;
+    uint32_t i = g_ark_pm_n++;
+    g_ark_pm[i][0] = idx; g_ark_pm[i][1] = pool; g_ark_pm[i][2] = 1u;
+}
+
+/* Tally one allocation against the pool that served it. */
+static inline void ark_pooldist(uint32_t pool, int ok)
+{
+    for (uint32_t i = 0; i < g_ark_pd_n; i++)
+        if (g_ark_pd[i][0] == pool) { g_ark_pd[i][1]++; if (ok) g_ark_pd[i][2]++; return; }
+    if (g_ark_pd_n >= 12u) return;
+    uint32_t i = g_ark_pd_n++;
+    g_ark_pd[i][0] = pool; g_ark_pd[i][1] = 1u; g_ark_pd[i][2] = ok ? 1u : 0u;
+}
+
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
