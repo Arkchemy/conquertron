@@ -90,21 +90,23 @@ int main(void)
       printf("  fresh heap: %u block(s), span 0x%08x, free %u bytes\n\n",
              c.blocks, c.span, c.freeb); }
 
-    /* 1. the exact call that loses the tail on hardware */
-    printf("case 1: the failing call in isolation -- memalign(align=64, size=65536)\n");
-    p = call(ppc_tlsf_memalign, heap, 64, 65536);
+    /* 1. the exact call SPLITVERIFY caught: align 64, size 65540 -- the pool
+       adds 4 to the caller's 65536 for its trailing size marker. Testing 65536
+       instead was why the first version of this harness found nothing. */
+    printf("case 1: the failing call in isolation -- memalign(align=64, size=65540)\n");
+    p = call(ppc_tlsf_memalign, heap, 64, 65540);
     printf("  -> ptr=0x%08x  block size word=0x%x\n", p,
            p ? ppc_load_u32(&g_ctx, p - 4u) : 0);
-    check("memalign(64, 65536)", p);
+    check("memalign(64, 65540)", p);
     printf("  %s\n\n", fail ? "REPRODUCED" : "clean -- needs prior state");
 
     /* 2. a spread of alignments, each on a fresh heap */
-    printf("case 2: alignment sweep, fresh heap each time, size 65536\n");
+    printf("case 2: alignment sweep, fresh heap each time, size 65540\n");
     for (i = 4; i <= 4096; i <<= 1) {
         memset(g_shared.mem, 0, PPC_MEM_SIZE);
         heap = call(ppc_tlsf_create, ARENA, ARENA_SIZE, 0);
         fail = 0;
-        p = call(ppc_tlsf_memalign, heap, i, 65536);
+        p = call(ppc_tlsf_memalign, heap, i, 65540);
         {
             uint32_t bsz = p ? (ppc_load_u32(&g_ctx, p - 4u) & ~3u) : 0;
             Chain c = walk();

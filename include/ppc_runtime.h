@@ -623,6 +623,39 @@ volatile uint32_t g_ark_sw_n = 0, g_ark_sw[4][10];
    that do not know it skip until the row exists. A walk that leaves the
    arena is counted as a runaway and recorded as nothing, never as a drop. */
 
+/* TLSFTRACE: record one pool's allocator calls so they can be replayed.
+
+   conquertron/hosttest runs the recompiled allocator natively, and there
+   tlsf_memalign is correct at every alignment on a fresh heap. The hardware
+   fault therefore needs the specific history of the ~200 allocations before
+   it, which no synthetic sequence is going to guess.
+
+   So capture the real one. Recording only the pool named by trace= in
+   watch.cfg keeps it to a few thousand entries, and replaying it on the host
+   turns a ten-minute hardware round trip into a millisecond one that can be
+   bisected and stepped in a debugger.
+
+   op 1 = memalign(align, size)   2 = free(ptr)   3 = realloc(ptr, size) */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_trace_ctrl = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_tr_n = 0, g_ark_tr_dropped = 0, g_ark_tr[8192][4];
+
+static inline void ark_trace(uint32_t ctrl, uint32_t op, uint32_t a,
+                             uint32_t b, uint32_t ret)
+{
+    uint32_t i;
+    if (!g_ark_trace_ctrl || ctrl != g_ark_trace_ctrl) return;
+    if (g_ark_tr_n >= 8192u) { g_ark_tr_dropped++; return; }
+    i = g_ark_tr_n++;
+    g_ark_tr[i][0] = op; g_ark_tr[i][1] = a;
+    g_ark_tr[i][2] = b;  g_ark_tr[i][3] = ret;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
