@@ -380,6 +380,67 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_pd_n = 0, g_ark_pd[12][3];   /* pool, calls, ok */
 
+/* POOLWHY: why a pool refuses an allocation.
+
+   Reading igMemoryPool::reallocCommon out of the binary settles what the
+   earlier probes could only guess at.  Its failure tail (0x216fd24) always
+   calls the pool's own getLargestFreeBlockSize before returning, so at
+   0x216fd38 r3 already holds the engine's own answer to "do you have room?"
+   -- no extra call, no re-entrancy.  r31 is zero on exactly the refusal
+   paths and non-zero on every success path that reaches the same tail, so
+   the refusal identifies itself.
+
+   vtable+0xf4 is reallocInternal, which names the concrete pool class:
+   igHeapMemoryPool 0x217cca0, igBlockMemoryPool 0x2174b60, igFixedMemoryPool
+   0x2175134, igStackMemoryPool 0x217f830, igCafeSystemMemoryPool 0x2156ea4,
+   igBidirectionalHeapMemoryPool 0x217c350.  Only vtable CONTENTS survive as
+   real .text addresses -- the vtable's own address is relocated -- so the
+   slot is what to compare, never the pointer to it.
+
+   That matters because only igHeapMemoryPool overrides
+   getLargestFreeBlockSize; the base returns a constant 0.  A largest-free
+   of 0 from any other class means "not implemented", not "empty". */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_pw_n = 0, g_ark_pw[10][12];
+/*  0 pool          1 vtable+0xf4 (class)   2 refusals    3 refusals <=256 bytes
+    4 min largest-free at a refusal          5 max        6 last refused size
+    7 _size (+0x14) 8 blocksAllocated(+0x2c) 9 userAllocated(+0x34)
+   10 _address[+0x08]  11 _address[+0x10]
+   Offsets 0x2c/0x34 are not inferred from a later game's field order -- they
+   are the offsets igMemoryPool::updateStatistics (0x2173648) itself writes.
+   _address is the TLSF control: word +0x08 is block_null.next_free, which
+   tlsf_create self-links, so slot 10 reading back equal to _address confirms
+   the layout and makes slot 11 the fl_bitmap.  An fl_bitmap of 0 means no
+   free block is indexed in any size class -- the heap cannot satisfy any
+   request, however much unallocated space the accounting says it has. */
+
+/* Record one refusal against the pool that refused it.  Reads only; every
+   value is state the engine already maintains. */
+static inline void ark_poolwhy(uint32_t pool, uint32_t vtf4, uint32_t size,
+                               uint32_t largest, uint32_t psize,
+                               uint32_t blocks, uint32_t user,
+                               uint32_t ctrl8, uint32_t ctrl10)
+{
+    uint32_t i;
+    for (i = 0; i < g_ark_pw_n; i++) if (g_ark_pw[i][0] == pool) break;
+    if (i == g_ark_pw_n) {
+        if (g_ark_pw_n >= 10u) return;
+        i = g_ark_pw_n++;
+        g_ark_pw[i][0] = pool; g_ark_pw[i][1] = vtf4;
+        g_ark_pw[i][2] = 0u;   g_ark_pw[i][3] = 0u;
+        g_ark_pw[i][4] = 0xFFFFFFFFu; g_ark_pw[i][5] = 0u;
+    }
+    g_ark_pw[i][2]++;
+    if (size <= 256u) g_ark_pw[i][3]++;
+    if (largest < g_ark_pw[i][4]) g_ark_pw[i][4] = largest;
+    if (largest > g_ark_pw[i][5]) g_ark_pw[i][5] = largest;
+    g_ark_pw[i][6]  = size;   g_ark_pw[i][7]  = psize;
+    g_ark_pw[i][8]  = blocks; g_ark_pw[i][9]  = user;
+    g_ark_pw[i][10] = ctrl8;  g_ark_pw[i][11] = ctrl10;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
