@@ -441,6 +441,34 @@ static inline void ark_poolwhy(uint32_t pool, uint32_t vtf4, uint32_t size,
     g_ark_pw[i][10] = ctrl8;  g_ark_pw[i][11] = ctrl10;
 }
 
+/* HEAPWALK: walk a TLSF arena physically and tally what is really in it.
+
+   Layout taken from tlsf_walk_heap (0x21f021c), not assumed: the control
+   block is 0xc70 bytes, the first block header sits at control+0xc70, a
+   header is {+0 prev_phys, +4 size|flags, +8 next_free, +0xc prev_free},
+   size is (word & ~3) with bit 0 meaning free, the next header is at
+   block + 4 + size, and a size of 0 terminates.
+
+   This is the discriminator the accounting cannot give.  Pool 0x4500274
+   reports 1,451,373 bytes live in a 5 MB arena while its fl_bitmap is 0,
+   and those cannot both be innocent:
+
+     free bytes near 3.8 MB  -> the memory is there but unlinked from the
+                                free lists, i.e. the lists are corrupt
+     free bytes near 0       -> the heap really is full and userAllocated
+                                under-reports it, which points at the
+                                Untracked malloc/free paths that
+                                deliberately skip updateStatistics
+
+   Read-only, bounded, and runs once. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_hw_done = 0, g_ark_hw[10];
+/* 0 blocks  1 usedBlocks  2 usedBytes  3 freeBlocks  4 freeBytes
+   5 largestFree  6 stoppedAt  7 status  8 firstBlock  9 arenaEnd
+   status: 1 hit the terminator, 2 walked out of range, 3 hit the cap */
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
@@ -1060,6 +1088,38 @@ static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {
     }
     return val;
 }
+
+/* Walk a TLSF arena physically, once.  See the g_ark_hw comment above for the
+   layout and for what the two possible answers mean.  Defined here rather
+   than beside the other ark_ helpers because it needs ppc_load_u32.
+
+   Bounded three ways -- a block cap, an arena range check, and the
+   terminator -- so a corrupt chain cannot spin or read outside the pool. */
+static inline void ark_heapwalk(const PpcContext *ctx, uint32_t ctrl, uint32_t psize)
+{
+    uint32_t b, end, n = 0, ub = 0, ubb = 0, fb = 0, fbb = 0, mx = 0, st = 0;
+    if (g_ark_hw_done || !ctrl || !psize) return;
+    g_ark_hw_done = 1u;
+    b   = ctrl + 0xc70u;
+    end = ctrl + psize;
+    for (;;) {
+        uint32_t w, sz;
+        if (n >= 40000u)             { st = 3u; break; }
+        if (b < ctrl || b + 16u > end) { st = 2u; break; }
+        w  = ppc_load_u32(ctx, b + 4u);
+        sz = w & ~3u;
+        if (sz == 0u)                { st = 1u; break; }   /* terminator */
+        if (w & 1u) { fb++; fbb += sz; if (sz > mx) mx = sz; }
+        else        { ub++; ubb += sz; }
+        n++;
+        b += 4u + sz;
+    }
+    g_ark_hw[0] = n;  g_ark_hw[1] = ub;  g_ark_hw[2] = ubb;
+    g_ark_hw[3] = fb; g_ark_hw[4] = fbb; g_ark_hw[5] = mx;
+    g_ark_hw[6] = b;  g_ark_hw[7] = st;
+    g_ark_hw[8] = ctrl + 0xc70u; g_ark_hw[9] = end;
+}
+
 
 /* Real, general-purpose "watch every store to one specific real address"
  * mechanism, added 2026-08-20 alongside ppc_debug_watch below (same real
