@@ -361,6 +361,16 @@ volatile uint32_t g_ark_rc_n = 0, g_ark_rc[14][4];  /* fn, lr, before, after */
    44 to 350 MB from a 5 MB arena, which is the shape a wrong term in that
    expression produces. Capture every term so the bad one names itself.
    Per entry: call, capacity, elemSize, product, divisor, result. */
+/* ARKCHEMY-BIGREQ: every allocation of a megabyte or more reaching
+   igMemoryPool::allocatePoolMemory, with its caller, so the origin of the
+   44-350 MB requests names itself. setCapacity's own terms came back sane,
+   so the size is going wrong somewhere between there and here.
+   Per entry: call, size, caller lr, this. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_bq_n = 0, g_ark_bq[10][4];
+
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
