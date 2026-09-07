@@ -656,6 +656,32 @@ static inline void ark_trace(uint32_t ctrl, uint32_t op, uint32_t a,
     g_ark_tr[i][2] = b;  g_ark_tr[i][3] = ret;
 }
 
+/* WRITELOG: every write to the store-watch address, not just the last.
+
+   The loopwatch slots keep only the most recent value, pc and lr. That was
+   enough while the last write was the interesting one, and is not enough now:
+   the word at 0x4653a04 takes seven writes, the last is a size marker that is
+   merely a consequence, and the write that first zeroed it is one of the
+   earlier six.
+
+   Replaying the captured allocator trace on ARM64 returns the correct pointer,
+   so the corruption is not the allocator's -- it comes from code outside
+   tlsf_memalign/free/realloc, and only its pc and lr will name it. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_wl_n = 0, g_ark_wl[12][4];
+/* per entry: 0 value written, 1 pc (last function entered), 2 lr, 3 call count */
+
+static inline void ark_writelog(uint32_t val, uint32_t pc, uint32_t lr, uint32_t call)
+{
+    uint32_t i;
+    if (g_ark_wl_n >= 12u) return;
+    i = g_ark_wl_n++;
+    g_ark_wl[i][0] = val; g_ark_wl[i][1] = pc;
+    g_ark_wl[i][2] = lr;  g_ark_wl[i][3] = call;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
@@ -1820,6 +1846,7 @@ static inline void ppc_sample_pc(const PpcContext *ctx) {
 
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
     if (addr == g_ppc_watch_store_addr) {
+        ark_writelog(val, g_ppc_current_pc, ctx->lr, g_ppc_fn_call_count);
         ppc_debug_watch(0xf0000001u, val);              /* the value being written */
         ppc_debug_watch(0xf0000002u, g_ppc_current_pc);  /* innermost function ENTERED */
         /* And the link register. g_ppc_current_pc is set at function entry and
