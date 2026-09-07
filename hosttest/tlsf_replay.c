@@ -52,6 +52,7 @@ int main(int argc, char **argv)
 {
     FILE *f;
     uint32_t hdr[4], e[4], i = 0, heap, sentinel, span, blocks, prev_span;
+    int marker = !(argc > 3 && strcmp(argv[3], "nomarker") == 0);
 
     if (argc < 2) { fprintf(stderr, "usage: %s <tlsf-trace.bin>\n", argv[0]); return 2; }
     f = fopen(argv[1], "rb");
@@ -73,7 +74,8 @@ int main(int argc, char **argv)
     heap = call3(ppc_tlsf_create, g_arena, g_size, 0);
     if (!heap) { fprintf(stderr, "tlsf_create failed\n"); return 1; }
     prev_span = chain_span(&blocks);
-    printf("fresh heap: %u block(s), span 0x%08x, sentinel 0x%08x\n\n", blocks, prev_span, sentinel);
+    printf("fresh heap: %u block(s), span 0x%08x, sentinel 0x%08x  (marker write: %s)\n\n",
+           blocks, prev_span, sentinel, marker ? "on" : "off");
 
     while (fread(e, sizeof e, 1, f) == 1) {
         uint32_t op = e[0], a = e[1], b = e[2], want = e[3], got = 0;
@@ -83,6 +85,15 @@ int main(int argc, char **argv)
             case 2: call3(ppc_tlsf_free, heap, a, 0);           break;
             case 3: got = call3(ppc_tlsf_realloc, heap, a, b);  break;
             default: printf("#%u unknown op %u\n", i, op); continue;
+        }
+        /* The device does not stop at the tlsf_* call. igHeapMemoryPool's
+           mallocInternal and reallocInternal then write a trailing size marker
+           at ptr + tlsf_block_size(ptr) - 4, which is the block's own last
+           word. Replaying only the allocator would leave the arena's contents
+           subtly different from the device's, so do what the device does. */
+        if (marker && got) {
+            uint32_t bsz = ppc_load_u32(&g_ctx, got - 4u) & ~3u;
+            if (bsz) ppc_store_u32(&g_ctx, ((got + bsz - 4u) & ~3u), b);
         }
         span = chain_span(&blocks);
 
