@@ -670,17 +670,57 @@ static inline void ark_trace(uint32_t ctrl, uint32_t op, uint32_t a,
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_wl_n = 0, g_ark_wl[12][4];
-/* per entry: 0 value written, 1 pc (last function entered), 2 lr, 3 call count */
+volatile uint32_t g_ark_wl_n = 0, g_ark_wl[12][5];
+/* per entry: 0 value, 1 pc, 2 lr, 3 call count, 4 thread
+   The thread is the PpcContext pointer, which is per-thread; pc is a single
+   global shared by every thread, so with more than one thread running it names
+   whatever any of them last entered and cannot be read as the writer. */
 
-static inline void ark_writelog(uint32_t val, uint32_t pc, uint32_t lr, uint32_t call)
+static inline void ark_writelog(uint32_t val, uint32_t pc, uint32_t lr,
+                                uint32_t call, uint32_t thread)
 {
     uint32_t i;
     if (g_ark_wl_n >= 12u) return;
     i = g_ark_wl_n++;
     g_ark_wl[i][0] = val; g_ark_wl[i][1] = pc;
     g_ark_wl[i][2] = lr;  g_ark_wl[i][3] = call;
+    g_ark_wl[i][4] = thread;
 }
+
+/* ALLOCRACE: is more than one thread inside the allocator at once?
+
+   The single-threaded replay of the captured trace is correct on both x86-64
+   and ARM64, while the live run corrupts the same arena. The live run has two
+   job-queue worker threads. A race is therefore the obvious candidate, and the
+   incoherent pc/lr pairs in WRITELOG hint at it -- but they do not prove it,
+   because g_ppc_current_pc is one global shared by every thread and goes stale
+   whenever any thread runs, not just when one is in the allocator.
+
+   So count it instead of inferring it. Depth is incremented on entry to each
+   tlsf_* function and decremented on exit; a peak above 1 means two threads
+   were inside together, which the pool's mutex is supposed to prevent.
+
+   Not atomic, deliberately: the increments race, which can only ever
+   UNDERCOUNT. A peak above 1 is therefore trustworthy; a peak of 1 is weak
+   evidence and should not be read as proof of correct locking. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ar_depth = 0, g_ark_ar_peak = 0, g_ark_ar_hits = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ar_t0 = 0, g_ark_ar_t1 = 0, g_ark_ar_threads = 0;
+
+static inline void ark_race_enter(uint32_t thread)
+{
+    uint32_t d = ++g_ark_ar_depth;
+    if (d > g_ark_ar_peak) g_ark_ar_peak = d;
+    if (d > 1u) g_ark_ar_hits++;
+    if (!g_ark_ar_t0) { g_ark_ar_t0 = thread; g_ark_ar_threads = 1u; }
+    else if (thread != g_ark_ar_t0 && !g_ark_ar_t1) { g_ark_ar_t1 = thread; g_ark_ar_threads = 2u; }
+}
+static inline void ark_race_exit(void) { if (g_ark_ar_depth) g_ark_ar_depth--; }
 
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
@@ -1846,7 +1886,8 @@ static inline void ppc_sample_pc(const PpcContext *ctx) {
 
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
     if (addr == g_ppc_watch_store_addr) {
-        ark_writelog(val, g_ppc_current_pc, ctx->lr, g_ppc_fn_call_count);
+        ark_writelog(val, g_ppc_current_pc, ctx->lr, g_ppc_fn_call_count,
+                     (uint32_t)(uintptr_t)ctx);
         ppc_debug_watch(0xf0000001u, val);              /* the value being written */
         ppc_debug_watch(0xf0000002u, g_ppc_current_pc);  /* innermost function ENTERED */
         /* And the link register. g_ppc_current_pc is set at function entry and
