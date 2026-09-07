@@ -464,11 +464,18 @@ static inline void ark_poolwhy(uint32_t pool, uint32_t vtf4, uint32_t size,
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_hw_done = 0, g_ark_hw[16];
+volatile uint32_t g_ark_hw_done = 0, g_ark_hw[16], g_ark_hb[8][2], g_ark_hz[4];
 /* 0 blocks  1 usedBlocks  2 usedBytes  3 freeBlocks  4 freeBytes
    5 largestFree  6 stoppedAt  7 status  8 firstBlock  9 arenaEnd
    10..13 the four header words at the stopping point  14 previous block
    15 previous block's size word
+   g_ark_hb: the last 8 blocks walked, {address, size word}, so a chain that
+   derailed on one bad size shows the bad size instead of only its result
+   g_ark_hz: the region past the stop point -- 0 non-zero words, 1 first
+   non-zero address, 2 last non-zero address, 3 words scanned.  If the arena
+   really is 5 MB, tlsf_create's sentinel is out there and this finds it;
+   if the region is entirely zero, the memory was never built into the heap
+   or was bulk-cleared
    status: 1 hit the terminator, 2 walked out of range, 3 hit the cap
 
    Slots 10..13 exist because status 1 alone is ambiguous: the walk stops on
@@ -478,6 +485,44 @@ volatile uint32_t g_ark_hw_done = 0, g_ark_hw[16];
    legitimately ending, the other is the chain being cut. The raw word tells
    them apart; the address does not, so recording it here beats watching a
    fixed address that may move between runs. */
+
+/* Bulk-write watch.
+
+   ppc_import_coreinit_memset and _memcpy write ctx->shared->mem directly with
+   host memset/memmove, for good reasons -- see cafeos_coreinit_libc.h -- but
+   that means they never pass through ppc_store_u32 and are therefore INVISIBLE
+   to the store watch.  A "hits=0" from that watch means "no translated store
+   instruction touched this", never "this was not written".
+
+   That gap cost a wrong inference: the block header at 0x4663a04 reads as
+   sixteen zero bytes with no store recorded against it, which looked like
+   memory that had never been written, when a memset over the range would
+   produce exactly the same evidence.
+
+   Set fill=0x... in watch.cfg to record any bulk write whose destination
+   range covers that address, with the lr that issued it. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_watch_fill_addr = 0xFFFFFFFFu;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_bw_n = 0, g_ark_bw_seen = 0, g_ark_bw[8][5];
+/* per entry: 0 lr, 1 dst, 2 length, 3 fill byte or source, 4 kind (1 set, 2 copy) */
+
+static inline void ark_note_bulk(uint32_t lr, uint32_t dst, uint32_t n,
+                                 uint32_t v, uint32_t kind)
+{
+    uint32_t w = g_ppc_watch_fill_addr, i;
+    if (w == 0xFFFFFFFFu || n == 0u) return;
+    if ((uint64_t)w < (uint64_t)dst || (uint64_t)w >= (uint64_t)dst + n) return;
+    g_ark_bw_seen++;
+    if (g_ark_bw_n >= 8u) return;
+    i = g_ark_bw_n++;
+    g_ark_bw[i][0] = lr; g_ark_bw[i][1] = dst; g_ark_bw[i][2] = n;
+    g_ark_bw[i][3] = v;  g_ark_bw[i][4] = kind;
+}
 
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
@@ -1121,6 +1166,7 @@ static inline void ark_heapwalk(const PpcContext *ctx, uint32_t ctrl, uint32_t p
         if (sz == 0u)                { st = 1u; break; }   /* terminator */
         if (w & 1u) { fb++; fbb += sz; if (sz > mx) mx = sz; }
         else        { ub++; ubb += sz; }
+        g_ark_hb[n & 7u][0] = b; g_ark_hb[n & 7u][1] = w;
         n++;
         pb = b;
         b += 4u + sz;
@@ -1137,6 +1183,16 @@ static inline void ark_heapwalk(const PpcContext *ctx, uint32_t ctrl, uint32_t p
     }
     g_ark_hw[14] = pb;
     g_ark_hw[15] = (pb >= ctrl && pb + 8u <= end) ? ppc_load_u32(ctx, pb + 4u) : 0u;
+    {   /* what is actually out there past the stop point */
+        uint32_t a, nz = 0, first = 0, last = 0, scanned = 0;
+        for (a = b; a + 4u <= end && scanned < 2000000u; a += 4u, scanned++) {
+            if (ppc_load_u32(ctx, a) != 0u) {
+                if (!nz) first = a;
+                last = a; nz++;
+            }
+        }
+        g_ark_hz[0] = nz; g_ark_hz[1] = first; g_ark_hz[2] = last; g_ark_hz[3] = scanned;
+    }
 }
 
 
