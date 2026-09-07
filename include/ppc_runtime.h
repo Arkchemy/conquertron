@@ -464,10 +464,20 @@ static inline void ark_poolwhy(uint32_t pool, uint32_t vtf4, uint32_t size,
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_hw_done = 0, g_ark_hw[10];
+volatile uint32_t g_ark_hw_done = 0, g_ark_hw[16];
 /* 0 blocks  1 usedBlocks  2 usedBytes  3 freeBlocks  4 freeBytes
    5 largestFree  6 stoppedAt  7 status  8 firstBlock  9 arenaEnd
-   status: 1 hit the terminator, 2 walked out of range, 3 hit the cap */
+   10..13 the four header words at the stopping point  14 previous block
+   15 previous block's size word
+   status: 1 hit the terminator, 2 walked out of range, 3 hit the cap
+
+   Slots 10..13 exist because status 1 alone is ambiguous: the walk stops on
+   (word & ~3) == 0, which is true both for the sentinel tlsf_create writes
+   (size 0 with the used and prev_free bits, so the word reads 2 or 3) and
+   for a header that has been zeroed (the word reads 0).  One is the heap
+   legitimately ending, the other is the chain being cut. The raw word tells
+   them apart; the address does not, so recording it here beats watching a
+   fixed address that may move between runs. */
 
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
@@ -1097,7 +1107,7 @@ static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {
    terminator -- so a corrupt chain cannot spin or read outside the pool. */
 static inline void ark_heapwalk(const PpcContext *ctx, uint32_t ctrl, uint32_t psize)
 {
-    uint32_t b, end, n = 0, ub = 0, ubb = 0, fb = 0, fbb = 0, mx = 0, st = 0;
+    uint32_t b, end, pb = 0, n = 0, ub = 0, ubb = 0, fb = 0, fbb = 0, mx = 0, st = 0;
     if (g_ark_hw_done || !ctrl || !psize) return;
     g_ark_hw_done = 1u;
     b   = ctrl + 0xc70u;
@@ -1112,12 +1122,21 @@ static inline void ark_heapwalk(const PpcContext *ctx, uint32_t ctrl, uint32_t p
         if (w & 1u) { fb++; fbb += sz; if (sz > mx) mx = sz; }
         else        { ub++; ubb += sz; }
         n++;
+        pb = b;
         b += 4u + sz;
     }
     g_ark_hw[0] = n;  g_ark_hw[1] = ub;  g_ark_hw[2] = ubb;
     g_ark_hw[3] = fb; g_ark_hw[4] = fbb; g_ark_hw[5] = mx;
     g_ark_hw[6] = b;  g_ark_hw[7] = st;
     g_ark_hw[8] = ctrl + 0xc70u; g_ark_hw[9] = end;
+    if (b >= ctrl && b + 16u <= end) {
+        g_ark_hw[10] = ppc_load_u32(ctx, b);
+        g_ark_hw[11] = ppc_load_u32(ctx, b + 4u);
+        g_ark_hw[12] = ppc_load_u32(ctx, b + 8u);
+        g_ark_hw[13] = ppc_load_u32(ctx, b + 12u);
+    }
+    g_ark_hw[14] = pb;
+    g_ark_hw[15] = (pb >= ctrl && pb + 8u <= end) ? ppc_load_u32(ctx, pb + 4u) : 0u;
 }
 
 
