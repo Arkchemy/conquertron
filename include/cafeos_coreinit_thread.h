@@ -152,9 +152,39 @@ static inline void *arkchemy_thread_trampoline(void *arg) {
     pthread_setspecific(g_arkchemy_current_thread_key, (void *)(uintptr_t)te->guest_addr);
 
     PpcContext ctx;
+    uint32_t sp;
     memset(&ctx, 0, sizeof(ctx));
     ctx.shared = te->shared;
-    ctx.r[1] = te->stack_top;
+
+    /* Reserve the caller linkage area above the initial stack pointer.
+     *
+     * PowerPC EABI: a function prologue does `stwu r1, -N(r1)` and then stores
+     * its caller's LR at old_r1 + 4 -- into the CALLER's frame, above the
+     * incoming r1. At thread start there is no caller, so the OS has to leave
+     * that space; real OSCreateThread does. Setting r1 to the raw stack top
+     * meant the entry function's prologue wrote 4 bytes past the end of the
+     * stack buffer.
+     *
+     * That was not theoretical. jqWorkerThread's prologue is
+     *
+     *     21db584: mflr r0            ; r0 = 0, nothing has called us
+     *     21db588: stwu r1, -0x10(r1)
+     *     21db59c: stw  r0, 0x14(r1)  ; old_r1 + 4
+     *
+     * and with r1 = 0x4653a00, the exact end of its 64 KB stack buffer, that
+     * last store put a zero at 0x4653a04 -- the size word of the free TLSF
+     * block that began there. The allocator then found a block claiming size
+     * 0, skipped its alignment split, handed back an unaligned pointer, and
+     * the remaining 3.79 MB of a 5 MB arena fell out of the block chain. Boot
+     * stalled several layers downstream of that, in LZMA failing to allocate.
+     *
+     * Sixteen bytes rather than the minimum eight: the ABI wants the stack
+     * 8-byte aligned and some prologues assume 16, and the cost is 16 bytes
+     * per thread. The back chain is terminated with zero, as the OS does, so a
+     * stack walker stops here instead of running off the top. */
+    sp = (te->stack_top - 16u) & ~0xFu;
+    ppc_store_u32(&ctx, sp, 0u);
+    ctx.r[1] = sp;
     ctx.r[3] = (uint32_t)te->argc;
     ctx.r[4] = te->argv;
     ppc_dispatch(&ctx, te->entry_addr);
