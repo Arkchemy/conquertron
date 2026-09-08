@@ -862,6 +862,38 @@ static inline void ark_devlog(uint32_t op, uint32_t dev, uint32_t vt, uint32_t c
     g_ark_dl[i][2] = vt; g_ark_dl[i][3] = call;
 }
 
+/* ARCHNAME: which archive is being opened and closed, and by whom.
+
+   DEVLOG showed the archive added at call 3,079,012 and removed at 3,086,931,
+   with the single LZMA inflate in between -- so it registers, decompresses one
+   block, and is closed. igArchive::close is called from exactly two places, one
+   of them tfbGame::streamContext::load, which is game logic rather than engine
+   plumbing.
+
+   Before reading anything into that, the archive has to be identified. There
+   were two opens and "streamContext" suggests audio, so the one being closed
+   may not be the boot archive at all. Names settle it; counts cannot. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_an_n = 0, g_ark_an[4][2];
+/* per entry: 0 the archive `this`, 1 the lr that closed it (0 while open) */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile char g_ark_an_name[4][40];
+
+static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
+{
+    uint32_t i, k;
+    if (which >= 4u) return;
+    if (which >= g_ark_an_n) g_ark_an_n = which + 1u;
+    g_ark_an[which][0] = self;
+    for (k = 0; k < 39u && src && src[k]; k++) g_ark_an_name[which][k] = src[k];
+    g_ark_an_name[which][k] = 0;
+    (void)i;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
