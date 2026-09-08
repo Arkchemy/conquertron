@@ -797,14 +797,21 @@ static inline void ark_pump(uint32_t which) { if (which < 16u) g_ark_ap[which]++
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_dev_n = 0, g_ark_dev[8][4];
-/* per entry: 0 device pointer, 1 times seen, 2 times active, 3 last flag byte */
+volatile uint32_t g_ark_dev_n = 0, g_ark_dev[8][5];
+/* per entry: 0 device pointer, 1 times seen, 2 times active, 3 byte at +0x20,
+   4 vtable pointer
+   The vtable is the point. getIsActive is virtual and the two implementations
+   read DIFFERENT fields -- igVirtualStorageDevice reads a byte at +0x20, while
+   igPhysicalStorageDevice reads a word at +0x2c -- so recording +0x20 for every
+   device produced three entries with flag=0x4 that passed and three with
+   flag=0x4 that failed, which is not a contradiction but a probe reading a
+   field its subject never consults. The vtable names the class and settles it. */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
 volatile uint32_t g_ark_spinup = 0, g_ark_spindown = 0;
 
-static inline void ark_dev(uint32_t dev, uint32_t active, uint32_t flag)
+static inline void ark_dev(uint32_t dev, uint32_t active, uint32_t flag, uint32_t vt)
 {
     uint32_t i;
     for (i = 0; i < g_ark_dev_n; i++)
@@ -813,8 +820,16 @@ static inline void ark_dev(uint32_t dev, uint32_t active, uint32_t flag)
     if (g_ark_dev_n >= 8u) return;
     i = g_ark_dev_n++;
     g_ark_dev[i][0] = dev; g_ark_dev[i][1] = 1u;
-    g_ark_dev[i][2] = active ? 1u : 0u; g_ark_dev[i][3] = flag;
+    g_ark_dev[i][2] = active ? 1u : 0u; g_ark_dev[i][3] = flag; g_ark_dev[i][4] = vt;
 }
+
+/* The archive object itself, captured where igArchive::update runs, so it can be
+   compared against the device list -- an archive that is not in that list at all
+   is a different bug from one that is and fails the gate. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_arch_this = 0, g_ark_arch_vt = 0;
 
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
