@@ -748,6 +748,32 @@ static inline void ark_gx2_note(uint32_t idx)
     if (idx < 192u) g_ark_gx[idx]++; else g_ark_gx_over++;
 }
 
+/* ARCHPUMP: why does the archive stop after one block?
+
+   The stack fix got boot past its stall: the archive's first work item drained,
+   LZMA decoded correctly, and the engine now runs a full render pipeline and
+   swaps 1,291 buffers. But it draws nothing, and the reason is upstream of
+   graphics -- the file is 198,695 bytes and exactly 131,072 were read, in one
+   request, with nothing pending. INFLATE ran once where 35 blocks were
+   expected. The engine is not blocked on I/O; it stopped asking.
+
+   So count the pump. igArchive::updateArchiveSystem drives updateTasks, which
+   drives startNewTasks, which issues startBlockRead. Whichever link is not
+   running, or is running and declining to act, is where the loop dies.
+
+   igArchiveBlockManager::allocate is included because an exhausted block pool
+   is the obvious way for startNewTasks to run happily and still start nothing;
+   its return value is counted separately from its calls. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ap[10];
+/* 0 updateArchiveSystem  1 updateTasks       2 startNewTasks   3 startBlockRead
+   4 decompressBatch      5 blockMgr.allocate 6 allocate returned non-null
+   7 getNumAvailableBlocks 8 last available count  9 addWork */
+
+static inline void ark_pump(uint32_t which) { if (which < 10u) g_ark_ap[which]++; }
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
