@@ -916,12 +916,19 @@ volatile uint32_t g_ark_xr_file = 0, g_ark_xr_path = 0, g_ark_xr_ok = 0, g_ark_x
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_xa_n = 0, g_ark_xa_total = 0, g_ark_xa[10][2];
-/* per entry: 0 times asked, 1 times a non-null value came back */
+volatile uint32_t g_ark_xa_n = 0, g_ark_xa_total = 0, g_ark_xa[48][4];
+/* per entry: 0 times asked, 1 times a value came back, 2 first call index,
+   3 last call index
+   Widened from 10 to 48 because the first run hit the cap exactly -- ten
+   distinct names out of 308 lookups -- and startLevel lives in the last
+   element of the file, so it was almost certainly among the dropped ones.
+   The call indices are here because tripleBuffer came back asked=2 got=1,
+   which looks like one lookup before the document is parsed and one after;
+   ordering is what confirms or kills that. */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile char g_ark_xa_name[10][24];
+volatile char g_ark_xa_name[48][24];
 
 static inline void ark_xmlattr(const char *nm, uint32_t got)
 {
@@ -933,14 +940,16 @@ static inline void ark_xmlattr(const char *nm, uint32_t got)
             if (!nm[k]) break;
         }
         if (k >= 23u || (g_ark_xa_name[i][k] == nm[k])) {
-            g_ark_xa[i][0]++; if (got) g_ark_xa[i][1]++; return;
+            g_ark_xa[i][0]++; if (got) g_ark_xa[i][1]++;
+            g_ark_xa[i][3] = g_ark_xa_total; return;
         }
     }
-    if (g_ark_xa_n >= 10u) return;
+    if (g_ark_xa_n >= 48u) return;
     i = g_ark_xa_n++;
     for (k = 0; k < 23u && nm[k]; k++) g_ark_xa_name[i][k] = nm[k];
     g_ark_xa_name[i][k] = 0;
     g_ark_xa[i][0] = 1u; g_ark_xa[i][1] = got ? 1u : 0u;
+    g_ark_xa[i][2] = g_ark_xa_total; g_ark_xa[i][3] = g_ark_xa_total;
 }
 
 /* Tally one (index -> pool) resolution, collapsing repeats. */
