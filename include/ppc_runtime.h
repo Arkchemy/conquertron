@@ -831,6 +831,37 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_arch_this = 0, g_ark_arch_vt = 0;
 
+/* DEVLOG: the storage-device registration history.
+
+   The archive's `this` (0x829a610, vtable igArchive) is not in the device list
+   igFileContext::update walks, which is why its update runs 8 times against the
+   context's 1,341. igArchive::open is the ONLY caller of
+   igFileContext::addStorageDevice in the whole image, and the call at
+   0x21699e8 is unconditional once reached -- so the archive either never got
+   that far, or was added and then removed again.
+
+   igArchive::open also calls removeStorageDevice, so both are logged in order
+   with the device and its vtable. A bare add/remove count would not say which
+   device, and with eight of them that is the whole question. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_dl_n = 0, g_ark_dl[12][4];
+/* per entry: 0 op (1 add, 2 remove), 1 device, 2 vtable, 3 call count */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_open_n = 0, g_ark_open_reg = 0, g_ark_close_n = 0;
+
+static inline void ark_devlog(uint32_t op, uint32_t dev, uint32_t vt, uint32_t call)
+{
+    uint32_t i;
+    if (g_ark_dl_n >= 12u) return;
+    i = g_ark_dl_n++;
+    g_ark_dl[i][0] = op; g_ark_dl[i][1] = dev;
+    g_ark_dl[i][2] = vt; g_ark_dl[i][3] = call;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
