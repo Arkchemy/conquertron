@@ -929,8 +929,16 @@ volatile uint32_t g_ark_xa_n = 0, g_ark_xa_total = 0, g_ark_xa[48][4];
 __attribute__((weak))
 #endif
 volatile char g_ark_xa_name[48][24];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile char g_ark_xa_val[48][28];
+/* The VALUE each lookup returned, not merely whether it was non-null.
+   startLevel came back a=1 g=1 -- found -- and the game still opened
+   level/test.bld, so a non-null result is not the same as the right
+   result. What the parser actually produced is the open question. */
 
-static inline void ark_xmlattr(const char *nm, uint32_t got)
+static inline void ark_xmlattr_v(const char *nm, uint32_t got, const char *val)
 {
     uint32_t i, k;
     g_ark_xa_total++;
@@ -941,7 +949,10 @@ static inline void ark_xmlattr(const char *nm, uint32_t got)
         }
         if (k >= 23u || (g_ark_xa_name[i][k] == nm[k])) {
             g_ark_xa[i][0]++; if (got) g_ark_xa[i][1]++;
-            g_ark_xa[i][3] = g_ark_xa_total; return;
+            g_ark_xa[i][3] = g_ark_xa_total;
+            if (got && val) { for (k = 0; k < 27u && val[k]; k++) g_ark_xa_val[i][k] = val[k];
+                              g_ark_xa_val[i][k] = 0; }
+            return;
         }
     }
     if (g_ark_xa_n >= 48u) return;
@@ -950,6 +961,8 @@ static inline void ark_xmlattr(const char *nm, uint32_t got)
     g_ark_xa_name[i][k] = 0;
     g_ark_xa[i][0] = 1u; g_ark_xa[i][1] = got ? 1u : 0u;
     g_ark_xa[i][2] = g_ark_xa_total; g_ark_xa[i][3] = g_ark_xa_total;
+    if (got && val) { for (k = 0; k < 27u && val[k]; k++) g_ark_xa_val[i][k] = val[k];
+                      g_ark_xa_val[i][k] = 0; }
 }
 
 /* Tally one (index -> pool) resolution, collapsing repeats. */
