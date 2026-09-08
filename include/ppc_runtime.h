@@ -894,6 +894,55 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
     (void)i;
 }
 
+/* XMLCFG: does alchemy.xml parse, and does startLevel come back?
+
+   The disc ships content/alchemy.xml with `startLevel = "Title"`, and the FS
+   log shows it opened successfully at 542 bytes -- three times. Yet the game
+   loads level/test.bld, and `test` is the hardcoded default sitting beside
+   `startLevel` and `level/` in .rodata. So the file is read and its values are
+   not taking effect.
+
+   The same failure explains the VRAM number that was chased days ago: the
+   config asks for vramBSize 419430400, and the request seen was 367001600, a
+   default rather than the configured value.
+
+   igXmlDocument::read parses it; igXmlNode::getAttribute is what a config
+   lookup calls. Recording the attribute NAME matters -- a count of failed
+   lookups would not say whether startLevel was even asked for. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_xr_file = 0, g_ark_xr_path = 0, g_ark_xr_ok = 0, g_ark_xr_last = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_xa_n = 0, g_ark_xa_total = 0, g_ark_xa[10][2];
+/* per entry: 0 times asked, 1 times a non-null value came back */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile char g_ark_xa_name[10][24];
+
+static inline void ark_xmlattr(const char *nm, uint32_t got)
+{
+    uint32_t i, k;
+    g_ark_xa_total++;
+    for (i = 0; i < g_ark_xa_n; i++) {
+        for (k = 0; k < 23u; k++) {
+            if (g_ark_xa_name[i][k] != nm[k]) break;
+            if (!nm[k]) break;
+        }
+        if (k >= 23u || (g_ark_xa_name[i][k] == nm[k])) {
+            g_ark_xa[i][0]++; if (got) g_ark_xa[i][1]++; return;
+        }
+    }
+    if (g_ark_xa_n >= 10u) return;
+    i = g_ark_xa_n++;
+    for (k = 0; k < 23u && nm[k]; k++) g_ark_xa_name[i][k] = nm[k];
+    g_ark_xa_name[i][k] = 0;
+    g_ark_xa[i][0] = 1u; g_ark_xa[i][1] = got ? 1u : 0u;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
