@@ -1035,6 +1035,36 @@ static inline void ark_xmlerr(const char *msg, uint32_t where)
     g_ark_xerr_msg[k] = 0;
 }
 
+/* XMLWHO: reconcile a successful read with a merge that never happens.
+
+   igXmlDocument::read returned 0 -- success, no parse errors -- yet
+   igXmlNode::merge was never called, and igRegistry::read only skips the merge
+   when that return is NON-zero. Both cannot be true of the same call, so the
+   read that succeeded is probably not the one inside igRegistry::read.
+
+   The merge hook is confirmed present in the build, so n=0 is real. What is
+   unmeasured is whether igRegistry::read runs at all, and who actually calls
+   igXmlDocument::read. The caller's lr settles it. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_regread = 0, g_ark_regread_ret = 0xdeadbeefu;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_xrl_n = 0, g_ark_xrl[6][2];
+/* per entry: 0 the lr that called igXmlDocument::read, 1 times */
+
+static inline void ark_xmlreader(uint32_t lr)
+{
+    uint32_t i;
+    for (i = 0; i < g_ark_xrl_n; i++)
+        if (g_ark_xrl[i][0] == lr) { g_ark_xrl[i][1]++; return; }
+    if (g_ark_xrl_n >= 6u) return;
+    i = g_ark_xrl_n++;
+    g_ark_xrl[i][0] = lr; g_ark_xrl[i][1] = 1u;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
