@@ -993,6 +993,48 @@ static inline void ark_merge(uint32_t dst, uint32_t src, uint32_t flags)
 static inline void ark_merge_ret(uint32_t r)
 { if (g_ark_mg_n) g_ark_mg[g_ark_mg_n - 1u][3] = r; }
 
+/* XMLREAD: why igXmlDocument::read fails, so the merge is skipped.
+
+   igRegistry::read gates the merge on that return value:
+
+     21c3aa0: bl  0x21e287c   ; igXmlDocument::read(igFile*)
+     21c3aa4: or. r31, r3, r3
+     21c3aa8: bne 0x21c3acc   ; NON-ZERO -> skip the merge entirely
+     21c3ac8: bl  0x21e07f4   ; merge(registryRoot, newRoot, 1)
+
+   XMLMERGE came back n=0, so read is returning non-zero and alchemy.xml is
+   parsed into a document that is then thrown away. The defaults survive and
+   startLevel stays "test".
+
+   rapidxml signals a parse failure through parse_error_handler, which is
+   recorded here with the message pointer -- rapidxml's messages are static
+   strings such as "expected <" and name the failure precisely. Note the game's
+   setjmp/longjmp are themselves recompiled PowerPC, and a longjmp that restores
+   guest registers cannot unwind the host call stack, so an error path that
+   depends on it is worth suspecting if the handler does run. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_xrd_calls = 0, g_ark_xrd_ret = 0xdeadbeefu;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_xerr_n = 0, g_ark_xerr_where = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile char g_ark_xerr_msg[64];
+
+static inline void ark_xmlerr(const char *msg, uint32_t where)
+{
+    uint32_t k;
+    g_ark_xerr_n++;
+    if (g_ark_xerr_n > 1u) return;          /* the FIRST failure is the one */
+    g_ark_xerr_where = where;
+    for (k = 0; k < 63u && msg[k]; k++) g_ark_xerr_msg[k] = msg[k];
+    g_ark_xerr_msg[k] = 0;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
