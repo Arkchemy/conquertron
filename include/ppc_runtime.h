@@ -784,6 +784,38 @@ volatile uint32_t g_ark_ap[16];
 
 static inline void ark_pump(uint32_t which) { if (which < 16u) g_ark_ap[which]++; }
 
+/* ARCHDEV: which storage device is inactive, and does the archive ever spin up?
+
+   igFileContext::update walks its device list and gates each one on
+   vtable+0x184, which is igVirtualStorageDevice::getIsActive -- two
+   instructions, `lbz r3, 0x20(r3); blr`, so it is a plain byte flag at +0x20.
+   The context ran 1,363 times while igArchive::update ran 8, so the archive is
+   in the list and that flag is reading zero.
+
+   Recorded per device pointer rather than as a total, because "some device is
+   inactive" is not useful and "this device, at this address, is the one" is. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_dev_n = 0, g_ark_dev[8][4];
+/* per entry: 0 device pointer, 1 times seen, 2 times active, 3 last flag byte */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_spinup = 0, g_ark_spindown = 0;
+
+static inline void ark_dev(uint32_t dev, uint32_t active, uint32_t flag)
+{
+    uint32_t i;
+    for (i = 0; i < g_ark_dev_n; i++)
+        if (g_ark_dev[i][0] == dev) { g_ark_dev[i][1]++; if (active) g_ark_dev[i][2]++;
+                                      g_ark_dev[i][3] = flag; return; }
+    if (g_ark_dev_n >= 8u) return;
+    i = g_ark_dev_n++;
+    g_ark_dev[i][0] = dev; g_ark_dev[i][1] = 1u;
+    g_ark_dev[i][2] = active ? 1u : 0u; g_ark_dev[i][3] = flag;
+}
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
