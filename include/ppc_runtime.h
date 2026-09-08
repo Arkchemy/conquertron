@@ -767,12 +767,22 @@ static inline void ark_gx2_note(uint32_t idx)
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_ap[10];
+volatile uint32_t g_ark_ap[16];
 /* 0 updateArchiveSystem  1 updateTasks       2 startNewTasks   3 startBlockRead
-   4 decompressBatch      5 blockMgr.allocate 6 allocate returned non-null
-   7 getNumAvailableBlocks 8 last available count  9 addWork */
+   4 decompressBatch      5 blockMgr.allocate 6 allocate returned non-null (final blr)
+   7 getNumAvailableBlocks 8 last available count  9 addWork
+  10 allocate returned early (the beqlr, state==0 -- an immediate success)
+  11 blocks seen with state 0   12 with state 2   13 with any other state
 
-static inline void ark_pump(uint32_t which) { if (which < 10u) g_ark_ap[which]++; }
+   Slot 10 exists because slot 6 was wrong. allocate has TWO exits: a
+   conditional `beqlr` at 0x216e2b0 that returns the moment it finds a block
+   with state 0, and the final `blr`. The first version hooked only the final
+   one, so a run reporting alloc=2 gotBlock=0 could not distinguish "allocation
+   failed twice" from "allocation succeeded twice through an exit I was not
+   watching". Slots 11-13 histogram the states the availability walk sees, so
+   the count and the allocation agree or visibly do not. */
+
+static inline void ark_pump(uint32_t which) { if (which < 16u) g_ark_ap[which]++; }
 
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
