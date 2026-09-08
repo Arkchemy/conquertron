@@ -965,6 +965,34 @@ static inline void ark_xmlattr_v(const char *nm, uint32_t got, const char *val)
                       g_ark_xa_val[i][k] = 0; }
 }
 
+/* XMLMERGE: does alchemy.xml get merged over the defaults?
+
+   getAttribute("startLevel") returns "test" -- so the value really is in the
+   document being queried, and the document is not alchemy.xml, which says
+   "Title". maxShaderParametersAttr comes back "32" and does not appear in
+   alchemy.xml at all, which confirms a separate defaults document exists and
+   is what the game is reading.
+
+   igXmlNode::merge (0x21e07f4) is how one document is folded into another. If
+   it never runs, or runs and changes nothing, the defaults stand and every
+   configured value -- startLevel, vramBSize, the job-queue heap size -- is
+   silently ignored. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_mg_n = 0, g_ark_mg[6][4];
+/* per entry: 0 destination node, 1 source node, 2 flags, 3 result */
+
+static inline void ark_merge(uint32_t dst, uint32_t src, uint32_t flags)
+{
+    uint32_t i;
+    if (g_ark_mg_n >= 6u) return;
+    i = g_ark_mg_n++;
+    g_ark_mg[i][0] = dst; g_ark_mg[i][1] = src; g_ark_mg[i][2] = flags;
+}
+static inline void ark_merge_ret(uint32_t r)
+{ if (g_ark_mg_n) g_ark_mg[g_ark_mg_n - 1u][3] = r; }
+
 /* Tally one (index -> pool) resolution, collapsing repeats. */
 static inline void ark_poolmap(uint32_t idx, uint32_t pool)
 {
