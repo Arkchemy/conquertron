@@ -423,7 +423,7 @@ static inline void arkchemy_gx2_ensure_frame_acquired(void) {
     dkCmdBufBindRenderTargets(g_arkchemy_gx2.cmdbuf, targets, 1, NULL);
 }
 
-static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { ark_gx2_note(39u);
     /* void GX2Init(uint32_t *attributes) -- real attributes array
      * (key/value pairs, e.g. requested tiling aperture size) accepted
      * but not yet consumed -- no real GX2 caller behavior in this
@@ -501,7 +501,7 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { ark_gx2_note(ctx->l
     g_arkchemy_gx2.initialized = true;
 }
 
-static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) { ark_gx2_note(40u);
     (void)ctx;
     if (!g_arkchemy_gx2.initialized) return;
     dkQueueWaitIdle(g_arkchemy_gx2.queue);
@@ -566,7 +566,7 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) { ark_gx2_note(ct
     g_arkchemy_gx2.initialized = false;
 }
 
-static inline void ppc_import_gx2_GX2SetViewport(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetViewport(PpcContext *ctx) { ark_gx2_note(41u);
     /* void GX2SetViewport(float x, float y, float width, float height,
      * float nearZ, float farZ) -- real field-for-field match with
      * deko3d's own DkViewport struct, confirmed by comparing both real
@@ -585,7 +585,7 @@ static inline void ppc_import_gx2_GX2SetViewport(PpcContext *ctx) { ark_gx2_note
     dkCmdBufSetViewports(g_arkchemy_gx2.cmdbuf, 0, &vp, 1);
 }
 
-static inline void ppc_import_gx2_GX2SetScissor(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetScissor(PpcContext *ctx) { ark_gx2_note(42u);
     /* void GX2SetScissor(uint32_t x, uint32_t y, uint32_t width,
      * uint32_t height) -- real field-for-field match with deko3d's own
      * DkScissor struct. Real integer args -- GPRs, not FPRs. */
@@ -597,13 +597,13 @@ static inline void ppc_import_gx2_GX2SetScissor(PpcContext *ctx) { ark_gx2_note(
     dkCmdBufSetScissors(g_arkchemy_gx2.cmdbuf, 0, &sc, 1);
 }
 
-static inline void ppc_import_gx2_GX2SetLineWidth(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetLineWidth(PpcContext *ctx) { ark_gx2_note(43u);
     /* void GX2SetLineWidth(float width) -- direct real equivalent,
      * dkCmdBufSetLineWidth(cmdbuf, float width). */
     dkCmdBufSetLineWidth(g_arkchemy_gx2.cmdbuf, (float)ctx->f[1]);
 }
 
-static inline void ppc_import_gx2_GX2SetPointSize(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetPointSize(PpcContext *ctx) { ark_gx2_note(44u);
     /* void GX2SetPointSize(float width, float height) -- real GX2 has
      * independent width/height (a real AMD hardware feature,
      * non-square points); deko3d's dkCmdBufSetPointSize only takes one
@@ -612,7 +612,7 @@ static inline void ppc_import_gx2_GX2SetPointSize(PpcContext *ctx) { ark_gx2_not
     dkCmdBufSetPointSize(g_arkchemy_gx2.cmdbuf, (float)ctx->f[1]);
 }
 
-static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) { ark_gx2_note(45u);
     /* void GX2SetPolygonOffset(float frontOffset, float frontScale,
      * float backOffset, float backScale, float clamp) -- real GX2 has
      * independent front/back-face bias; deko3d's dkCmdBufSetDepthBias
@@ -623,7 +623,7 @@ static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) { ark_gx2
     dkCmdBufSetDepthBias(g_arkchemy_gx2.cmdbuf, (float)ctx->f[1], (float)ctx->f[5], (float)ctx->f[2]);
 }
 
-static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) { ark_gx2_note(46u);
     /* void GX2SetBlendConstantColor(float red, float green, float blue,
      * float alpha) -- direct real equivalent,
      * dkCmdBufSetBlendConst(cmdbuf, r, g, b, a), same argument order. */
@@ -670,7 +670,7 @@ static inline DkBlendOp arkchemy_gx2_blend_combine_to_dk(uint32_t gx2_combine) {
     return (DkBlendOp)table[gx2_combine];
 }
 
-static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) { ark_gx2_note(47u);
     /* void GX2SetBlendControl(GX2RenderTarget target,
      * GX2BlendMode colorSrcBlend, GX2BlendMode colorDstBlend,
      * GX2BlendCombineMode colorCombine, BOOL useAlphaBlend,
@@ -759,7 +759,7 @@ static inline void arkchemy_gx2_rebind_color_write_state(void) {
     dkCmdBufBindColorWriteState(g_arkchemy_gx2.cmdbuf, &state);
 }
 
-static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) { ark_gx2_note(48u);
     /* void GX2SetColorControl(GX2LogicOp rop3, uint8_t targetBlendEnable,
      * BOOL multiWriteEnable, BOOL colorWriteEnable) -- real signature
      * confirmed against wut's gx2/registers.h. 4 integer/enum/BOOL
@@ -833,7 +833,7 @@ static inline DkStencilOp arkchemy_gx2_stencil_func_to_dk(uint32_t gx2_func) {
     return (DkStencilOp)(gx2_func + 1);
 }
 
-static inline void ppc_import_gx2_GX2SetAlphaTest(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetAlphaTest(PpcContext *ctx) { ark_gx2_note(49u);
     /* void GX2SetAlphaTest(BOOL alphaTest, GX2CompareFunction func,
      * float ref) -- real signature confirmed against wut's
      * gx2/registers.h, 2 integer/BOOL params (r3-r4) + 1 real float
@@ -863,7 +863,7 @@ static inline void ppc_import_gx2_GX2SetAlphaTest(PpcContext *ctx) { ark_gx2_not
     dkCmdBufSetAlphaRef(g_arkchemy_gx2.cmdbuf, ref);
 }
 
-static inline void ppc_import_gx2_GX2SetAlphaToMask(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetAlphaToMask(PpcContext *ctx) { ark_gx2_note(50u);
     /* void GX2SetAlphaToMask(BOOL alphaToMask, GX2AlphaToMaskMode mode)
      * -- real signature confirmed against wut's gx2/registers.h.
      * GX2AlphaToMaskMode (confirmed against wut's gx2/enum.h:
@@ -887,7 +887,7 @@ static inline void ppc_import_gx2_GX2SetAlphaToMask(PpcContext *ctx) { ark_gx2_n
     dkCmdBufBindMultisampleState(g_arkchemy_gx2.cmdbuf, &g_arkchemy_gx2.multisample_state);
 }
 
-static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) { ark_gx2_note(51u);
     /* void GX2SetDepthStencilControl(BOOL depthTest, BOOL depthWrite,
      * GX2CompareFunction depthCompare, BOOL stencilTest,
      * BOOL backfaceStencil, GX2CompareFunction frontStencilFunc,
@@ -994,7 +994,7 @@ static inline void arkchemy_gx2_apply_cull_state(DkRasterizerState *state, uint3
     else state->cullMode = DkFace_None;
 }
 
-static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) { ark_gx2_note(52u);
     /* void GX2SetPolygonControl(GX2FrontFace frontFace, BOOL cullFront,
      * BOOL cullBack, BOOL polyMode, GX2PolygonMode polyModeFront,
      * GX2PolygonMode polyModeBack, BOOL polyOffsetFrontEnable,
@@ -1059,7 +1059,7 @@ static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) { ark_gx
     dkCmdBufBindRasterizerState(g_arkchemy_gx2.cmdbuf, state);
 }
 
-static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) { ark_gx2_note(53u);
     /* void GX2SetCullOnlyControl(GX2FrontFace frontFace, BOOL cullFront,
      * BOOL cullBack) -- real, confirmed signature (wut's
      * gx2/registers.h), a real 3-parameter subset of
@@ -1079,7 +1079,7 @@ static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) { ark_g
     dkCmdBufBindRasterizerState(g_arkchemy_gx2.cmdbuf, state);
 }
 
-static inline void ppc_import_gx2_GX2SetRasterizerClipControl(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetRasterizerClipControl(PpcContext *ctx) { ark_gx2_note(54u);
     /* void GX2SetRasterizerClipControl(BOOL rasterizer, BOOL
      * zclipEnable) -- real signature confirmed against wut's
      * gx2/registers.h. `rasterizer` is real hardware's rasterizer-stage
@@ -1107,7 +1107,7 @@ static inline void ppc_import_gx2_GX2SetRasterizerClipControl(PpcContext *ctx) {
     dkCmdBufBindRasterizerState(g_arkchemy_gx2.cmdbuf, state);
 }
 
-static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) { ark_gx2_note(55u);
     /* void GX2SetDepthOnlyControl(BOOL depthTest, BOOL depthWrite,
      * GX2CompareFunction depthCompare) -- real, confirmed signature
      * (wut's gx2/registers.h), a real 3-parameter subset of
@@ -1129,7 +1129,7 @@ static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) { ark_
     dkCmdBufBindDepthStencilState(g_arkchemy_gx2.cmdbuf, state);
 }
 
-static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) { ark_gx2_note(56u);
     /* void GX2SetStencilMask(uint8_t frontMask, uint8_t frontWriteMask,
      * uint8_t frontRef, uint8_t backMask, uint8_t backWriteMask,
      * uint8_t backRef) -- real signature confirmed against wut's
@@ -1156,7 +1156,7 @@ static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) { ark_gx2_n
     dkCmdBufSetStencil(g_arkchemy_gx2.cmdbuf, DkFace_Back, (uint8_t)back_write_mask, (uint8_t)back_ref, (uint8_t)back_mask);
 }
 
-static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) { ark_gx2_note(57u);
     /* void GX2SetTargetChannelMasks(GX2ChannelMask mask0, mask1, ...,
      * mask7) -- real signature confirmed against wut's
      * gx2/registers.h: 8 real per-render-target params, one
@@ -1188,7 +1188,7 @@ static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) { ar
     arkchemy_gx2_rebind_color_write_state();
 }
 
-static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { ark_gx2_note(58u);
     /* void GX2SetPrimitiveRestartIndex(uint32_t index) -- real GX2
      * signature has no separate enable flag; deko3d's
      * dkCmdBufSetPrimitiveRestart(cmdbuf, enable, index) does. Assumed
@@ -1200,7 +1200,7 @@ static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
     dkCmdBufSetPrimitiveRestart(g_arkchemy_gx2.cmdbuf, true, ctx->r[3]);
 }
 
-static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { ark_gx2_note(59u);
     /* void GX2ClearColor(GX2ColorBuffer *colorBuffer, float red, float
      * green, float blue, float alpha) -- real args: r3=colorBuffer
      * (ignored, see below), f1-f4=r,g,b,a.
@@ -1223,7 +1223,7 @@ static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { ark_gx2_note(
                             (float)ctx->f[1], (float)ctx->f[2], (float)ctx->f[3], (float)ctx->f[4]);
 }
 
-static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_note(60u);
     /* void GX2SwapScanBuffers(void) -- real behavior presents the TV
      * scan buffer (and, on real hardware, the separate GamePad/DRC scan
      * buffer -- this runtime has only one real display target, the
@@ -1271,7 +1271,7 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
     g_arkchemy_gx2.acquired_slot = -1;
 }
 
-static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) { ark_gx2_note(61u);
     /* void GX2Flush(void) -- real behavior submits whatever's been
      * recorded so far to the GPU without waiting for it to finish and
      * without presenting (that's GX2SwapScanBuffers' job), so the CPU
@@ -1298,7 +1298,7 @@ static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) { ark_gx2_note(ctx->
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
 }
 
-static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) { ark_gx2_note(62u);
     /* BOOL GX2DrawDone(void) -- real signature confirmed against wut's
      * gx2/event.h (returns BOOL, not void). Real Cemu HLE
      * (GX2_Event.cpp) implements it as "flush the pipeline, then wait
@@ -1320,7 +1320,7 @@ static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) { ark_gx2_note(ct
     ctx->r[3] = 1; /* TRUE */
 }
 
-static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) { ark_gx2_note(63u);
     /* void GX2WaitForVsync(void) -- real signature confirmed against
      * wut's gx2/event.h. Real hardware blocks the calling thread until
      * the next real vertical blank. This runtime has no real vsync
@@ -1351,7 +1351,7 @@ static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) { ark_gx2_not
     g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.submitted_timestamp;
 }
 
-static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) { ark_gx2_note(64u);
     /* OSTime GX2GetLastSubmittedTimeStamp(void) -- real 64-bit OSTime
      * return, split across r3(high)/r4(low) per the real PPC32 ABI's
      * 64-bit return convention (same convention already used by
@@ -1364,7 +1364,7 @@ static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) 
     ctx->r[4] = (uint32_t)t;
 }
 
-static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) { ark_gx2_note(65u);
     /* OSTime GX2GetRetiredTimeStamp(void) -- same real 64-bit OSTime
      * return convention as GX2GetLastSubmittedTimeStamp above. Since
      * every real submit point in this runtime (GX2Flush/GX2DrawDone/
@@ -1379,7 +1379,7 @@ static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) { ark_
     ctx->r[4] = (uint32_t)t;
 }
 
-static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) { ark_gx2_note(66u);
     /* BOOL GX2WaitTimeStamp(OSTime time) -- real 64-bit OSTime arg,
      * split across r3(high)/r4(low) per the real PPC32 ABI (same
      * convention already used by cafeos_coreinit_sync.h's
@@ -1400,7 +1400,7 @@ static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) { ark_gx2_no
     ctx->r[3] = 1; /* TRUE */
 }
 
-static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) { ark_gx2_note(67u);
     /* void GX2GetSwapStatus(uint32_t *swapCount, uint32_t *flipCount,
      * OSTime *lastFlip, OSTime *lastVsync) -- real signature confirmed
      * against wut's gx2/event.h, 4 real guest-memory out-pointers in
@@ -1432,7 +1432,7 @@ static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) { ark_gx2_no
     if (last_vsync_ptr) ppc_store_u64(ctx, last_vsync_ptr, g_arkchemy_gx2.retired_timestamp);
 }
 
-static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) { ark_gx2_note(68u);
     /* GX2DRCConnectCallback GX2SetEventCallback(GX2EventType type,
      * GX2EventCallbackFunction func, void *userData) -- real signature
      * confirmed against wut's gx2/event.h. `type` selects one of the 5
@@ -1664,7 +1664,7 @@ static inline void arkchemy_gx2_set_sampler(PpcContext *ctx, uint32_t sampler_ad
     dkCmdBufBindSamplerDescriptorSet(g_arkchemy_gx2.cmdbuf, g_arkchemy_gx2.sampler_descriptor_gpu_addr, ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS);
 }
 
-static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) { ark_gx2_note(69u);
     /* void GX2SetPixelSampler(GX2Sampler *sampler, uint32_t
      * samplerIndex) -- real signature confirmed against Cemu's real
      * GX2_Texture.cpp (`GX2SetPixelSampler`/`_GX2SetSampler`). Real
@@ -1679,7 +1679,7 @@ static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) { ark_gx2_
     arkchemy_gx2_set_sampler(ctx, sampler_addr, ARKCHEMY_GX2_SAMPLER_PIXEL_BASE, sampler_index);
 }
 
-static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) { ark_gx2_note(70u);
     /* void GX2SetVertexSampler(GX2Sampler *sampler, uint32_t
      * vertexSamplerIndex) -- real signature confirmed against Cemu's
      * real GX2_Texture.cpp. See GX2SetPixelSampler's own comment for
@@ -1699,7 +1699,7 @@ static inline void arkchemy_gx2_set_sampler_border_color(PpcContext *ctx, uint32
     g_arkchemy_gx2.sampler_border_color[slot][3] = (float)ctx->f[4];
 }
 
-static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx) { ark_gx2_note(71u);
     /* void GX2SetPixelSamplerBorderColor(uint32_t pixelSamplerIndex,
      * float red, float green, float blue, float alpha) -- real
      * signature confirmed against Cemu's real GX2_Texture.cpp
@@ -1724,7 +1724,7 @@ static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx)
     arkchemy_gx2_set_sampler_border_color(ctx, ARKCHEMY_GX2_SAMPLER_PIXEL_BASE, index);
 }
 
-static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx) { ark_gx2_note(72u);
     /* void GX2SetVertexSamplerBorderColor(uint32_t vertexSamplerIndex,
      * float red, float green, float blue, float alpha) -- real
      * signature confirmed against Cemu's real GX2_Texture.cpp. See
@@ -1805,7 +1805,7 @@ static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx
  * case): `(bytesPerBlock * width + 127) & ~127` -- replicated here
  * exactly rather than guessed, since there's no public API to query it
  * back after image creation. */
-static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_note(73u);
     uint32_t color_buffer_addr = ctx->r[3];
     uint32_t target = ctx->r[4];
     uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
@@ -2000,7 +2000,7 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
  * `srcInfo.m_horizontal = src->rowLength ? src->rowLength :
  * params.width*bytesPerBlock`), matching this staging buffer's own
  * real, simple, unpadded layout exactly. */
-static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) { ark_gx2_note(74u);
     uint32_t depth_buffer_addr = ctx->r[3];
     uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
     uint32_t bytes_per_pixel = 4u; /* Z24X8 only, see this function's own comment */
@@ -2225,7 +2225,7 @@ static inline void arkchemy_gx2_set_texture(PpcContext *ctx, uint32_t texture_ad
     dkCmdBufBindTextures(g_arkchemy_gx2.cmdbuf, stage, index, &handle, 1);
 }
 
-static inline void ppc_import_gx2_GX2SetPixelTexture(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetPixelTexture(PpcContext *ctx) { ark_gx2_note(75u);
     /* void GX2SetPixelTexture(const GX2Texture *texture, uint32_t
      * unit) -- real signature confirmed against wut's gx2/texture.h.
      * `GX2Texture`'s own `surface` member is a plain `GX2Surface` at
@@ -2237,7 +2237,7 @@ static inline void ppc_import_gx2_GX2SetPixelTexture(PpcContext *ctx) { ark_gx2_
     arkchemy_gx2_set_texture(ctx, texture_addr, DkStage_Fragment, ARKCHEMY_GX2_SAMPLER_PIXEL_BASE, unit);
 }
 
-static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) { ark_gx2_note(76u);
     /* void GX2SetVertexTexture(const GX2Texture *texture, uint32_t
      * unit) -- real signature confirmed against wut's gx2/texture.h.
      * See GX2SetPixelTexture's own comment. */
@@ -2246,7 +2246,7 @@ static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) { ark_gx2
     arkchemy_gx2_set_texture(ctx, texture_addr, DkStage_Vertex, ARKCHEMY_GX2_SAMPLER_VERTEX_BASE, unit);
 }
 
-static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx) { ark_gx2_note(77u);
     /* void GX2CopyColorBufferToScanBuffer(const GX2ColorBuffer
      * *colorBuffer, GX2ScanTarget scanTarget) -- real signature
      * confirmed against wut's gx2/display.h. Real PPC ABI: r3=
@@ -2365,49 +2365,49 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
 
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
 
-static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetViewport(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetScissor(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetLineWidth(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetPointSize(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetAlphaTest(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetAlphaToMask(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetRasterizerClipControl(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetPixelTexture(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
-static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr); (void)ctx; }
+static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { ark_gx2_note(39u); (void)ctx; }
+static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) { ark_gx2_note(40u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetViewport(PpcContext *ctx) { ark_gx2_note(41u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetScissor(PpcContext *ctx) { ark_gx2_note(42u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetLineWidth(PpcContext *ctx) { ark_gx2_note(43u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPointSize(PpcContext *ctx) { ark_gx2_note(44u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPolygonOffset(PpcContext *ctx) { ark_gx2_note(45u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetBlendConstantColor(PpcContext *ctx) { ark_gx2_note(46u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetBlendControl(PpcContext *ctx) { ark_gx2_note(47u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetColorControl(PpcContext *ctx) { ark_gx2_note(48u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetAlphaTest(PpcContext *ctx) { ark_gx2_note(49u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetAlphaToMask(PpcContext *ctx) { ark_gx2_note(50u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetDepthStencilControl(PpcContext *ctx) { ark_gx2_note(51u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPolygonControl(PpcContext *ctx) { ark_gx2_note(52u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetCullOnlyControl(PpcContext *ctx) { ark_gx2_note(53u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetRasterizerClipControl(PpcContext *ctx) { ark_gx2_note(54u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetDepthOnlyControl(PpcContext *ctx) { ark_gx2_note(55u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetStencilMask(PpcContext *ctx) { ark_gx2_note(56u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetTargetChannelMasks(PpcContext *ctx) { ark_gx2_note(57u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) { ark_gx2_note(58u); (void)ctx; }
+static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { ark_gx2_note(59u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_note(60u); (void)ctx; }
+static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) { ark_gx2_note(61u); (void)ctx; }
+static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) { ark_gx2_note(62u); (void)ctx; }
+static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) { ark_gx2_note(63u); (void)ctx; }
+static inline void ppc_import_gx2_GX2GetLastSubmittedTimeStamp(PpcContext *ctx) { ark_gx2_note(64u); (void)ctx; }
+static inline void ppc_import_gx2_GX2GetRetiredTimeStamp(PpcContext *ctx) { ark_gx2_note(65u); (void)ctx; }
+static inline void ppc_import_gx2_GX2WaitTimeStamp(PpcContext *ctx) { ark_gx2_note(66u); (void)ctx; }
+static inline void ppc_import_gx2_GX2GetSwapStatus(PpcContext *ctx) { ark_gx2_note(67u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetEventCallback(PpcContext *ctx) { ark_gx2_note(68u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPixelSampler(PpcContext *ctx) { ark_gx2_note(69u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetVertexSampler(PpcContext *ctx) { ark_gx2_note(70u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPixelSamplerBorderColor(PpcContext *ctx) { ark_gx2_note(71u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx) { ark_gx2_note(72u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_note(73u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) { ark_gx2_note(74u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetPixelTexture(PpcContext *ctx) { ark_gx2_note(75u); (void)ctx; }
+static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) { ark_gx2_note(76u); (void)ctx; }
+static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx) { ark_gx2_note(77u); (void)ctx; }
 
 #endif /* __SWITCH__ */
 
-static inline void ppc_import_gx2_GX2TempGetGPUVersion(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2TempGetGPUVersion(PpcContext *ctx) { ark_gx2_note(78u);
     /* uint32_t GX2TempGetGPUVersion(void) -- real fixed hardware
      * constant confirmed directly against Cemu's HLE (`return 2;`),
      * not a guess: this is the real "Latte" GPU's version number, the
@@ -2416,7 +2416,7 @@ static inline void ppc_import_gx2_GX2TempGetGPUVersion(PpcContext *ctx) { ark_gx
     ctx->r[3] = 2;
 }
 
-static inline void ppc_import_gx2_GX2GetSystemTVScanMode(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2GetSystemTVScanMode(PpcContext *ctx) { ark_gx2_note(79u);
     /* GX2TVScanMode GX2GetSystemTVScanMode(void) -- real value (7 =
      * 1080p) confirmed against Cemu's HLE comment ("1080p = 7"). Not a
      * simulated display setting -- this shim reports a fixed, plausible
@@ -2426,7 +2426,7 @@ static inline void ppc_import_gx2_GX2GetSystemTVScanMode(PpcContext *ctx) { ark_
     ctx->r[3] = 7;
 }
 
-static inline void ppc_import_gx2_GX2GetSystemTVAspectRatio(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2GetSystemTVAspectRatio(PpcContext *ctx) { ark_gx2_note(80u);
     /* GX2AspectRatio GX2GetSystemTVAspectRatio(void) -- 1 = 16:9,
      * confirmed against Cemu's HLE (`return 1; // 16:9`) and wut's own
      * GX2_ASPECT_RATIO_16_9 = 1. */
@@ -2434,7 +2434,7 @@ static inline void ppc_import_gx2_GX2GetSystemTVAspectRatio(PpcContext *ctx) { a
     ctx->r[3] = 1;
 }
 
-static inline void ppc_import_gx2_GX2SetSwapInterval(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetSwapInterval(PpcContext *ctx) { ark_gx2_note(81u);
     /* void GX2SetSwapInterval(uint32_t interval) -- accepted, not
      * stored: GX2GetSwapInterval isn't in this game's real import list
      * (confirmed by recompiling the actual tfbGame_cafe.rpx), so
@@ -2442,7 +2442,7 @@ static inline void ppc_import_gx2_GX2SetSwapInterval(PpcContext *ctx) { ark_gx2_
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetTVEnable(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetTVEnable(PpcContext *ctx) { ark_gx2_note(82u);
     /* void GX2SetTVEnable(BOOL enable) -- real Wii U hardware has two
      * independent real scan-out targets (TV + GamePad/DRC); enabling/
      * disabling either changes what actually gets sent to that
@@ -2460,7 +2460,7 @@ static inline void ppc_import_gx2_GX2SetTVEnable(PpcContext *ctx) { ark_gx2_note
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetDRCEnable(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetDRCEnable(PpcContext *ctx) { ark_gx2_note(83u);
     /* void GX2SetDRCEnable(BOOL enable) -- same real GamePad/DRC scan
      * target GX2SetTVEnable above gates, just the other one. Same
      * reasoning applies: no second real display target exists on this
@@ -2469,7 +2469,7 @@ static inline void ppc_import_gx2_GX2SetDRCEnable(PpcContext *ctx) { ark_gx2_not
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetTVScale(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetTVScale(PpcContext *ctx) { ark_gx2_note(84u);
     /* void GX2SetTVScale(uint32_t x, uint32_t y) -- real hardware
      * scales the TV scan buffer's real output resolution independently
      * of its render resolution. This runtime's swapchain is a fixed
@@ -2484,7 +2484,7 @@ static inline void ppc_import_gx2_GX2SetTVScale(PpcContext *ctx) { ark_gx2_note(
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetDRCScale(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetDRCScale(PpcContext *ctx) { ark_gx2_note(85u);
     /* void GX2SetDRCScale(uint32_t x, uint32_t y) -- same real
      * per-scan-target output scaling GX2SetTVScale above is, just for
      * the GamePad/DRC target this runtime also has no second real
@@ -2493,7 +2493,7 @@ static inline void ppc_import_gx2_GX2SetDRCScale(PpcContext *ctx) { ark_gx2_note
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetTVGamma(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetTVGamma(PpcContext *ctx) { ark_gx2_note(86u);
     /* void GX2SetTVGamma(float gamma) -- real behavior (confirmed
      * against Cemu's GX2_Misc.cpp) stores `1.0f - gamma` into internal
      * GPU state consumed by the real TV scan-out gamma-correction
@@ -2510,7 +2510,7 @@ static inline void ppc_import_gx2_GX2SetTVGamma(PpcContext *ctx) { ark_gx2_note(
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetDRCGamma(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetDRCGamma(PpcContext *ctx) { ark_gx2_note(87u);
     /* void GX2SetDRCGamma(float gamma) -- same real per-scan-target
      * gamma correction GX2SetTVGamma above is, just for the GamePad/DRC
      * target this runtime also has no second real display for (see
@@ -2518,7 +2518,7 @@ static inline void ppc_import_gx2_GX2SetDRCGamma(PpcContext *ctx) { ark_gx2_note
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetTVBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetTVBuffer(PpcContext *ctx) { ark_gx2_note(88u);
     /* void GX2SetTVBuffer(void *buffer, uint32_t size, GX2TVRenderMode
      * tvRenderMode, GX2SurfaceFormat surfaceFormat, GX2BufferingMode
      * bufferingMode) -- real signature confirmed against wut's
@@ -2532,7 +2532,7 @@ static inline void ppc_import_gx2_GX2SetTVBuffer(PpcContext *ctx) { ark_gx2_note
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetDRCBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetDRCBuffer(PpcContext *ctx) { ark_gx2_note(89u);
     /* void GX2SetDRCBuffer(void *buffer, uint32_t size, GX2DrcRenderMode
      * drcRenderMode, GX2SurfaceFormat surfaceFormat, GX2BufferingMode
      * bufferingMode) -- same real per-scan-target buffer registration
@@ -2542,7 +2542,7 @@ static inline void ppc_import_gx2_GX2SetDRCBuffer(PpcContext *ctx) { ark_gx2_not
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2Invalidate(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2Invalidate(PpcContext *ctx) { ark_gx2_note(90u);
     /* void GX2Invalidate(GX2InvalidateMode mode, void *buffer,
      * uint32_t size) -- real signature confirmed against wut's
      * gx2/mem.h. Real hardware invalidates GPU-side caches for a CPU-
@@ -2561,7 +2561,7 @@ static inline void ppc_import_gx2_GX2Invalidate(PpcContext *ctx) { ark_gx2_note(
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetPointLimits(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetPointLimits(PpcContext *ctx) { ark_gx2_note(91u);
     /* void GX2SetPointLimits(float min, float max) -- real signature
      * confirmed against wut's gx2/registers.h, 2 real float args
      * (f1-f2, GX2SetPointSize's own already-established float-arg
@@ -2575,7 +2575,7 @@ static inline void ppc_import_gx2_GX2SetPointLimits(PpcContext *ctx) { ark_gx2_n
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetStreamOutEnable(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetStreamOutEnable(PpcContext *ctx) { ark_gx2_note(92u);
     /* void GX2SetStreamOutEnable(BOOL enable) -- real signature
      * confirmed against wut's gx2/shaders.h. Real hardware transform
      * feedback (writing vertex-shader output to a real memory buffer
@@ -2591,7 +2591,7 @@ static inline void ppc_import_gx2_GX2SetStreamOutEnable(PpcContext *ctx) { ark_g
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetTessellation(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetTessellation(PpcContext *ctx) { ark_gx2_note(93u);
     /* void GX2SetTessellation(GX2TessellationMode tessellationMode,
      * GX2PrimitiveMode primitiveMode, GX2IndexType indexType) -- real
      * signature confirmed against wut's gx2/tessellation.h. Real AMD
@@ -2605,7 +2605,7 @@ static inline void ppc_import_gx2_GX2SetTessellation(PpcContext *ctx) { ark_gx2_
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetMinTessellationLevel(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetMinTessellationLevel(PpcContext *ctx) { ark_gx2_note(94u);
     /* void GX2SetMinTessellationLevel(float min) -- same real
      * unimplemented-hardware-feature reasoning as GX2SetTessellation
      * above; this real per-edge tessellation-factor floor has nothing
@@ -2613,14 +2613,14 @@ static inline void ppc_import_gx2_GX2SetMinTessellationLevel(PpcContext *ctx) { 
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetMaxTessellationLevel(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetMaxTessellationLevel(PpcContext *ctx) { ark_gx2_note(95u);
     /* void GX2SetMaxTessellationLevel(float max) -- same real
      * unimplemented-hardware-feature reasoning as GX2SetTessellation
      * above. Accepted, not stored. */
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2GetDisplayListWriteStatus(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2GetDisplayListWriteStatus(PpcContext *ctx) { ark_gx2_note(96u);
     /* BOOL GX2GetDisplayListWriteStatus(void) -- real signature
      * confirmed against wut's gx2/displaylist.h: reports whether the
      * GPU is currently recording into a display list opened by
@@ -2663,7 +2663,7 @@ static inline uint32_t arkchemy_gx2_hw_format_bits_raw(uint32_t hw_format) {
     return bits_table[hw_format & 0x3Fu];
 }
 
-static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) { ark_gx2_note(97u);
     /* uint32_t GX2GetSurfaceFormatBits(GX2SurfaceFormat format) -- real
      * formula confirmed directly against Cemu's HLE
      * (Latte::GetFormatBits + Latte::IsCompressedFormat in
@@ -2688,7 +2688,7 @@ static inline void ppc_import_gx2_GX2GetSurfaceFormatBits(PpcContext *ctx) { ark
     ctx->r[3] = bpp;
 }
 
-static inline void ppc_import_gx2_GX2CalcDepthBufferHiZInfo(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2CalcDepthBufferHiZInfo(PpcContext *ctx) { ark_gx2_note(98u);
     /* void GX2CalcDepthBufferHiZInfo(GX2DepthBuffer *depthBuffer,
      * uint32_t *outSize, uint32_t *outAlignment) -- real signature
      * confirmed against wut's gx2/surface.h. Real Cemu HLE behavior
@@ -2704,7 +2704,7 @@ static inline void ppc_import_gx2_GX2CalcDepthBufferHiZInfo(PpcContext *ctx) { a
     ppc_store_u32(ctx, out_align_addr, 0x100u);
 }
 
-static inline void ppc_import_gx2_GX2CalcColorBufferAuxInfo(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2CalcColorBufferAuxInfo(PpcContext *ctx) { ark_gx2_note(99u);
     /* void GX2CalcColorBufferAuxInfo(GX2ColorBuffer *colorBuffer,
      * uint32_t *outSize, uint32_t *outAlignment) -- real signature
      * confirmed against wut's gx2/surface.h. Same real Cemu HLE
@@ -2804,7 +2804,7 @@ static inline void arkchemy_gx2_calc_dim_outer(uint32_t dim, uint32_t height_in,
     }
 }
 
-static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx) { ark_gx2_note(100u);
     /* void GX2CalcSurfaceSizeAndAlignment(GX2Surface *surface) -- real
      * signature confirmed against wut's gx2/surface.h; single pointer
      * arg, r3. Real field offsets (WUT_CHECK_OFFSET-confirmed) defined
@@ -2960,7 +2960,7 @@ static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx
 #define ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET 0x88u
 #define ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET 0x8Cu
 
-static inline void ppc_import_gx2_GX2SetClearDepth(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetClearDepth(PpcContext *ctx) { ark_gx2_note(101u);
     /* void GX2SetClearDepth(GX2DepthBuffer *depthBuffer, float depth) --
      * real args: r3=depthBuffer (pointer, integer sequence), f1=depth
      * (independent float sequence, real PPC32 SVR4 ABI). */
@@ -2968,7 +2968,7 @@ static inline void ppc_import_gx2_GX2SetClearDepth(PpcContext *ctx) { ark_gx2_no
     ppc_store_f32(ctx, depth_buffer_addr + ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_DEPTH_OFFSET, ctx->f[1]);
 }
 
-static inline void ppc_import_gx2_GX2SetClearStencil(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetClearStencil(PpcContext *ctx) { ark_gx2_note(102u);
     /* void GX2SetClearStencil(GX2DepthBuffer *depthBuffer,
      * uint8_t stencil) -- real args: both integers, r3=depthBuffer,
      * r4=stencil (widened to the real uint32_t field width, matching
@@ -2978,7 +2978,7 @@ static inline void ppc_import_gx2_GX2SetClearStencil(PpcContext *ctx) { ark_gx2_
     ppc_store_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET, stencil);
 }
 
-static inline void ppc_import_gx2_GX2SetClearDepthStencil(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetClearDepthStencil(PpcContext *ctx) { ark_gx2_note(103u);
     /* void GX2SetClearDepthStencil(GX2DepthBuffer *depthBuffer,
      * float depth, uint8_t stencil) -- real args: r3=depthBuffer
      * (integer sequence #1), f1=depth (independent float sequence),
@@ -2991,7 +2991,7 @@ static inline void ppc_import_gx2_GX2SetClearDepthStencil(PpcContext *ctx) { ark
     ppc_store_u32(ctx, depth_buffer_addr + ARKCHEMY_GX2_DEPTH_BUFFER_CLEAR_STENCIL_OFFSET, stencil);
 }
 
-static inline void ppc_import_gx2_GX2ClearDepthStencilEx(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2ClearDepthStencilEx(PpcContext *ctx) { ark_gx2_note(104u);
     /* void GX2ClearDepthStencilEx(GX2DepthBuffer *depthBuffer,
      * float depth, uint8_t stencil, GX2ClearFlags clearMode) -- real
      * signature confirmed against wut's gx2/clear.h; real PPC32 SVR4
@@ -3060,7 +3060,7 @@ static inline uint32_t arkchemy_gx2_bitfield_set(uint32_t word, uint32_t value, 
     return (word & ~mask) | ((value << shift) & mask);
 }
 
-static inline void ppc_import_gx2_GX2InitSampler(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitSampler(PpcContext *ctx) { ark_gx2_note(105u);
     /* void GX2InitSampler(GX2Sampler *sampler, GX2TexClampMode clampMode,
      * GX2TexXYFilterMode minMagFilterMode) -- real body (GX2_Texture.cpp):
      * sets CLAMP_X/Y/Z all to clampMode, XY_MAG/MIN_FILTER both to
@@ -3092,7 +3092,7 @@ static inline void ppc_import_gx2_GX2InitSampler(PpcContext *ctx) { ark_gx2_note
     ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD2_OFFSET, word2);
 }
 
-static inline void ppc_import_gx2_GX2InitSamplerXYFilter(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitSamplerXYFilter(PpcContext *ctx) { ark_gx2_note(106u);
     /* void GX2InitSamplerXYFilter(GX2Sampler *sampler,
      * GX2TexXYFilterMode filterMag, GX2TexXYFilterMode filterMin,
      * GX2TexAnisoRatio maxAniso) -- real body: if maxAniso==0, sets
@@ -3124,7 +3124,7 @@ static inline void ppc_import_gx2_GX2InitSamplerXYFilter(PpcContext *ctx) { ark_
     ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
-static inline void ppc_import_gx2_GX2InitSamplerZMFilter(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitSamplerZMFilter(PpcContext *ctx) { ark_gx2_note(107u);
     /* void GX2InitSamplerZMFilter(GX2Sampler *sampler,
      * GX2TexZFilterMode zFilter, GX2TexMipFilterMode mipFilter) --
      * real, direct field writes, no remapping. */
@@ -3139,7 +3139,7 @@ static inline void ppc_import_gx2_GX2InitSamplerZMFilter(PpcContext *ctx) { ark_
     ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
-static inline void ppc_import_gx2_GX2InitSamplerLOD(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitSamplerLOD(PpcContext *ctx) { ark_gx2_note(108u);
     /* void GX2InitSamplerLOD(GX2Sampler *sampler, float minLod,
      * float maxLod, float lodBias) -- real args: r3=sampler (pointer,
      * integer sequence), f1/f2/f3=minLod/maxLod/lodBias (independent
@@ -3179,7 +3179,7 @@ static inline void ppc_import_gx2_GX2InitSamplerLOD(PpcContext *ctx) { ark_gx2_n
     ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD1_OFFSET, word1);
 }
 
-static inline void ppc_import_gx2_GX2InitSamplerClamping(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitSamplerClamping(PpcContext *ctx) { ark_gx2_note(109u);
     /* void GX2InitSamplerClamping(GX2Sampler *sampler,
      * GX2TexClampMode clampX, GX2TexClampMode clampY,
      * GX2TexClampMode clampZ) -- real, direct field writes. */
@@ -3196,7 +3196,7 @@ static inline void ppc_import_gx2_GX2InitSamplerClamping(PpcContext *ctx) { ark_
     ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
-static inline void ppc_import_gx2_GX2InitSamplerBorderType(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitSamplerBorderType(PpcContext *ctx) { ark_gx2_note(110u);
     /* void GX2InitSamplerBorderType(GX2Sampler *sampler,
      * GX2TexBorderType borderColorType) -- real, direct field write. */
     uint32_t sampler_addr = ctx->r[3];
@@ -3208,7 +3208,7 @@ static inline void ppc_import_gx2_GX2InitSamplerBorderType(PpcContext *ctx) { ar
     ppc_store_u32(ctx, sampler_addr + ARKCHEMY_GX2_SAMPLER_WORD0_OFFSET, word0);
 }
 
-static inline void ppc_import_gx2_GX2InitSamplerDepthCompare(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitSamplerDepthCompare(PpcContext *ctx) { ark_gx2_note(111u);
     /* void GX2InitSamplerDepthCompare(GX2Sampler *sampler,
      * GX2CompareFunction depthCompareFunction) -- real, direct field
      * write; unlike every deko3d-facing GX2CompareFunction usage
@@ -3253,15 +3253,15 @@ static inline void ppc_import_gx2_GX2InitSamplerDepthCompare(PpcContext *ctx) { 
  * needs a real, callable symbol to link against at all -- without
  * these, that real call site would be a hard compile-time gap, not
  * just an unconsumed side effect. */
-static inline void ppc_import_gx2_GX2InitColorBufferRegs(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitColorBufferRegs(PpcContext *ctx) { ark_gx2_note(112u);
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2InitDepthBufferRegs(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitDepthBufferRegs(PpcContext *ctx) { ark_gx2_note(113u);
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2InitDepthBufferHiZEnable(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitDepthBufferHiZEnable(PpcContext *ctx) { ark_gx2_note(114u);
     /* void GX2InitDepthBufferHiZEnable(GX2DepthBuffer *depthBuffer,
      * BOOL enable) -- real reference behavior (decaf-emu) only ever
      * flips one bit (`TILE_SURFACE_ENABLE`) inside the same real,
@@ -3270,7 +3270,7 @@ static inline void ppc_import_gx2_GX2InitDepthBufferHiZEnable(PpcContext *ctx) {
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2InitTextureRegs(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitTextureRegs(PpcContext *ctx) { ark_gx2_note(115u);
     /* void GX2InitTextureRegs(GX2Texture *texture) -- real signature
      * confirmed against wut's gx2/texture.h. Real reference behavior
      * (decaf-emu's actual `gx2_texture.cpp`): most of this function
@@ -3338,15 +3338,15 @@ static inline void ppc_import_gx2_GX2InitTextureRegs(PpcContext *ctx) { ark_gx2_
  * switchable) that isn't attempted here. Real, callable, linkable
  * no-ops for now, same "don't guess, don't fake, but let real code
  * compile" reasoning as `GX2InitColorBufferRegs` and friends above. */
-static inline void ppc_import_gx2_GX2SetupContextStateEx(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetupContextStateEx(PpcContext *ctx) { ark_gx2_note(116u);
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetContextState(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetContextState(PpcContext *ctx) { ark_gx2_note(117u);
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2CopySurface(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2CopySurface(PpcContext *ctx) { ark_gx2_note(118u);
     /* void GX2CopySurface(const GX2Surface *src, uint32_t srcLevel,
      * uint32_t srcSlice, GX2Surface *dst, uint32_t dstLevel,
      * uint32_t dstSlice) -- real signature confirmed against wut's
@@ -3442,7 +3442,7 @@ static inline uint32_t arkchemy_gx2_surface_format_bpp(uint32_t format) {
     return 0u;
 }
 
-static inline void ppc_import_gx2_GX2CalcTVSize(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2CalcTVSize(PpcContext *ctx) { ark_gx2_note(119u);
     /* void GX2CalcTVSize(GX2TVRenderMode tvRenderMode, GX2SurfaceFormat
      * surfaceFormat, GX2BufferingMode bufferingMode, uint32_t *size,
      * uint32_t *unkOut) -- real signature confirmed against wut's
@@ -3494,7 +3494,7 @@ static inline void ppc_import_gx2_GX2CalcTVSize(PpcContext *ctx) { ark_gx2_note(
     if (unk_addr != 0u) ppc_store_u32(ctx, unk_addr, 0u);
 }
 
-static inline void ppc_import_gx2_GX2CalcDRCSize(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2CalcDRCSize(PpcContext *ctx) { ark_gx2_note(120u);
     /* void GX2CalcDRCSize(GX2DrcRenderMode drcRenderMode,
      * GX2SurfaceFormat surfaceFormat, GX2BufferingMode bufferingMode,
      * uint32_t *size, uint32_t *unkOut) -- real signature confirmed
@@ -3560,23 +3560,23 @@ static inline void ppc_import_gx2_GX2CalcDRCSize(PpcContext *ctx) { ark_gx2_note
  * silently do nothing while "inside" a display list, a real, known
  * limitation, not a crash. `GX2EndDisplayList` returns a real `size`
  * (0, honestly reflecting that nothing was actually recorded). */
-static inline void ppc_import_gx2_GX2BeginDisplayListEx(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2BeginDisplayListEx(PpcContext *ctx) { ark_gx2_note(121u);
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2EndDisplayList(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2EndDisplayList(PpcContext *ctx) { ark_gx2_note(122u);
     ctx->r[3] = 0u; /* real return type is uint32_t (real recorded byte size) -- honestly 0, see this family's own comment */
 }
 
-static inline void ppc_import_gx2_GX2CopyDisplayList(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2CopyDisplayList(PpcContext *ctx) { ark_gx2_note(123u);
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2DirectCallDisplayList(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2DirectCallDisplayList(PpcContext *ctx) { ark_gx2_note(124u);
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2ResolveAAColorBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2ResolveAAColorBuffer(PpcContext *ctx) { ark_gx2_note(125u);
     /* void GX2ResolveAAColorBuffer(const GX2ColorBuffer *srcColorBuffer,
      * GX2Surface *dstSurface, uint32_t dstMip, uint32_t dstSlice) --
      * real signature confirmed against wut's gx2/surface.h. Real
@@ -3596,7 +3596,7 @@ static inline void ppc_import_gx2_GX2ResolveAAColorBuffer(PpcContext *ctx) { ark
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2ExpandAAColorBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2ExpandAAColorBuffer(PpcContext *ctx) { ark_gx2_note(126u);
     /* void GX2ExpandAAColorBuffer(...) -- real, undocumented-in-wut
      * signature (not found in wut's public headers at all, unlike
      * every other function in this file, where the real signature is
@@ -3612,7 +3612,7 @@ static inline void ppc_import_gx2_GX2ExpandAAColorBuffer(PpcContext *ctx) { ark_
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2ExpandDepthBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2ExpandDepthBuffer(PpcContext *ctx) { ark_gx2_note(127u);
     /* void GX2ExpandDepthBuffer(GX2DepthBuffer *depthBuffer) -- real
      * signature confirmed against wut's gx2/surface.h. Real reference
      * behavior: decaf-emu's own actual `gx2_surface.cpp` has this as a
@@ -3623,7 +3623,7 @@ static inline void ppc_import_gx2_GX2ExpandDepthBuffer(PpcContext *ctx) { ark_gx
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2ConvertDepthBufferToTextureSurface(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2ConvertDepthBufferToTextureSurface(PpcContext *ctx) { ark_gx2_note(128u);
     /* void GX2ConvertDepthBufferToTextureSurface(...) -- real,
      * undocumented-in-wut signature, same honestly-flagged gap as
      * GX2ExpandAAColorBuffer above (and, same reasoning, a real,
@@ -3671,46 +3671,46 @@ static inline void ppc_import_gx2_GX2ConvertDepthBufferToTextureSurface(PpcConte
  * being completely explicit that visible rendering beyond what this
  * file's own render-state/color-buffer/depth-buffer/texture-binding
  * work already covers does not exist yet. */
-static inline void ppc_import_gx2_GX2SetAttribBuffer(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetAttribBuffer(PpcContext *ctx) { ark_gx2_note(129u);
     /* void GX2SetAttribBuffer(uint32_t index, uint32_t size,
      * uint32_t stride, const void *buffer) -- real signature confirmed
      * against wut's gx2/draw.h. */
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetFetchShader(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetFetchShader(PpcContext *ctx) { ark_gx2_note(130u);
     /* void GX2SetFetchShader(const GX2FetchShader *shader) -- real
      * signature confirmed against wut's gx2/shaders.h. */
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetVertexShader(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetVertexShader(PpcContext *ctx) { ark_gx2_note(131u);
     /* void GX2SetVertexShader(const GX2VertexShader *shader) -- real
      * signature confirmed against wut's gx2/shaders.h. */
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetPixelShader(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetPixelShader(PpcContext *ctx) { ark_gx2_note(132u);
     /* void GX2SetPixelShader(const GX2PixelShader *shader) -- real
      * signature confirmed against wut's gx2/shaders.h. */
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetPixelUniformReg(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetPixelUniformReg(PpcContext *ctx) { ark_gx2_note(133u);
     /* void GX2SetPixelUniformReg(uint32_t offset, uint32_t count,
      * const void *data) -- real signature confirmed against wut's
      * gx2/shaders.h. */
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetVertexUniformReg(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetVertexUniformReg(PpcContext *ctx) { ark_gx2_note(134u);
     /* void GX2SetVertexUniformReg(uint32_t offset, uint32_t count,
      * const void *data) -- real signature confirmed against wut's
      * gx2/shaders.h. */
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2SetShaderModeEx(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2SetShaderModeEx(PpcContext *ctx) { ark_gx2_note(135u);
     /* void GX2SetShaderModeEx(GX2ShaderMode mode, uint32_t numVsGpr,
      * uint32_t numVsStackEntries, uint32_t numGsGpr,
      * uint32_t numGsStackEntries, uint32_t numPsGpr,
@@ -3719,7 +3719,7 @@ static inline void ppc_import_gx2_GX2SetShaderModeEx(PpcContext *ctx) { ark_gx2_
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2CalcFetchShaderSizeEx(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2CalcFetchShaderSizeEx(PpcContext *ctx) { ark_gx2_note(136u);
     /* uint32_t GX2CalcFetchShaderSizeEx(uint32_t attribs,
      * GX2FetchShaderType fetchShaderType,
      * GX2TessellationMode tessellationMode) -- real signature
@@ -3743,7 +3743,7 @@ static inline void ppc_import_gx2_GX2CalcFetchShaderSizeEx(PpcContext *ctx) { ar
     ctx->r[3] = 256u;
 }
 
-static inline void ppc_import_gx2_GX2InitFetchShaderEx(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2InitFetchShaderEx(PpcContext *ctx) { ark_gx2_note(137u);
     /* void GX2InitFetchShaderEx(GX2FetchShader *fetchShader,
      * uint8_t *buffer, uint32_t attribCount,
      * const GX2AttribStream *attribs, GX2FetchShaderType type,
@@ -3752,14 +3752,14 @@ static inline void ppc_import_gx2_GX2InitFetchShaderEx(PpcContext *ctx) { ark_gx
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2DrawEx(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2DrawEx(PpcContext *ctx) { ark_gx2_note(138u);
     /* void GX2DrawEx(GX2PrimitiveMode mode, uint32_t count,
      * uint32_t offset, uint32_t numInstances) -- real signature
      * confirmed against wut's gx2/draw.h. */
     (void)ctx;
 }
 
-static inline void ppc_import_gx2_GX2DrawIndexedEx(PpcContext *ctx) { ark_gx2_note(ctx->lr);
+static inline void ppc_import_gx2_GX2DrawIndexedEx(PpcContext *ctx) { ark_gx2_note(139u);
     /* void GX2DrawIndexedEx(GX2PrimitiveMode mode, uint32_t count,
      * GX2IndexType indexType, const void *indices, uint32_t offset,
      * uint32_t numInstances) -- real signature confirmed against wut's

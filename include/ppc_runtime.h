@@ -725,30 +725,27 @@ static inline void ark_race_exit(void) { if (g_ark_ar_depth) g_ark_ar_depth--; }
 /* GX2CENSUS: which graphics calls does the engine actually make?
 
    With the stack fix in, boot no longer stalls: the archive drains, LZMA
-   decodes correctly, and the main thread is sampled inside
-   igPlatformVisualContext::setSurfaces, igMatrix44f::invert, setViewMatrix
-   and igCommonTraversal::end -- scene graph traversal and view matrices. The
-   engine is running a render loop.
+   decodes correctly, and the engine runs a render loop. It reaches the
+   graphics layer too -- 133,069 GX2 calls in one run, including
+   igPlatformVisualContext::open, initTexture and igTexture::create.
 
-   The next question is whether that loop reaches the graphics hardware at all,
-   and if so what it asks for. Keyed by the import's own lr, which is unique per
-   call site, so the names can be resolved offline against the retail symbol
-   table rather than needing a table on device. */
+   The first version of this keyed on call-site lr with 24 slots. That was a
+   bad design: the table filled with the first sites seen and dropped every hot
+   one, attributing about 110 calls out of 133,069. Keying on the imported
+   function instead bounds the table at the number of shims, so nothing is ever
+   dropped, and every entry is meaningful.
+
+   The index each shim passes matches cafeos_gx2_names.h, so the report prints
+   names rather than addresses. */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_gx_n = 0, g_ark_gx_total = 0, g_ark_gx[24][2];
-/* per entry: 0 call-site lr, 1 count */
+volatile uint32_t g_ark_gx_total = 0, g_ark_gx_over = 0, g_ark_gx[192];
 
-static inline void ark_gx2_note(uint32_t lr)
+static inline void ark_gx2_note(uint32_t idx)
 {
-    uint32_t i;
     g_ark_gx_total++;
-    for (i = 0; i < g_ark_gx_n; i++)
-        if (g_ark_gx[i][0] == lr) { g_ark_gx[i][1]++; return; }
-    if (g_ark_gx_n >= 24u) return;
-    i = g_ark_gx_n++;
-    g_ark_gx[i][0] = lr; g_ark_gx[i][1] = 1u;
+    if (idx < 192u) g_ark_gx[idx]++; else g_ark_gx_over++;
 }
 
 /* Tally one (index -> pool) resolution, collapsing repeats. */
