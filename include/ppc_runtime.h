@@ -904,10 +904,10 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
    So the IGZ header validates fine and igIGZLoader::readSections returns 1.
    It has exactly one path to that value:
 
-     219f7d0: lwz  r4, 0x2c(r12)     ; alignment
+     219f7d0: lwz  r4, 0x2c(r12)
      219f7d4: cmpwi r4, -1
      219f7dc: beq  0x219f874         ; -1 skips the section entirely
-     219f7e0: lwz  r5, 0xc(r12)      ; size
+     219f7e0: lwz  r5, 0xc(r12)
      219f7e4: mr   r3, r25           ; the pool
      219f7e8: bl   igMemoryPool::mallocAligned
      219f7ec: cmpwi r3, 0
@@ -918,32 +918,54 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
    follows: readSections 1, update 1, kStateFailed, no object directory, no
    scene, 1,367 presents of nothing.
 
-   r25 is resolved through four fallbacks in order -- by name, by index -1,
-   the loader's own _loadingPool, then Core::igGetMemoryPool's default -- so
-   the pool that failed may not be the pool the file asked for. Recording
-   which fallback produced it separates "the named pool is missing" from "the
-   right pool is full", which need completely different fixes. */
+   CAPTURE THE ARGUMENTS BEFORE THE CALL, NOT AFTER. The first version of
+   this probe read r4 and r5 at 0x219f7ec -- after the bl -- and printed them
+   as size and alignment. r3 through r12 are volatile on PowerPC, and
+   mallocAligned tail-calls reallocCommon through both of them, so those were
+   callee leftovers dressed up as arguments. They even looked plausible
+   (1081344 and 9310208, near enough to real section sizes to be believed),
+   which is exactly what makes the mistake expensive. Only r3 at the return
+   and the non-volatile r19/r25 were ever meaningful there.
+
+   The pool is resolved through four fallbacks in order -- by name, by index
+   -1, the loader's _loadingPool, then Core::igGetMemoryPool's default -- so
+   the pool that failed need not be the pool the file asked for. r19 holds
+   the name handed to the second lookup and is non-volatile, so it can be
+   read at the call site. */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
 volatile uint32_t g_ark_rs_src = 0xffu, g_ark_rs_n = 0, g_ark_rs_calls = 0,
                   g_ark_rs_pool[8], g_ark_rs_size[8], g_ark_rs_align[8],
                   g_ark_rs_ret[8], g_ark_rs_from[8];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile char g_ark_rs_name[8][32];
 
-static inline void ark_rsalloc(uint32_t pool, uint32_t size, uint32_t align, uint32_t ret)
+static inline void ark_rsargs(uint32_t pool, uint32_t a1, uint32_t a2, const char *name)
+{
+    uint32_t i = g_ark_rs_n, k;
+    g_ark_rs_calls++;
+    if (i >= 8u) return;
+    g_ark_rs_pool[i] = pool;
+    g_ark_rs_size[i] = a1;
+    g_ark_rs_align[i] = a2;
+    g_ark_rs_ret[i] = 0xdeadbeefu;
+    g_ark_rs_from[i] = g_ark_rs_src;
+    for (k = 0; k < 31u && name && name[k] >= 32 && name[k] < 127; k++)
+        g_ark_rs_name[i][k] = name[k];
+    g_ark_rs_name[i][k] = 0;
+}
+
+static inline void ark_rsret(uint32_t ret)
 {
     uint32_t i = g_ark_rs_n;
-    g_ark_rs_calls++;
-    /* Keep the first few and every failure: a run that allocates a hundred
-       sections successfully and then fails once must not lose the one. */
     if (i >= 8u) return;
-    if (i >= 4u && ret != 0u) return;
-    g_ark_rs_n = i + 1u;
-    g_ark_rs_pool[i] = pool;
-    g_ark_rs_size[i] = size;
-    g_ark_rs_align[i] = align;
     g_ark_rs_ret[i] = ret;
-    g_ark_rs_from[i] = g_ark_rs_src;
+    /* Keep the first few and every failure, so a run that allocates many
+       sections and fails once cannot lose the one that matters. */
+    if (i < 4u || ret == 0u) g_ark_rs_n = i + 1u;
 }
 
 static const char *ark_rs_src_name(uint32_t s)
