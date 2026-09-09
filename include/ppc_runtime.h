@@ -894,6 +894,72 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
     (void)i;
 }
 
+/* IGZTRACE: which step of the loader's state machine writes the failure.
+
+   2026-09-09. IGZWORK came back <none>: neither `li r12, 1` in
+   isFileWorkFinished ever fired, so the work items are fine and it always
+   returned 0. The claim that update's 1 "is isFileWorkFinished's" was wrong
+   -- r30 is update's return, and update writes r30 in nine places, only one
+   of which is that call.
+
+   The state dispatch, with the enum names from getStateMetaEnum:
+
+     21a2374: state 0 kStateIdle          -> igFileContext::open      -> r30
+     21a237c: state 2 kStateOpened        -> igFileContext::read      -> r30
+     21a239c: state 4 kStateReadHeader    -> validateHeader, then
+                                             readSections            -> r30
+     21a23a4: state 6 kStateReadSections  -> 0x21a2600
+     21a23ac: state 7 kStateFinished      -> exit
+     anything else                        -> state = 9, li r30, 1
+
+   Two of the nine writes are that bare `li r30, 1` in the switch's default
+   arm, which is reached by states 1, 3, 5, 8 and 9 -- the in-progress states.
+   Landing there means the machine was asked to step a state it does not know
+   how to step from, which is a different failure from a step that ran and
+   returned an error.
+
+   Records the state at every loop head (so the path is visible, not inferred)
+   and every write to r30 with its site. iters=1 and iters=3 in IGZSTATE say
+   the paths differ between the four loads, so one trace per call is needed
+   rather than one summary. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_it_call = 0, g_ark_it_n[4], g_ark_it_state[4][8];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_r30_n = 0, g_ark_r30_site[12], g_ark_r30_val[12];
+
+static inline void ark_igziter(uint32_t state)
+{
+    uint32_t c = g_ark_it_call, i;
+    if (c >= 4u) return;
+    i = g_ark_it_n[c];
+    if (i >= 8u) return;
+    g_ark_it_n[c] = i + 1u;
+    g_ark_it_state[c][i] = state;
+}
+
+static inline void ark_igzr30(uint32_t site, uint32_t val)
+{
+    uint32_t i = g_ark_r30_n;
+    if (i >= 12u) return;
+    g_ark_r30_n = i + 1u;
+    g_ark_r30_site[i] = site;
+    g_ark_r30_val[i] = val;
+}
+
+static const char *ark_igz_site_name(uint32_t s)
+{
+    static const char *const n[9] = {
+        "isFileWorkFinished", "default-arm(1,3)", "default-arm(5,8,9)",
+        "getClassMetaSafe@23ec", "igFileContext::open", "getClassMetaSafe@24e4",
+        "igFileContext::read", "validateHeader", "readSections"
+    };
+    return s < 9u ? n[s] : "?";
+}
+
 /* IGZWORK: which file work item fails, with what status, set by whom.
 
    2026-09-09. IGZSTATE came back kStateFailed(9) ret=0x1 for all four loads,
