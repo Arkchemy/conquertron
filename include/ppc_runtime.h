@@ -894,6 +894,68 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
     (void)i;
 }
 
+/* IGZWORK: which file work item fails, with what status, set by whom.
+
+   2026-09-09. IGZSTATE came back kStateFailed(9) ret=0x1 for all four loads,
+   and that 1 is isFileWorkFinished's. It has exactly two ways to produce it:
+
+     219f3a0: lwz r11, 0x54(r3)   ; the loader's _fileWorkItem
+     219f3ac: beq 0x219f3bc       ; NULL           -> li r12, 1
+     219f3b0: lbz r11, 0x23(r11)  ; its status byte
+     219f3b8: ble 0x219f3c0       ; <= 2 is fine
+     219f3bc: li r12, 1           ; site 0: null, or status > 2
+     ...
+     219f420: lbz r11, 0x23(r11)  ; same test over the section work items
+     219f448: li r12, 1           ; site 1: one of them has status > 2
+
+   So the whole failure is one byte: igFileWorkItem::_status greater than 2.
+   Site 0 with r11 == 0 means the work item was never attached at all, which
+   is a different bug from one that was attached and then errored.
+
+   The status values igArchive/igCafeStorageDevice actually pass to setStatus
+   in this binary are 1, 2, 4 and 18 -- so > 2 means 4 or 18, both set by
+   igArchive::addWork and igArchive::getFileList. Recording the setter's lr
+   names which, and the ring keeps the whole history because the last write
+   is usually a consequence rather than the cause. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_iw_n = 0, g_ark_iw_site[6], g_ark_iw_fwi[6], g_ark_iw_status[6];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ss_n = 0, g_ark_ss_total = 0,
+                  g_ark_ss_item[12], g_ark_ss_val[12], g_ark_ss_lr[12];
+
+static inline void ark_igzwork(uint32_t site, uint32_t fwi, uint32_t status)
+{
+    uint32_t i = g_ark_iw_n;
+    if (i >= 6u) return;
+    g_ark_iw_n = i + 1u;
+    g_ark_iw_site[i] = site;
+    g_ark_iw_fwi[i] = fwi;
+    g_ark_iw_status[i] = status;
+}
+
+/* Every setStatus, oldest first, capped -- a status > 2 late in boot is the
+   one that matters and the early ones give it context. */
+static inline void ark_setstatus(uint32_t item, uint32_t val, uint32_t lr)
+{
+    uint32_t i;
+    g_ark_ss_total++;
+    /* Keep the first few, then only the ones that are actually errors, so a
+       flood of routine 1/2 transitions cannot push the interesting write out
+       of a ring buffer -- the mistake HEAPSPAN made on 2026-09-05. */
+    if (g_ark_ss_n < 4u || val > 2u) {
+        i = g_ark_ss_n;
+        if (i >= 12u) return;
+        g_ark_ss_n = i + 1u;
+        g_ark_ss_item[i] = item;
+        g_ark_ss_val[i] = val;
+        g_ark_ss_lr[i] = lr;
+    }
+}
+
 /* IGZSTATE: where the loader's state machine stops.
 
    2026-09-09. igIGZLoader::load ends in a tail call to
