@@ -154,6 +154,42 @@ out to be reproducible from a captured 804-call trace in under a second. If the
 subsystem does not need the OS, do not put it on the console to ask it a
 question.
 
+## Resolve a captured `lr` to a symbol before believing it
+
+`XMLWHO` recorded the `lr` of every caller of `igXmlDocument::read` and found
+exactly one: `0x21e4704`. That reads like a definitive answer — one client,
+here it is. It was the sibling `read(const char*)` overload, eight
+instructions into a wrapper that forwards to the `igFile*` version. The
+probe had hooked the inner overload and captured the outer one.
+
+Look the address up in the symbol table (the retail `.rpx` is unstripped,
+so this is a lookup, not a guess) *before* drawing a conclusion from it. An
+`lr` inside the same class, or the same function, means the probe is
+watching the wrong level.
+
+## Walk up the call graph before instrumenting further down
+
+The boot stall of 2026-09-08 had a nine-link measured chain, every link
+confirmed on hardware, and none of them was the bug. The cause was two
+levels above the top of the chain, in a byte the recompiler loaded from the
+wrong address.
+
+The static tools answer "who *can* call this" in seconds and need no
+hardware: scan `.text` for `bl` at a target, scan for `lis`+displacement
+pairs that form a global's address. `igArkCore::init` is the only caller of
+`igRegistry::read` in the whole binary; `__sti___22_tfbCafeApplication_cpp`
+is the only writer of `_registryPath`. Both facts are one script each, and
+between them they bounded the problem to a single guard byte.
+
+When a measured chain is entirely consistent and still explains nothing,
+stop extending it downward. The next probe belongs above the first link,
+and it may not need to be a probe at all.
+
+**Relocation offsets are not instruction addresses.** `R_PPC_ADDR16_HA/HI/LO`
+point at the low halfword, `insn + 2`. A hand-written check that looks up
+instruction addresses in `.rela.text` finds nothing and concludes the sites
+are unrelocated — which inverts the answer.
+
 ## Two general rules that would have caught most of the above
 
 **Before building:** write down what each possible outcome would mean. If two
