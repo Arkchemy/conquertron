@@ -287,6 +287,26 @@ static inline void ppc_import_coreinit_OSResetEvent(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
+    /* Deliver queued FS completions before parking, for the same liveness
+     * reason as OSWaitEventWithTimeout below -- and here it is not a
+     * fallback, it is the only path. Found 2026-09-09, the first run in
+     * which igArkCore::init actually loaded the registry:
+     *
+     *   igPhysicalStorageDevice::update issues FSReadFileWithPosAsync
+     *     -> the shim reads the file and QUEUES the completion
+     *   igCafeSignal::wait  ->  b OSWaitEvent
+     *
+     * At that point no guest thread has been created yet (threads:
+     * created=0), so there is no worker parked in the timeout variant to
+     * run the pump, and no other import is ever reached. The completion sat
+     * in the queue (q=1 done=0 pend=1) with the file's 542 bytes already in
+     * the guest buffer, and the one thread in existence blocked forever
+     * waiting for a signal only that completion could raise.
+     *
+     * Pumping BEFORE arkchemy_event_get is deliberate: the callback runs
+     * guest code that signals this very event, and e->lock is not
+     * recursive. */
+    arkchemy_fs_pump_completions(ctx);
     ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
     pthread_mutex_lock(&e->lock);
     if (e->signaled) {
