@@ -894,6 +894,55 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
     (void)i;
 }
 
+/* IGZLOAD: does the level's object graph actually load?
+
+   2026-09-09, after STREAMLOAD came back with calls=2 and disproved the
+   fourth-load theory. tfbGame::streamContext::load's real shape is:
+
+     igArchive::instantiateFromPool          -> r18
+     igArchive::open(...)                    <- level/title.bld
+     igIGZLoader::instantiateFromPool        -> r31
+     igObjectDirectory::instantiateFromPool  -> r30
+     stb 1, 0x6d(r31) ; stb 1, 0x6e(r31)
+     2000a28: bl igIGZLoader::load(path, dir, blocking=1, pool)
+     2000a2c: cmpwi r3, 0
+     2000a30: bne 0x2000a98                  <- straight to the close
+     ... otherwise link the directory into the stream ...
+     2000a98: if [r18+0x28] != 0 -> igArchive::close(r18)
+
+   So closing the archive is NOT an error path -- both routes reach it, and
+   the earlier reading of the DEVLOG removal as a failure was wrong. The one
+   value that separates a loaded level from an empty one is igIGZLoader::load's
+   return, and it is blocking (r6=1), so by the time it returns everything it
+   needed should already have been read. Two block reads for a 3.97 MB archive
+   says otherwise.
+
+   Also records igArchive::open's own result, so an archive that opened badly
+   cannot be mistaken for a loader that refused. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_igz_n = 0, g_ark_igz_ret[4], g_ark_igz_arc[4], g_ark_igz_f28[4],
+                  g_ark_igz_calls = 0, g_ark_igz_open_n = 0, g_ark_igz_open_ret[4];
+
+static inline void ark_igzload(uint32_t ret, uint32_t arc, uint32_t f28)
+{
+    uint32_t i = g_ark_igz_n;
+    if (i >= 4u) return;
+    g_ark_igz_n = i + 1u;
+    g_ark_igz_ret[i] = ret;
+    g_ark_igz_arc[i] = arc;
+    g_ark_igz_f28[i] = f28;
+}
+
+static inline void ark_igzopen(uint32_t ret)
+{
+    uint32_t i = g_ark_igz_open_n;
+    if (i >= 4u) return;
+    g_ark_igz_open_n = i + 1u;
+    g_ark_igz_open_ret[i] = ret;
+}
+
 /* STREAMLOAD: how many levels does the game ask for, and which?
 
    2026-09-09. The boot order is now right through to level/title.bld, and
