@@ -894,6 +894,66 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
     (void)i;
 }
 
+/* RSALLOC: the allocation that stops the whole game.
+
+   2026-09-09, and this one is not inferred -- IGZTRACE traced it.
+
+     call1 loop-head states: 0 1 3, then the state-4 arm
+     r30 writes: ... [validateHeader=0x0] [readSections=0x1] ...
+
+   So the IGZ header validates fine and igIGZLoader::readSections returns 1.
+   It has exactly one path to that value:
+
+     219f7d0: lwz  r4, 0x2c(r12)     ; alignment
+     219f7d4: cmpwi r4, -1
+     219f7dc: beq  0x219f874         ; -1 skips the section entirely
+     219f7e0: lwz  r5, 0xc(r12)      ; size
+     219f7e4: mr   r3, r25           ; the pool
+     219f7e8: bl   igMemoryPool::mallocAligned
+     219f7ec: cmpwi r3, 0
+     219f7f0: bne  0x219f80c         ; got it -> carry on
+     219f804: li   r3, 1             ; NULL -> return 1
+
+   igMemoryPool::mallocAligned returned NULL, and every symptom above it
+   follows: readSections 1, update 1, kStateFailed, no object directory, no
+   scene, 1,367 presents of nothing.
+
+   r25 is resolved through four fallbacks in order -- by name, by index -1,
+   the loader's own _loadingPool, then Core::igGetMemoryPool's default -- so
+   the pool that failed may not be the pool the file asked for. Recording
+   which fallback produced it separates "the named pool is missing" from "the
+   right pool is full", which need completely different fixes. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_rs_src = 0xffu, g_ark_rs_n = 0, g_ark_rs_calls = 0,
+                  g_ark_rs_pool[8], g_ark_rs_size[8], g_ark_rs_align[8],
+                  g_ark_rs_ret[8], g_ark_rs_from[8];
+
+static inline void ark_rsalloc(uint32_t pool, uint32_t size, uint32_t align, uint32_t ret)
+{
+    uint32_t i = g_ark_rs_n;
+    g_ark_rs_calls++;
+    /* Keep the first few and every failure: a run that allocates a hundred
+       sections successfully and then fails once must not lose the one. */
+    if (i >= 8u) return;
+    if (i >= 4u && ret != 0u) return;
+    g_ark_rs_n = i + 1u;
+    g_ark_rs_pool[i] = pool;
+    g_ark_rs_size[i] = size;
+    g_ark_rs_align[i] = align;
+    g_ark_rs_ret[i] = ret;
+    g_ark_rs_from[i] = g_ark_rs_src;
+}
+
+static const char *ark_rs_src_name(uint32_t s)
+{
+    static const char *const n[4] = {
+        "byName", "byIndex-1", "_loadingPool", "igGetMemoryPool-default"
+    };
+    return s < 4u ? n[s] : "?";
+}
+
 /* IGZTRACE: which step of the loader's state machine writes the failure.
 
    2026-09-09. IGZWORK came back <none>: neither `li r12, 1` in
