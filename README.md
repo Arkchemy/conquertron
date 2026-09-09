@@ -193,3 +193,12 @@ project Discord are in [`llms.txt`](llms.txt).
 
 Contributors are listed in [`CONTRIBUTORS.csv`](https://github.com/Arkchemy/woodburrow/blob/main/CONTRIBUTORS.csv); the codename
 scheme is explained in [`CODENAMES.md`](CODENAMES.md).
+
+## Documentation
+
+| Document | What it covers |
+| --- | --- |
+| [`ROADMAP.md`](ROADMAP.md) | Correctness work, shim audits, tooling |
+| [`docs/probe-design.md`](docs/probe-design.md) | How to instrument recompiled code without wasting a hardware cycle |
+| [`docs/address-space-split.md`](docs/address-space-split.md) | Why globals are relocated and `.text` is not |
+| [`hosttest/`](hosttest/) | Run recompiled translation units natively, in milliseconds |
