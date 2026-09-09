@@ -327,29 +327,37 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_LBZ: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << reg(rD) << " = ppc_load_u8(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
-                    << ");\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base)
+                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << reg(rD) << " = ppc_load_u8(ctx, " << addr_expr << ");\n";
                 break;
             }
             case PPC_INS_LHZ: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << reg(rD) << " = ppc_load_u16(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
-                    << ");\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base)
+                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << reg(rD) << " = ppc_load_u16(ctx, " << addr_expr << ");\n";
                 break;
             }
             case PPC_INS_LHA: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)ppc_load_u16(ctx, " << base_expr(m.base)
-                    << " + (int32_t)" << m.disp << ");\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base)
+                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << reg(rD) << " = (uint32_t)(int32_t)(int16_t)ppc_load_u16(ctx, " << addr_expr << ");\n";
                 break;
             }
             case PPC_INS_STB: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  ppc_store_u8(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", (uint8_t)"
-                    << reg(rD) << ");\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base)
+                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  ppc_store_u8(ctx, " << addr_expr << ", (uint8_t)" << reg(rD) << ");\n";
                 break;
             }
             // Update-form (rA = EA) loads/stores need the *same*
@@ -418,8 +426,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_STH: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  ppc_store_u16(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", (uint16_t)"
-                    << reg(rD) << ");\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base)
+                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  ppc_store_u16(ctx, " << addr_expr << ", (uint16_t)" << reg(rD) << ");\n";
                 break;
             }
             case PPC_INS_MR: {
@@ -528,9 +538,22 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_ORI: {
+                // `lis`+`ori` is the other GHS spelling of an HA/LO
+                // address pair (the ISA's canonical build-a-32-bit-
+                // constant idiom), so it needs the same
+                // is_synthetic_addr_lo_reloc fold as ADDI and ADDIC: rA
+                // already holds the complete synthetic address and this
+                // instruction's immediate is a relocation placeholder,
+                // not real data to OR in. Only two sites in this game's
+                // binary carry it, but ORing a placeholder into a real
+                // address is silent and unbounded.
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
-                out << "  " << reg(rD) << " = " << reg(rA) << " | " << uimm(ppc.operands[2]) << "u;\n";
+                if (is_synthetic_addr_lo_reloc(img, insn.address)) {
+                    out << "  " << reg(rD) << " = " << reg(rA) << ";\n";
+                } else {
+                    out << "  " << reg(rD) << " = " << reg(rA) << " | " << uimm(ppc.operands[2]) << "u;\n";
+                }
                 break;
             }
             case PPC_INS_ADDI: {
@@ -1533,17 +1556,23 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_LMW: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
+                std::string base_ea = is_synthetic_addr_lo_reloc(img, insn.address)
+                                          ? base_expr(m.base)
+                                          : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
                 for (int i = rD; i <= 31; i++) {
-                    out << "  " << reg(i) << " = ppc_load_u32(ctx, " << base_expr(m.base) << " + (int32_t)"
-                        << (m.disp + 4 * (i - rD)) << ");\n";
+                    out << "  " << reg(i) << " = ppc_load_u32(ctx, " << base_ea << " + (int32_t)"
+                        << (4 * (i - rD)) << ");\n";
                 }
                 break;
             }
             case PPC_INS_STMW: {
                 int rS = reg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
+                std::string base_ea = is_synthetic_addr_lo_reloc(img, insn.address)
+                                          ? base_expr(m.base)
+                                          : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
                 for (int i = rS; i <= 31; i++) {
-                    out << "  ppc_store_u32(ctx, " << base_expr(m.base) << " + (int32_t)" << (m.disp + 4 * (i - rS))
+                    out << "  ppc_store_u32(ctx, " << base_ea << " + (int32_t)" << (4 * (i - rS))
                         << ", " << reg(i) << ");\n";
                 }
                 break;
@@ -1680,17 +1709,21 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_LFSU: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << base_expr(m.base) << " + (int32_t)"
-                    << m.disp << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base)
+                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << addr_expr << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_STFSU: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  ppc_store_f32(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", " << freg(fD)
-                    << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base)
+                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  ppc_store_f32(ctx, " << addr_expr << ", " << freg(fD) << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_LFSUX: {
@@ -1939,9 +1972,11 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_STFDU: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  ppc_store_f64(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp << ", " << freg(fD)
-                    << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base)
+                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  ppc_store_f64(ctx, " << addr_expr << ", " << freg(fD) << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_LWSYNC: {
@@ -2064,9 +2099,11 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_LFDU: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 MemOp m = mem_operand(ppc.operands[1]);
-                out << "  " << freg(fD) << " = ppc_load_f64(ctx, " << base_expr(m.base) << " + (int32_t)" << m.disp
-                    << ");\n";
-                out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
+                bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
+                std::string addr_expr = folded ? base_expr(m.base)
+                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
+                out << "  " << freg(fD) << " = ppc_load_f64(ctx, " << addr_expr << ");\n";
+                if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
             case PPC_INS_ARKCHEMY_PS_ADD:
