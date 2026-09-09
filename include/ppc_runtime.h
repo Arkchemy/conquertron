@@ -894,6 +894,39 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
     (void)i;
 }
 
+/* STREAMLOAD: how many levels does the game ask for, and which?
+
+   2026-09-09. The boot order is now right through to level/title.bld, and
+   then title.bld is removed as a storage device at call 3,190,000 with
+   closedBy=0x2000aac. That address is inside tfbGame::streamContext::load
+   itself, at the point it calls closePreviousArc -- so the close is not a
+   failure, it is `load` being entered AGAIN and clearing the previous stream
+   before setting up the next.
+
+   Which means a fourth load was requested and no fourth archive appears in
+   ARCHNAME. Either the request names something that does not resolve, or it
+   names title again and the reload races its own predecessor. The path
+   string settles it; the close count cannot. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_sl_n = 0, g_ark_sl_calls = 0, g_ark_sl_at[8];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile char g_ark_sl_name[8][48];
+
+static inline void ark_streamload(const char *src, uint32_t at)
+{
+    uint32_t k, i = g_ark_sl_n;
+    g_ark_sl_calls++;
+    if (i >= 8u) return;
+    g_ark_sl_n = i + 1u;
+    g_ark_sl_at[i] = at;
+    for (k = 0; k < 47u && src && src[k]; k++) g_ark_sl_name[i][k] = src[k];
+    g_ark_sl_name[i][k] = 0;
+}
+
 /* XMLCFG: does alchemy.xml parse, and does startLevel come back?
 
    The disc ships content/alchemy.xml with `startLevel = "Title"`, and the FS
