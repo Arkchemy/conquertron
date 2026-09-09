@@ -894,6 +894,57 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
     (void)i;
 }
 
+/* IGZSTATE: where the loader's state machine stops.
+
+   2026-09-09. igIGZLoader::load ends in a tail call to
+   igIGZLoader::update(blocking) and returns its result untouched, and both
+   bootstrap and title came back 1 -- so the level's object directory is never
+   linked and the scene stays empty.
+
+   update is a state machine over this+0x4c against the game's own enum
+   (igIGZLoader::getStateMetaEnum, read out of .rodata):
+
+     0 kStateIdle        1 kStateOpening    2 kStateOpened
+     3 kStateReadingHeader  4 kStateReadHeader
+     5 kStateReadingSections  6 kStateReadSections
+     7 kStateFinished    8 kStateAborting   9 kStateFailed
+
+     21a2638: lwz r8, 0x4c(r29)   ; loop while state != 7 and the flag holds
+     21a263c: cmpwi r8, 7
+     21a2650: if r30 == 1 -> state = 9, clear(), return
+     21a266c: if state != 7 -> return
+     21a2d74: mr r3, r30          ; the return value IS isFileWorkFinished's
+
+   So the state at exit says which step it could not get past, and the
+   iteration count separates "spun and gave up" from "bailed immediately". */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_igs_n = 0, g_ark_igs_calls = 0, g_ark_igs_iter = 0,
+                  g_ark_igs_state[6], g_ark_igs_ret[6], g_ark_igs_iters[6],
+                  g_ark_igs_maxstate = 0;
+
+static inline void ark_igzstate(uint32_t state, uint32_t ret, uint32_t iters)
+{
+    uint32_t i = g_ark_igs_n;
+    if (state > g_ark_igs_maxstate) g_ark_igs_maxstate = state;
+    if (i >= 6u) return;
+    g_ark_igs_n = i + 1u;
+    g_ark_igs_state[i] = state;
+    g_ark_igs_ret[i] = ret;
+    g_ark_igs_iters[i] = iters;
+}
+
+static const char *ark_igz_state_name(uint32_t s)
+{
+    static const char *const n[10] = {
+        "kStateIdle", "kStateOpening", "kStateOpened", "kStateReadingHeader",
+        "kStateReadHeader", "kStateReadingSections", "kStateReadSections",
+        "kStateFinished", "kStateAborting", "kStateFailed"
+    };
+    return s < 10u ? n[s] : "?";
+}
+
 /* IGZLOAD: does the level's object graph actually load?
 
    2026-09-09, after STREAMLOAD came back with calls=2 and disproved the
