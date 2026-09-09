@@ -942,6 +942,15 @@ volatile uint32_t g_ark_rs_src = 0xffu, g_ark_rs_n = 0, g_ark_rs_calls = 0,
 __attribute__((weak))
 #endif
 volatile char g_ark_rs_name[8][32];
+/* 2026-09-09: "Default" allocates (14908 and 201852 bytes at align 16);
+   "Image" does not (1081344 and 9310208 bytes at align 8192). Both pools are
+   real objects, so the next question is what the failing one looks like
+   inside -- side by side with one that works, which is why every kept entry
+   carries a dump rather than only the failures. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_rs_dump[8][16];
 
 static inline void ark_rsargs(uint32_t pool, uint32_t a1, uint32_t a2, const char *name)
 {
