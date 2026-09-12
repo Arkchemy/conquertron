@@ -2788,6 +2788,27 @@ volatile uint32_t g_ark_gt_n = 0, g_ark_gt_pc[ARKCHEMY_PCSAMPLE_SLOTS],
  * and program fields, and the first two words the program pointer leads to --
  * R600 microcode is 64-bit instruction words, so even a glance at those says
  * whether the pointer is real. */
+/* Hands each distinct shader program to the host application to save.
+ *
+ * The struct offsets are confirmed -- a run reported size=440 with first words
+ * 00000000 00008009, which is defaultVertexShader byte for byte against the
+ * copy pulled out of .rodata. But the sizes also show shaders that are not in
+ * the executable at all (496, 488, 1296, 528), so they arrive from the
+ * archives or are built at load time, and chasing each source separately is
+ * slower than taking them where they are all guaranteed to be: in GPU-visible
+ * memory at the moment the engine binds them. Seven distinct programs in a
+ * whole run, a few hundred bytes each.
+ *
+ * Weak, and writing is the application's job, because ppc_runtime.h needs
+ * only math/stdint/stdlib/string -- that is exactly what lets hosttest
+ * compile a recompiled translation unit natively, and pulling stdio in here
+ * to save a file would cost that for no reason. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+void ark_shd_sink(PpcContext *ctx, const char *kind, uint32_t idx,
+                  uint32_t prog, uint32_t size);
+
 static inline void ark_shd_note(PpcContext *ctx, int kind, uint32_t obj)
 {
     if (!obj) return;
@@ -2807,6 +2828,7 @@ static inline void ark_shd_note(PpcContext *ctx, int kind, uint32_t obj)
     h[3] = ppc_load_u32(ctx, obj + 0u);           /* first reg word */
     h[4] = prog ? ppc_load_u32(ctx, prog + 0u) : 0u;
     h[5] = prog ? ppc_load_u32(ctx, prog + 4u) : 0u;
+    if (ark_shd_sink) ark_shd_sink(ctx, kind ? "ps" : "vs", i, prog, size);
 }
 
 static inline void ppc_sample_pc(const PpcContext *ctx) {
