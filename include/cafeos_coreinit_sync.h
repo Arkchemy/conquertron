@@ -11,6 +11,7 @@
 
 #include <pthread.h>
 #include <time.h>
+#include <errno.h>   /* ETIMEDOUT, for OSWaitEvent's pump slices */
 
 /* Real Wii U hardware clock constants -- sourced from Cemu's real
  * emulation core (src/Cafe/HW/Espresso/PPCState.h), not guessed. Used
@@ -286,6 +287,12 @@ static inline void ppc_import_coreinit_OSResetEvent(PpcContext *ctx) {
     pthread_mutex_unlock(&e->lock);
 }
 
+/* How long OSWaitEvent sleeps between pumps. Short enough that a cooperative
+ * completion is not the bottleneck, long enough not to spin: at 1ms a load
+ * that needs a few hundred block reads costs well under a second of slicing,
+ * against the 39 seconds per pump measured before this existed. */
+#define ARKCHEMY_EVENT_PUMP_SLICE_NS 1000000L
+
 static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
     /* Deliver queued FS completions before parking, for the same liveness
      * reason as OSWaitEventWithTimeout below -- and here it is not a
@@ -312,10 +319,60 @@ static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
     if (e->signaled) {
         if (e->mode == 1 /* AUTO */) e->signaled = 0;
     } else {
+        /* Wait in short slices and pump deferred work between them, instead
+         * of parking on the condvar forever.
+         *
+         * The contract is unchanged -- this still does not return until the
+         * event is signalled. What changes is that a thread waiting here can
+         * still run the work that will cause the signal.
+         *
+         * 2026-09-12, measured. The game thread reaches
+         * igIGZLoader::update -> igFileContext -> igPhysicalStorageDevice,
+         * issues a block read, delivers its completion from the pump, raises
+         * the signal (igCafeSignal::raise -> OSSignalEvent, the last
+         * recompiled function the game thread ever enters -- identical
+         * GAMEPC count of 2,877,916 across two different builds, so a
+         * deterministic stop), and then waits here for the NEXT completion.
+         *
+         * But the next block read is only issued by
+         * igArchive::updateArchiveSystem, and igArchive::update is its only
+         * caller, and that is reached only by this same thread continuing
+         * round its loop. So it waits for work that only it can create.
+         *
+         * It was not a hard deadlock, which is what made it confusing:
+         * FMOD's threads call imports constantly and some of those pump,
+         * so the archive did creep forward -- 23 updateArchiveSystem calls
+         * and 19 decompressed blocks in 900 seconds, and the same 19 in the
+         * 420-second run before it. Progress at roughly one pump every 39
+         * seconds reads exactly like a hang.
+         *
+         * Real Cafe OS has no such problem: FS completions arrive on the
+         * OS's own I/O thread, so a parked game thread is woken from
+         * outside. Here the pump is cooperative, so the wait has to be too.
+         *
+         * The slice is deliberately short and the loop re-checks the same
+         * predicate, so a spurious wake or a missed signal cannot make this
+         * return early -- it only costs a wakeup. */
         uint64_t my_epoch = e->epoch;
         e->waiting_count++;
         while (!e->signaled && e->epoch == my_epoch) {
-            pthread_cond_wait(&e->cond, &e->lock);
+            struct timespec deadline;
+            clock_gettime(CLOCK_REALTIME, &deadline);
+            deadline.tv_nsec += ARKCHEMY_EVENT_PUMP_SLICE_NS;
+            if (deadline.tv_nsec >= 1000000000L) {
+                deadline.tv_sec += 1;
+                deadline.tv_nsec -= 1000000000L;
+            }
+            if (pthread_cond_timedwait(&e->cond, &e->lock, &deadline) == ETIMEDOUT) {
+                /* Drop the lock before pumping: a completion callback runs
+                 * guest code that can signal this very event, and e->lock is
+                 * not recursive. Leave the waiter counted across the gap so
+                 * an AUTO signal arriving meanwhile wakes rather than being
+                 * latched -- either outcome is handled by the re-check. */
+                pthread_mutex_unlock(&e->lock);
+                arkchemy_fs_pump_completions(ctx);
+                pthread_mutex_lock(&e->lock);
+            }
         }
         e->waiting_count--;
         if (e->signaled && e->mode == 1 /* AUTO */) e->signaled = 0;
