@@ -2649,7 +2649,41 @@ static inline void ppc_poll_watch_mem(const PpcContext *ctx) {
     g_ppc_memwatch_n = n + 1u;
 }
 
+/* Which PpcContext belongs to the game thread. Set once by main.c before it
+ * calls the entry point, and compared by pointer -- there is no thread id in
+ * a PpcContext and there does not need to be.
+ *
+ * 2026-09-12. Everything that samples "where is the code" reads
+ * g_ppc_current_pc, which is one global shared by every guest thread, so it
+ * names whichever thread most recently entered a function. That was
+ * tolerable while only the game thread ran. It stopped being tolerable the
+ * moment audio came up: a 900-second run reported last_pc=__gh_udiv64 and a
+ * pcsample dominated by FMOD::SystemI::streamThread, FMOD_OS_Time_Sleep and
+ * OutputWiiU::getPositionCallback -- all true, all useless, because the
+ * question was where the *game* thread was parked.
+ *
+ * The same confusion already cost a week during the boot stall, where a
+ * single global PC could not identify which thread wrote a corrupted word.
+ * This is that lesson applied to sampling rather than to stores. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uintptr_t g_ark_game_ctx = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_gt_n = 0, g_ark_gt_pc[ARKCHEMY_PCSAMPLE_SLOTS],
+                  g_ark_gt_lr[ARKCHEMY_PCSAMPLE_SLOTS];
+
 static inline void ppc_sample_pc(const PpcContext *ctx) {
+    /* Game-thread-only sample first, and on its own stride, so a thread that
+     * is parked and therefore rarely entering functions still gets recorded
+     * instead of being crowded out by busy ones. */
+    if (g_ark_game_ctx != 0 && (uintptr_t)ctx == g_ark_game_ctx) {
+        uint32_t g = g_ark_gt_n++ & (ARKCHEMY_PCSAMPLE_SLOTS - 1u);
+        g_ark_gt_pc[g] = g_ppc_current_pc;
+        g_ark_gt_lr[g] = ctx->lr;
+    }
     if ((g_ppc_fn_call_count & (ARKCHEMY_PCSAMPLE_STRIDE - 1u)) != 0u) return;
     uint32_t i = g_ppc_pcsample_n++ & (ARKCHEMY_PCSAMPLE_SLOTS - 1u);
     g_ppc_pcsample[i]    = g_ppc_current_pc;
