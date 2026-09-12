@@ -894,6 +894,64 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
     (void)i;
 }
 
+/* CFGPOOL: what size each pool is actually asked for.
+
+   2026-09-12. RSPOOL dumped the failing pool beside a working one and the
+   answer was structural, not an allocator bug:
+
+     Default (igBidirectionalHeapMemoryPool, vtable 0x100540b4)
+       +0x08 = 0x01000000   +0x10 = 0x05bafeb4   +0x14 = 0x026ea800
+     Image   (igStackMemoryPool,            vtable 0x100546e0)
+       +0x08 = 0            +0x10 = 0            +0x14 = 0
+
+   igStackMemoryPool::activate bails unless both +0x10 (base) and +0x14
+   (size) are non-zero, so the Image pool has no memory at all and every
+   mallocAligned on it returns NULL. +0x08 is the configured size, and it is
+   zero -- which points upstream of the allocator entirely.
+
+   tfbGame::configureMemoryFrame walks a {name, kind} table at 0x100017e8 --
+   Default, Audio, Video, Image, Text, String, Vertex, AnimationData,
+   Collision, VertexObject -- with kind 1 for heap pools and kind 2 for
+   Image and Vertex, the two backed by VRAM. For kind 2 it instantiates an
+   igStackMemoryPool and then calls two virtuals:
+
+     20055a0: bctrl   vtable+0x9c(parent, size, 0)   <- give it memory
+     20055b4: bctrl   vtable+0x84(this)              <- activate
+
+   where size is r24, summed out of the frame descriptor's own arrays and
+   rounded up to the pool's alignment. So either r24 arrives as 0 (the
+   configuration never reaches these two pools -- alchemy.xml sets
+   vramBSize="419430400" and the game has no real VRAM here) or it arrives
+   sane and vtable+0x9c refuses it. Those are different problems upstream
+   and downstream of the same call, and the size at that bctrl separates
+   them in one run. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_mf_n = 0, g_ark_mf_pool[12], g_ark_mf_size[12],
+                  g_ark_mf_parent[12], g_ark_mf_idx[12],
+                  g_ark_mf_base[12], g_ark_mf_len[12], g_ark_mf_cfg[12];
+
+static inline void ark_cfgpool_req(uint32_t pool, uint32_t parent, uint32_t size)
+{
+    uint32_t i = g_ark_mf_n;
+    if (i >= 12u) return;
+    g_ark_mf_pool[i] = pool;
+    g_ark_mf_parent[i] = parent;
+    g_ark_mf_size[i] = size;
+}
+
+static inline void ark_cfgpool_done(uint32_t cfg, uint32_t idx, uint32_t base, uint32_t len)
+{
+    uint32_t i = g_ark_mf_n;
+    if (i >= 12u) return;
+    g_ark_mf_cfg[i] = cfg;
+    g_ark_mf_idx[i] = idx;
+    g_ark_mf_base[i] = base;
+    g_ark_mf_len[i] = len;
+    g_ark_mf_n = i + 1u;
+}
+
 /* RSALLOC: the allocation that stops the whole game.
 
    2026-09-09, and this one is not inferred -- IGZTRACE traced it.
