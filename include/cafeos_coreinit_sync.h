@@ -239,9 +239,12 @@ static inline void ppc_import_coreinit_OSInitEvent(PpcContext *ctx) {
 }
 
 static inline void ppc_import_coreinit_OSSignalEvent(PpcContext *ctx) {
+    g_ark_sev_enter++;
     ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1 /* AUTO default if never Init'd */);
+    g_ark_sev_got_entry++;
     g_arkchemy_event_signals++; g_arkchemy_event_last_signal = ctx->r[3];
     pthread_mutex_lock(&e->lock);
+    g_ark_sev_got_lock++;
     if (!e->signaled) {
         if (e->mode == 1 /* AUTO */) {
             if (e->waiting_count == 0) {
@@ -257,6 +260,7 @@ static inline void ppc_import_coreinit_OSSignalEvent(PpcContext *ctx) {
         }
     }
     pthread_mutex_unlock(&e->lock);
+    g_ark_sev_exit++;
 }
 
 static inline void ppc_import_coreinit_OSSignalEventAll(PpcContext *ctx) {
@@ -313,9 +317,12 @@ static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
      * Pumping BEFORE arkchemy_event_get is deliberate: the callback runs
      * guest code that signals this very event, and e->lock is not
      * recursive. */
+    g_ark_wev_enter++;
     arkchemy_fs_pump_completions(ctx);
     ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
+    g_ark_wev_got_entry++;
     pthread_mutex_lock(&e->lock);
+    g_ark_wev_got_lock++;
     if (e->signaled) {
         if (e->mode == 1 /* AUTO */) e->signaled = 0;
     } else {
@@ -355,8 +362,10 @@ static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
          * return early -- it only costs a wakeup. */
         uint64_t my_epoch = e->epoch;
         e->waiting_count++;
+        g_ark_wev_parked++;
         while (!e->signaled && e->epoch == my_epoch) {
             struct timespec deadline;
+            g_ark_wev_slices++;
             clock_gettime(CLOCK_REALTIME, &deadline);
             deadline.tv_nsec += ARKCHEMY_EVENT_PUMP_SLICE_NS;
             if (deadline.tv_nsec >= 1000000000L) {
@@ -378,6 +387,7 @@ static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
         if (e->signaled && e->mode == 1 /* AUTO */) e->signaled = 0;
     }
     pthread_mutex_unlock(&e->lock);
+    g_ark_wev_exit++;
 }
 
 static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) {

@@ -1176,6 +1176,35 @@ static const char *ark_igz_site_name(uint32_t s)
     return s < 9u ? n[s] : "?";
 }
 
+/* Phase counters across the two event imports, because "the thread is stuck
+ * somewhere in here" is not a diagnosis.
+ *
+ * 2026-09-12. The game thread's last recompiled function is igCafeSignal::raise
+ * for the third run running, at an identical GAMEPC count of 2,877,916 across
+ * three different builds -- so the stop is deterministic and unaffected by
+ * anything done to OSWaitEvent, which rules out the theory that it was parked
+ * there waiting for work only it could create.
+ *
+ * raise tail-calls OSSignalEvent. A shim is not a recompiled function, so it
+ * bumps no counter, and from outside "returned and went elsewhere" and "never
+ * returned" look the same. These distinguish them: if enter > exit, it is
+ * inside, and which of the three counters stalls says exactly where.
+ *
+ * Deliberately not guarded to the game thread -- the whole point is to see
+ * whether some OTHER thread is holding a lock this one wants, and a
+ * game-thread-only counter could not show that. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_sev_enter = 0, g_ark_sev_got_entry = 0,
+                  g_ark_sev_got_lock = 0, g_ark_sev_exit = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_wev_enter = 0, g_ark_wev_got_entry = 0,
+                  g_ark_wev_got_lock = 0, g_ark_wev_parked = 0,
+                  g_ark_wev_slices = 0, g_ark_wev_exit = 0;
+
 /* IGZWORK: which file work item fails, with what status, set by whom.
 
    2026-09-09. IGZSTATE came back kStateFailed(9) ret=0x1 for all four loads,
