@@ -833,6 +833,28 @@ static inline void ppc_fs_invoke_async_callback(PpcContext *ctx, uint32_t async_
 static inline void arkchemy_fs_pump_completions(PpcContext *ctx) {
     if (g_arkchemy_fs_pending_n == 0 || g_arkchemy_fs_pumping) return;
     g_arkchemy_fs_pumping = 1;
+    /* The pump borrows the caller's context to run a guest callback, and
+     * ppc_fs_invoke_async_callback sets r3-r6 to that callback's arguments.
+     * Unless they are put back, the pump silently eats the argument of
+     * whichever import called it.
+     *
+     * That is not hypothetical. OSWaitEvent was changed on 2026-09-09 to pump
+     * before parking, and reads its event pointer from r3 immediately
+     * afterwards -- so from that day it waited on whatever value `client`
+     * happened to hold instead of the event it was asked about, which nothing
+     * would ever signal. OSWaitEventWithTimeout has pumped in the same place
+     * for longer and had the same defect. On hardware it showed up as the
+     * game thread stopping at an identical call count across three builds.
+     *
+     * Found on the host in minutes with hosttest/sync_harness.c rather than
+     * in ten-minute console cycles, which is the point of that harness.
+     *
+     * Saved and restored here rather than at each call site because this
+     * function advertises itself as safe to call from any import, and a
+     * contract like that has to be kept by the callee. */
+    uint32_t saved_r[10];
+    for (int i = 0; i < 10; i++) saved_r[i] = ctx->r[3 + i];   /* r3..r12 */
+    uint32_t saved_lr = ctx->lr;
     while (g_arkchemy_fs_pending_n > 0) {
         ArkchemyFsPending p = g_arkchemy_fs_pending[0];
         for (uint32_t k = 1; k < g_arkchemy_fs_pending_n; k++)
@@ -841,6 +863,8 @@ static inline void arkchemy_fs_pump_completions(PpcContext *ctx) {
         g_arkchemy_fs_delivered++;
         ppc_fs_invoke_async_callback(ctx, p.async_data, p.client, p.block, p.status);
     }
+    for (int i = 0; i < 10; i++) ctx->r[3 + i] = saved_r[i];
+    ctx->lr = saved_lr;
     g_arkchemy_fs_pumping = 0;
 }
 
