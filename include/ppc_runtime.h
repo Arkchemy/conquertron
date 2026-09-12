@@ -894,6 +894,54 @@ static inline void ark_archname(uint32_t which, const char *src, uint32_t self)
     (void)i;
 }
 
+/* BLOCKWAIT: which device the blocking wait actually drives.
+
+   2026-09-12. The game-thread sampler answered its question immediately: the
+   game thread is NOT parked. 2,877,916 samples, and the last 32 are one
+   complete storage cycle repeating --
+
+     igPhysicalStorageDevice::start -> igCafeStorageDevice::read
+       -> igFileWorkItem::setStatus -> igMemoryPool::malloc -> ...
+     igPhysicalStorageDevice::update -> igCafeSemaphore::obtainResource
+       -> igCafeStorageDevice::asyncCallback -> getPhysicalDevice x3
+       -> setStatus -> igMemoryPool::free -> igCafeSignal::raise
+
+   It spins that for 900 seconds at ~3,200 calls a second while
+   updateArchiveSystem stays at 23 and INFLATE stays at 19. So the archive is
+   never pumped, and the thread is servicing a work item over and over
+   instead of advancing.
+
+   The suspect is one line in igFileContext::blockUntilComplete:
+
+     2172454: lwz r12, 8(r4)      ; the work ITEM's own device
+     2172468: lwz r4, 0x24(r12)
+     217246c: bl blockUntilComplete(device, item)   ; -> vtable+0x13c
+
+   igArchive::update is the only thing that calls updateArchiveSystem. If the
+   work item's device is the physical device rather than the archive, the
+   blocking wait drives the physical device directly, the archive is skipped,
+   and nothing ever issues the next block -- which is exactly the shape
+   observed. Recording the device and its vtable at that dispatch settles it;
+   the vtable maps back through find_synth_addr to a named class. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_sdw_calls = 0, g_ark_sdw_n = 0, g_ark_sdw_dev[6],
+                  g_ark_sdw_vt[6], g_ark_sdw_item[6], g_ark_sdw_status[6],
+                  g_ark_sdw_arcupd = 0, g_ark_sdw_physupd = 0, g_ark_sdw_virtupd = 0;
+
+static inline void ark_sdwait(uint32_t dev, uint32_t vt, uint32_t item, uint32_t status)
+{
+    uint32_t i = g_ark_sdw_n;
+    g_ark_sdw_calls++;
+    if (i >= 6u) return;
+    g_ark_sdw_n = i + 1u;
+    g_ark_sdw_dev[i] = dev;
+    g_ark_sdw_vt[i] = vt;
+    g_ark_sdw_item[i] = item;
+    g_ark_sdw_status[i] = status;
+}
+
 /* CFGPOOL: what size each pool is actually asked for.
 
    2026-09-12. RSPOOL dumped the failing pool beside a working one and the
