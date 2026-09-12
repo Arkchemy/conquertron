@@ -932,6 +932,25 @@ volatile uint32_t g_ark_mf_n = 0, g_ark_mf_pool[12], g_ark_mf_size[12],
                   g_ark_mf_parent[12], g_ark_mf_idx[12],
                   g_ark_mf_base[12], g_ark_mf_len[12], g_ark_mf_cfg[12];
 
+/* 2026-09-12: all nine stack pools ask for real sizes (86.6 MB, 156 MB,
+   44 MB x2, ...  ~363 MB total, against alchemy.xml's vramBSize=419430400)
+   and every one comes back base=0. So the configuration reaches them fine and
+   the allocation is refused -- allocatePoolMemory's own path is:
+
+     21730ec: lbz r12, 8(r3)     ; active flag, 0 here, so no early bail
+     2173110: bctrl vtable+0xb4  ; usesRawMemory, returns 1 for both classes
+     2173148: bl setAlignment
+     217316c: bl reallocCommon   ; on the PARENT pool
+     2173174: stw r3, 0x10(r28)  ; the result becomes the pool's base
+     2173178: bne -> success
+
+   The parent is the same object for all nine, so one number decides this:
+   how much memory that pool actually has. Dump it. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_mf_parent_dump[16], g_ark_mf_parent_seen = 0;
+
 static inline void ark_cfgpool_req(uint32_t pool, uint32_t parent, uint32_t size)
 {
     uint32_t i = g_ark_mf_n;
