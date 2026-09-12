@@ -133,8 +133,10 @@ uint32_t g_arkchemy_bootstrap_heap_handle = 0;
  * past that measured 0x670b00 global extent:
  *   0x000000 - 0x700000  (paired 1:1 with the real 0x2000-0x670b00
  *                          global range, plus safety margin) -- globals
- *   0x800000 - 0x802000  FG (foreground/overlay) arena -- tiny, rarely used
  *   0x802000             __gh_errno_ptr's real backing address
+ *   0x810000 - 0x1000000 FG (foreground) bucket, 7.94MB -- backs the TV
+ *                        scan buffer, so not "tiny, rarely used" as this
+ *                        map claimed until 2026-09-12
  *   0x1000000 - 0x3000000  MEM1 (32MB) -- matches real Wii U MEM1; no
  *                          longer backs the default heap, see
  *                          MEMAllocFromDefaultHeapEx below
@@ -171,8 +173,32 @@ uint32_t g_arkchemy_bootstrap_heap_handle = 0;
  * MEM2 matches real Wii U MEM2 scale (which is far larger) -- grounded
  * in this real binary's own measured global-region size and this one
  * confirmed real allocation failure, not picked blind. */
-#define ARKCHEMY_FG_BASE    0x800000u
-#define ARKCHEMY_FG_SIZE    0x2000u
+/* The foreground bucket was 8KB, on the assumption it was "tiny, rarely
+ * used". It is not: it backs the TV scan buffer. 2026-09-12, once the VRAM
+ * pools finally had memory and the engine got as far as opening its visual
+ * context:
+ *
+ *   MEMAllocFromFrmHeapEx (out of space) requested=7372800
+ *     heap_base=0x800000 heap_size=8192
+ *     called from igSurface::getScanBufferFormat, via
+ *     igPlatformVisualContext::open+0x2f8
+ *
+ * 7,372,800 bytes is a 1280x720 scan buffer. A real Wii U foreground bucket
+ * is 40MB and this allocation is routine there.
+ *
+ * There is no 40MB to give: MEM1, the bootstrap heap and MEM2 are all in
+ * use, the stack window cannot move, and the only slack in the whole
+ * address space is this 8MB gap between the globals region and MEM1 --
+ * which had 8KB of it claimed and 8MB sitting idle. FG now takes the gap
+ * from 0x810000 up to MEM1's base: 8,323,072 bytes, leaving the errno
+ * backing word where it is and clearing the scan buffer by ~950KB.
+ *
+ * That margin is thin and deliberately recorded as such. If the game also
+ * wants a DRC scan buffer (854x480 is another ~820KB) it will just fit; if
+ * it wants two of anything, it will not, and the next honest move is more
+ * guest memory rather than a smaller gap somewhere else. */
+#define ARKCHEMY_FG_BASE    0x810000u
+#define ARKCHEMY_FG_SIZE    (ARKCHEMY_MEM1_BASE - ARKCHEMY_FG_BASE)
 #define ARKCHEMY_ERRNO_ADDR 0x802000u
 /* Real, targeted fix added 2026-08-21 after a full real hardware trace
  * (see main.c's own comment trail) found the true root cause of the
