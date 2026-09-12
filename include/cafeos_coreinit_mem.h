@@ -327,7 +327,32 @@ uint32_t g_arkchemy_bootstrap_heap_handle = 0;
  * because before data relocations were applied the boot died long before any
  * allocation of that size. Half the pool leaves 464MB for the ExpHeap and
  * 464MB for the sbrk arena, both far beyond anything observed. */
-#define ARKCHEMY_MEM2_EXPHEAP_SIZE (ARKCHEMY_MEM2_SIZE / 2)
+/* Raised from 1/2 to 11/16 on 2026-09-12, on a measured failure rather than
+ * a guess. With the registry finally loading, tfbGame::configureMemoryFrame
+ * asks this heap for a single 419,430,408-byte block -- alchemy.xml's
+ * vramBSize=419430400 plus a header -- to back the nine igStackMemoryPools
+ * that Image and Vertex and their siblings allocate out of:
+ *
+ *   MEMAllocFromExpHeapEx (out of space) requested=419430408
+ *     heap_base=0x4000000 heap_size=486539264 heap_used=192969556
+ *
+ * 464MB with 184MB already spent cannot serve 400MB, so every one of those
+ * nine pools came back with base=0, igStackMemoryPool::activate refused them
+ * all, and igIGZLoader::readSections failed on the first Image section of
+ * every archive. That is the whole reason the game rendered an empty scene.
+ *
+ * 11/16 leaves 631MB for the ExpHeap -- 184MB spent plus 400MB asked plus
+ * ~47MB of headroom -- and 299MB for the sbrk arena. The arena share that
+ * actually ran dry, on 2026-08-24, was 208MB, so this still sits 44% above
+ * the only figure ever observed to be too small; and since that same day
+ * arena exhaustion has fallen through to the ordinary ExpHeap rather than
+ * failing, so being wrong here degrades instead of breaking.
+ *
+ * The real fix is more guest memory. A Wii U gives this game 2GB of MEM2 and
+ * a 400MB engine pool is unremarkable there; the whole guest address space
+ * here is 1GB, of which MEM2 is 928MB. There is no split that makes a 2GB
+ * budget fit in 1GB, so this buys the boot and nothing more. */
+#define ARKCHEMY_MEM2_EXPHEAP_SIZE ((ARKCHEMY_MEM2_SIZE / 16u) * 11u)
 #define ARKCHEMY_MEM2_ARENA_BASE   (ARKCHEMY_MEM2_BASE + ARKCHEMY_MEM2_EXPHEAP_SIZE)
 #define ARKCHEMY_MEM2_ARENA_END    (ARKCHEMY_MEM2_BASE + ARKCHEMY_MEM2_SIZE)
 
