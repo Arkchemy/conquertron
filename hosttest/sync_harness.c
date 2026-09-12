@@ -246,11 +246,58 @@ static void case_pump_does_not_eat_its_callers_argument(void)
     free(ctx);
 }
 
+/* The blast radius. Five of the six pump call sites read ctx->r[3] on the
+ * very next line, so before the fix each of them acted on whatever the last
+ * completion callback left behind:
+ *
+ *   OSLockMutex             locked the WRONG mutex
+ *   OSWaitEvent             waited on the wrong event
+ *   OSWaitEventWithTimeout  wrong event, and r5:r6 is its 64-bit timeout,
+ *                           so the deadline was garbage too
+ *   OSWaitSemaphore         waited on the wrong semaphore
+ *   OSTryWaitSemaphore      likewise
+ *
+ * Locking the wrong mutex is the frightening one: it does not hang, it
+ * quietly fails to exclude, and the damage surfaces somewhere else entirely.
+ * Checked here rather than reasoned about. */
+static void case_lock_mutex_locks_the_mutex_it_was_asked_for(void)
+{
+    PpcContext *ctx = make_ctx();
+    begin("OSLockMutex locks the mutex it was given", 5.0);
+    queue_one_completion(ctx, EVENT_B);
+    uint32_t want = 0x7100u;
+    ctx->r[3] = want;
+    ppc_import_coreinit_OSLockMutex(ctx);
+    if (ctx->r[3] != want) {
+        fprintf(stderr, "\n*** locked mutex %08x, was asked for %08x\n", ctx->r[3], want);
+        _exit(4);
+    }
+    ppc_import_coreinit_OSUnlockMutex(ctx);
+    pass();
+    free(ctx);
+}
+
+static void case_wait_with_timeout_keeps_its_timeout(void)
+{
+    PpcContext *ctx = make_ctx();
+    begin("OSWaitEventWithTimeout keeps event and deadline", 5.0);
+    queue_one_completion(ctx, EVENT_B);
+    ctx->r[3] = EVENT_A;
+    ctx->r[5] = 0; ctx->r[6] = 1000;      /* a tiny but positive timeout */
+    ppc_import_coreinit_OSWaitEventWithTimeout(ctx);
+    /* It should time out and return, not block on some other event. Reaching
+     * here at all is the assertion; the watchdog is the failure path. */
+    pass();
+    free(ctx);
+}
+
 int main(void)
 {
     printf("sync harness -- the real shims, no Switch\n\n");
     case_signal_with_no_waiter_latches();
     case_pump_does_not_eat_its_callers_argument();
+    case_lock_mutex_locks_the_mutex_it_was_asked_for();
+    case_wait_with_timeout_keeps_its_timeout();
     case_wait_for_already_queued_completion();
     case_signal_from_another_thread_wakes_waiter();
     case_waiter_pumps_its_own_rescue();

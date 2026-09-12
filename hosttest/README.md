@@ -20,6 +20,38 @@ costs milliseconds, is deterministic, and can be stepped in a debugger.
 test should never reach, so an unexpected call is reported rather than
 silently returning a plausible value.
 
+## sync_harness.c
+
+    gcc -O1 -g -w -I include -I ../jouster/game/include \
+        hosttest/sync_harness.c include/cafeos_state.c \
+        -o /tmp/sync_harness -lpthread -lm && /tmp/sync_harness
+
+Drives the real event, mutex, semaphore and FS-completion shims -- not a
+model of them -- with a watchdog per case, so a deadlocked case is reported
+with the phase counters rather than hanging the run.
+
+It found a bug three hardware cycles had missed. `ppc_fs_invoke_async_callback`
+sets r3-r6 to the guest callback's arguments and never restores them, so
+`arkchemy_fs_pump_completions` destroyed the argument of whichever import
+called it. Five of the six pump call sites read `ctx->r[3]` on the very next
+line:
+
+| import | what it did instead |
+| --- | --- |
+| `OSLockMutex` | locked the **wrong mutex** |
+| `OSWaitEvent` | waited on the wrong event |
+| `OSWaitEventWithTimeout` | wrong event, and r5:r6 is its 64-bit timeout, so the deadline was garbage too |
+| `OSWaitSemaphore` | waited on the wrong semaphore |
+| `OSTryWaitSemaphore` | likewise |
+
+Locking the wrong mutex is the frightening one: it does not hang, it quietly
+fails to exclude, and the damage lands somewhere else entirely.
+
+On hardware this showed as the game thread stopping at an identical
+`GAMEPC` count of 2,877,916 across three different builds. Three probes and
+three console cycles narrowed it to "somewhere in OSSignalEvent"; the harness
+answered it in minutes and gave the blast radius for free.
+
 ## Result so far
 
 `tlsf_create` builds the full 5 MB arena and `tlsf_memalign` is correct in
