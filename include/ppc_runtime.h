@@ -942,6 +942,38 @@ static inline void ark_sdwait(uint32_t dev, uint32_t vt, uint32_t item, uint32_t
     g_ark_sdw_status[i] = status;
 }
 
+/* SHADERS: what the game actually hands GX2, before translating any of it.
+ *
+ * Shader translation is the project's largest remaining piece, and the first
+ * question is not "how do I convert R600 to Maxwell" but "what exactly is in
+ * these structures". The layouts are documented in decaf-emu and Cemu and I
+ * can recite them, which is precisely the kind of confidence that has cost a
+ * hardware cycle twice this week. So this reads the struct back out of the
+ * running game and the offsets get confirmed rather than assumed.
+ *
+ * The layouts being checked, from the Cafe SDK via decaf:
+ *
+ *   GX2VertexShader   regs[52 u32] then size @0xD0, program ptr @0xD4
+ *   GX2PixelShader    regs[41 u32] then size @0xA4, program ptr @0xA8
+ *
+ * A correct guess shows a sane byte count at that offset and a pointer that
+ * lands inside guest memory. A wrong one shows neither, and says so in one
+ * run instead of after a day of building a translator on a bad assumption.
+ *
+ * Distinct shader objects only: GX2SetPixelShader is called ~30,000 times a
+ * run and sets a handful of programs. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_shd_vs_n = 0, g_ark_shd_ps_n = 0,
+                  g_ark_shd_vs_calls = 0, g_ark_shd_ps_calls = 0,
+                  g_ark_shd_fs_calls = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_shd_vs_ptr[6], g_ark_shd_ps_ptr[6],
+                  g_ark_shd_vs_hdr[6][6], g_ark_shd_ps_hdr[6][6];
+
 /* CFGPOOL: what size each pool is actually asked for.
 
    2026-09-12. RSPOOL dumped the failing pool beside a working one and the
@@ -2751,6 +2783,31 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_gt_n = 0, g_ark_gt_pc[ARKCHEMY_PCSAMPLE_SLOTS],
                   g_ark_gt_lr[ARKCHEMY_PCSAMPLE_SLOTS];
+
+/* kind 0 = vertex, 1 = pixel. Records the object pointer, the candidate size
+ * and program fields, and the first two words the program pointer leads to --
+ * R600 microcode is 64-bit instruction words, so even a glance at those says
+ * whether the pointer is real. */
+static inline void ark_shd_note(PpcContext *ctx, int kind, uint32_t obj)
+{
+    if (!obj) return;
+    volatile uint32_t *ptrs = kind ? g_ark_shd_ps_ptr : g_ark_shd_vs_ptr;
+    volatile uint32_t *n    = kind ? &g_ark_shd_ps_n  : &g_ark_shd_vs_n;
+    for (uint32_t i = 0; i < *n; i++) if (ptrs[i] == obj) return;
+    if (*n >= 6u) return;
+    uint32_t i = (*n)++;
+    ptrs[i] = obj;
+    uint32_t off = kind ? 0xA4u : 0xD0u;          /* size, then program at +4 */
+    uint32_t size = ppc_load_u32(ctx, obj + off);
+    uint32_t prog = ppc_load_u32(ctx, obj + off + 4u);
+    volatile uint32_t *h = kind ? g_ark_shd_ps_hdr[i] : g_ark_shd_vs_hdr[i];
+    h[0] = size;
+    h[1] = prog;
+    h[2] = ppc_load_u32(ctx, obj + off + 8u);     /* mode, expected 0 or 1 */
+    h[3] = ppc_load_u32(ctx, obj + 0u);           /* first reg word */
+    h[4] = prog ? ppc_load_u32(ctx, prog + 0u) : 0u;
+    h[5] = prog ? ppc_load_u32(ctx, prog + 4u) : 0u;
+}
 
 static inline void ppc_sample_pc(const PpcContext *ctx) {
     /* Game-thread-only sample first, and on its own stride, so a thread that

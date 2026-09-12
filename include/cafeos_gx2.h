@@ -3681,19 +3681,21 @@ static inline void ppc_import_gx2_GX2SetAttribBuffer(PpcContext *ctx) { ark_gx2_
 static inline void ppc_import_gx2_GX2SetFetchShader(PpcContext *ctx) { ark_gx2_note(130u);
     /* void GX2SetFetchShader(const GX2FetchShader *shader) -- real
      * signature confirmed against wut's gx2/shaders.h. */
-    (void)ctx;
+    g_ark_shd_fs_calls++;
 }
 
 static inline void ppc_import_gx2_GX2SetVertexShader(PpcContext *ctx) { ark_gx2_note(131u);
     /* void GX2SetVertexShader(const GX2VertexShader *shader) -- real
      * signature confirmed against wut's gx2/shaders.h. */
-    (void)ctx;
+    g_ark_shd_vs_calls++;
+    ark_shd_note(ctx, 0, ctx->r[3]);
 }
 
 static inline void ppc_import_gx2_GX2SetPixelShader(PpcContext *ctx) { ark_gx2_note(132u);
     /* void GX2SetPixelShader(const GX2PixelShader *shader) -- real
      * signature confirmed against wut's gx2/shaders.h. */
-    (void)ctx;
+    g_ark_shd_ps_calls++;
+    ark_shd_note(ctx, 1, ctx->r[3]);
 }
 
 static inline void ppc_import_gx2_GX2SetPixelUniformReg(PpcContext *ctx) { ark_gx2_note(133u);
