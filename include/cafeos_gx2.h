@@ -349,6 +349,106 @@ typedef struct {
 
 extern ArkchemyGx2State g_arkchemy_gx2; /* real definition in cafeos_state.c -- see its own file comment */
 
+/* deko3d's own diagnosis, before it takes the process down with it.
+ *
+ * Every DkResult deko3d raises goes through dk::detail::RaiseError, which
+ * calls this callback if one is installed and then aborts via svcBreak
+ * regardless. Without it, all that survives is an Atmosphere crash report
+ * saying 2359-0001 and a stack trace -- which on 2026-09-14 cost a symbolised
+ * guess at `ImageLayout::calcLevelOffset` that the release build's merged and
+ * outlined code makes unsafe to trust. The callback is handed `context` (the
+ * deko3d entry point) and `message` (what was actually wrong with it), which
+ * is the difference between naming the failing object and inferring it.
+ *
+ * extern, not static, for exactly the reason g_ppc_unhandled_log is: this
+ * header is included by every one of the 200-odd generated translation units,
+ * and a static copy would give each its own NULL that main.c never sets. The
+ * definition lives in cafeos_state.c with the rest.
+ *
+ * `result` is a plain uint32_t rather than DkResult so that the sink in
+ * main.c does not have to include deko3d's headers to implement it. */
+typedef void (*ark_gx2_debug_log_fn)(const char *context, uint32_t result,
+                                     const char *message);
+extern ark_gx2_debug_log_fn g_ark_gx2_debug_log;
+static inline void ark_gx2_set_debug_log(ark_gx2_debug_log_fn fn) { g_ark_gx2_debug_log = fn; }
+
+/* static inline, like everything else in this header: a plain `static` here
+ * is a copy and an unused-function warning in each of the 200-odd generated
+ * translation units that include it and never call GX2Init. Its address is
+ * taken below, so it is still emitted wherever it is actually needed. */
+static inline void arkchemy_gx2_debug_cb(void *userData, const char *context,
+                                         DkResult result, const char *message)
+{
+    (void)userData;
+    if (g_ark_gx2_debug_log)
+        g_ark_gx2_debug_log(context ? context : "(no context)",
+                            (uint32_t)result,
+                            message ? message : "(no message)");
+}
+
+#include "cafeos_gx2_shaders.h"   /* needs g_arkchemy_gx2 above */
+/* Bisect switch, 2026-09-12. The 22:26 build (shader modules only) drew 507
+ * times and bound all seven shaders; the 22:45 build added the five hooks
+ * below and drew zero, twice, binding three then two. That is a clean
+ * boundary: nothing else changed between them. Set to 1 to re-enable the
+ * hooks once the offender inside them is known.
+ *
+ * Worth recording because it falsifies the reasoning that sent this build
+ * out: the hooks only read guest memory and write host globals, so they
+ * "could not" change what the engine does. Two runs say otherwise. */
+#define ARKCHEMY_GX2_HOOK_UNIFORM 1   /* the uniform-register shadow */
+#define ARKCHEMY_GX2_HOOK_STATE   1   /* attrib buffers + fetch shader */
+#define ARKCHEMY_GX2_HOOK_DRAW    1   /* GX2DrawEx itself */
+#define ARKCHEMY_GX2_DRAW_BODY    1   /* 0: call site kept, body empty */
+/* Recording, one flag per deko3d call.
+ *
+ * Linking these in is what breaks the boot -- not calling them. Four runs with
+ * them linked bound two or three shaders and drew nothing; every run without
+ * them completes with ~500 draws. Since the damage is done at compile time, a
+ * bisect cannot be a runtime switch, but it can at least be one line per
+ * build instead of one file edit per build.
+ *
+ * First split: everything except the draw itself. dkCmdBufDraw is the call
+ * that pulls in the largest slice of deko3d, so if it alone is responsible
+ * this costs one run rather than three. */
+#define ARK_REC_VTXBUF       1
+#define ARK_REC_UBO          1
+#define ARK_REC_SHADERS      1
+#define ARK_REC_ATTRIBSTATE  1
+#define ARK_REC_BUFSTATE     1
+/* The draw goes back inline, where its state is.
+ *
+ * Deferring it caused the GPU page fault of 2026-09-14. ark_draw_ex binds
+ * vertex buffers, the constant file, shaders and attribute state into cmdbuf
+ * on the GRAPHICS thread and queues the draw parameters; main.c's loop then
+ * calls dkCmdBufDraw on the MAIN thread. In between, on the graphics thread,
+ * GX2Flush does dkCmdBufFinishList + dkQueueSubmitCommands -- submitting that
+ * state with no draw in it -- and GX2SwapScanBuffers does dkCmdBufClear, which
+ * wipes the buffer outright. The draw therefore executed against a cleared
+ * command buffer with nothing bound, so the GPU fetched vertices and constants
+ * from address 0. That is the "GPU page fault / Address: 0x0000000000 / Access
+ * type: Read" deko3d reported, and it is not a stray null pointer anywhere --
+ * it is a draw with no state at all.
+ *
+ * Two threads recording into one DkCmdBuf is a second, independent bug in the
+ * same arrangement: deko3d command buffers are not thread-safe.
+ *
+ * The deferral existed to avoid calling dkCmdBufDraw from this header, which
+ * eight builds "established" breaks the boot. That finding was bisected one
+ * run per build against a rig since measured to fail about two runs in five --
+ * see test-results/2026-09-14-the-same-build-fails-two-runs-in-five.md -- so
+ * it never held. This is the experiment that settles it, and now there is a
+ * run tally to settle it with rather than another single run. */
+#define ARK_REC_DRAW         1
+#define ARK_PAD_TEST         0   /* 312 dead bytes instead of the draw call */
+#define ARK_REF_DRAW_ONLY    0   /* link dkCmdBufDraw, never call it */
+#define ARK_CALL_OTHER       0   /* one extra call to an already-linked dk fn */
+#define ARK_REC_DRAW_DEFERRED 0  /* was 1; see ARK_REC_DRAW above for why not */
+#define ARK_CALL_UNUSED      0   /* call a deko3d fn nothing else calls */
+
+#include "cafeos_gx2_draw.h"      /* needs both of the above */
+
+
 #define ARKCHEMY_GX2_CMD_MEM_SIZE 0x10000u
 
 /* Same real host monotonic clock source/reasoning as
@@ -436,6 +536,9 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { ark_gx2_note(39u);
 
     DkDeviceMaker device_maker;
     dkDeviceMakerDefaults(&device_maker);
+    /* Installed before the device exists, which is the only point it can be:
+     * every later deko3d call belongs to this device and reports through it. */
+    device_maker.cbDebug = arkchemy_gx2_debug_cb;
     g_arkchemy_gx2.device = dkDeviceCreate(&device_maker);
 
     DkMemBlockMaker mem_maker;
@@ -1260,6 +1363,8 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
      * added complexity. */
     (void)ctx;
     if (g_arkchemy_gx2.acquired_slot < 0) return;
+    /* Queued draws go in immediately before the list is closed: after all
+     * the state this frame bound, and still inside the same list. */
     dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
     dkQueuePresentImage(g_arkchemy_gx2.queue, g_arkchemy_gx2.swapchain, g_arkchemy_gx2.acquired_slot);
@@ -1294,6 +1399,8 @@ static inline void ppc_import_gx2_GX2Flush(PpcContext *ctx) { ark_gx2_note(61u);
      * GX2WaitTimeStamp below), since this is a real submit point same
      * as GX2SwapScanBuffers'. */
     (void)ctx;
+    /* Queued draws go in immediately before the list is closed: after all
+     * the state this frame bound, and still inside the same list. */
     dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
 }
@@ -1313,6 +1420,8 @@ static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) { ark_gx2_note(62
      * completes (this runtime has no timeout/cancellation path for
      * GX2WaitTimeStamp to have failed on). */
     (void)ctx;
+    /* Queued draws go in immediately before the list is closed: after all
+     * the state this frame bound, and still inside the same list. */
     dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
     dkQueueWaitIdle(g_arkchemy_gx2.queue);
@@ -1345,6 +1454,8 @@ static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) { ark_gx2_not
      * GX2SwapScanBuffers would otherwise get back a "synced" result
      * while that work was never actually sent to the GPU. */
     (void)ctx;
+    /* Queued draws go in immediately before the list is closed: after all
+     * the state this frame bound, and still inside the same list. */
     dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
     dkQueueWaitIdle(g_arkchemy_gx2.queue);
@@ -3675,13 +3786,18 @@ static inline void ppc_import_gx2_GX2SetAttribBuffer(PpcContext *ctx) { ark_gx2_
     /* void GX2SetAttribBuffer(uint32_t index, uint32_t size,
      * uint32_t stride, const void *buffer) -- real signature confirmed
      * against wut's gx2/draw.h. */
-    (void)ctx;
+#if ARKCHEMY_GX2_HOOK_STATE
+    ark_draw_set_attrib_buffer(ctx->r[3], ctx->r[4], ctx->r[5], ctx->r[6]);
+#endif
 }
 
 static inline void ppc_import_gx2_GX2SetFetchShader(PpcContext *ctx) { ark_gx2_note(130u);
     /* void GX2SetFetchShader(const GX2FetchShader *shader) -- real
      * signature confirmed against wut's gx2/shaders.h. */
     g_ark_shd_fs_calls++;
+#if ARKCHEMY_GX2_HOOK_STATE
+    ark_draw_bind_fetch(ctx->r[3]);
+#endif
 }
 
 static inline void ppc_import_gx2_GX2SetVertexShader(PpcContext *ctx) { ark_gx2_note(131u);
@@ -3689,6 +3805,7 @@ static inline void ppc_import_gx2_GX2SetVertexShader(PpcContext *ctx) { ark_gx2_
      * signature confirmed against wut's gx2/shaders.h. */
     g_ark_shd_vs_calls++;
     ark_shd_note(ctx, 0, ctx->r[3]);
+    ark_shd_module_bind(ctx, 0, ctx->r[3]);
 }
 
 static inline void ppc_import_gx2_GX2SetPixelShader(PpcContext *ctx) { ark_gx2_note(132u);
@@ -3696,20 +3813,27 @@ static inline void ppc_import_gx2_GX2SetPixelShader(PpcContext *ctx) { ark_gx2_n
      * signature confirmed against wut's gx2/shaders.h. */
     g_ark_shd_ps_calls++;
     ark_shd_note(ctx, 1, ctx->r[3]);
+    ark_shd_module_bind(ctx, 1, ctx->r[3]);
 }
 
 static inline void ppc_import_gx2_GX2SetPixelUniformReg(PpcContext *ctx) { ark_gx2_note(133u);
     /* void GX2SetPixelUniformReg(uint32_t offset, uint32_t count,
      * const void *data) -- real signature confirmed against wut's
      * gx2/shaders.h. */
-    (void)ctx;
+    ark_unif_note(1, ctx->r[3], ctx->r[4]);
+#if ARKCHEMY_GX2_HOOK_UNIFORM
+    ark_draw_uniform(ctx, 1, ctx->r[3], ctx->r[4], ctx->r[5]);
+#endif
 }
 
 static inline void ppc_import_gx2_GX2SetVertexUniformReg(PpcContext *ctx) { ark_gx2_note(134u);
     /* void GX2SetVertexUniformReg(uint32_t offset, uint32_t count,
      * const void *data) -- real signature confirmed against wut's
      * gx2/shaders.h. */
-    (void)ctx;
+    ark_unif_note(0, ctx->r[3], ctx->r[4]);
+#if ARKCHEMY_GX2_HOOK_UNIFORM
+    ark_draw_uniform(ctx, 0, ctx->r[3], ctx->r[4], ctx->r[5]);
+#endif
 }
 
 static inline void ppc_import_gx2_GX2SetShaderModeEx(PpcContext *ctx) { ark_gx2_note(135u);
@@ -3751,14 +3875,19 @@ static inline void ppc_import_gx2_GX2InitFetchShaderEx(PpcContext *ctx) { ark_gx
      * const GX2AttribStream *attribs, GX2FetchShaderType type,
      * GX2TessellationMode tessMode) -- real signature confirmed
      * against wut's gx2/shaders.h. */
-    (void)ctx;
+    ark_fetch_note(ctx, ctx->r[5], ctx->r[6]);
+#if ARKCHEMY_GX2_HOOK_STATE
+    ark_draw_note_fetch(ctx, ctx->r[3], ctx->r[6], ctx->r[5]);
+#endif
 }
 
 static inline void ppc_import_gx2_GX2DrawEx(PpcContext *ctx) { ark_gx2_note(138u);
     /* void GX2DrawEx(GX2PrimitiveMode mode, uint32_t count,
      * uint32_t offset, uint32_t numInstances) -- real signature
      * confirmed against wut's gx2/draw.h. */
-    (void)ctx;
+#if ARKCHEMY_GX2_HOOK_DRAW
+    ark_draw_ex(ctx, ctx->r[3], ctx->r[4], ctx->r[5], ctx->r[6]);
+#endif
 }
 
 static inline void ppc_import_gx2_GX2DrawIndexedEx(PpcContext *ctx) { ark_gx2_note(139u);

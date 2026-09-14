@@ -123,4 +123,7 @@ int g_arkchemy_ax_voice_used[ARKCHEMY_AXVOICE_MAX];
 #ifdef __SWITCH__
 ArkchemyGx2State g_arkchemy_gx2;
 ArkchemyVpadState g_arkchemy_vpad;
+/* deko3d's debug callback sink -- see cafeos_gx2.h for why this cannot be
+ * static. main.c registers it via ark_gx2_set_debug_log(). */
+ark_gx2_debug_log_fn g_ark_gx2_debug_log = NULL;
 #endif

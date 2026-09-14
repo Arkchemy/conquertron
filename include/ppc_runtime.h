@@ -974,6 +974,42 @@ __attribute__((weak))
 volatile uint32_t g_ark_shd_vs_ptr[6], g_ark_shd_ps_ptr[6],
                   g_ark_shd_vs_hdr[6][6], g_ark_shd_ps_hdr[6][6];
 
+/* FETCH and UNIFORM: the two things the shader translator currently assumes.
+
+   2026-09-12. All seven programs the engine binds now translate to GLSL and
+   compile to deko3d modules (blaster/r600_glsl.py). Two mappings in that
+   translation are not read from anything -- they are inferred from the shape
+   of the code, and both are silent if wrong:
+
+     * that fetch-shader attribute N arrives in GPR N+1, so a vertex shader
+       reading R1 is reading attribute 0;
+     * that constant-file index n is what GX2SetVertexUniformReg writes at
+       offset 4n, so uf[3] in the generated GLSL is the same vec4 the game
+       set.
+
+   A wrong attribute mapping swaps position with texcoord; a wrong uniform
+   mapping multiplies by the wrong matrix row. Neither crashes, and both
+   produce a picture that is merely wrong -- the most expensive kind of bug to
+   find by looking at a screen. The authority for the first is the
+   GX2AttribStream array handed to GX2InitFetchShaderEx, and for the second
+   the offsets the game actually passes. Both are recorded raw.
+
+   Raw, deliberately: GX2AttribStream's field order is not in this tree and
+   wut's headers are not on this machine, so the words are dumped rather than
+   decoded. Eight words per attribute assumes only the 32-byte stride, and
+   the dump itself says whether that held -- a wrong stride turns small enum
+   and offset values into noise, visibly. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_fs_n = 0, g_ark_fs_ptr[4], g_ark_fs_count[4],
+                  g_ark_fs_attr[4][6][8];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_unif_n = 0, g_ark_unif[10][3],
+                  g_ark_unif_calls[2] = {0, 0};
+
 /* CFGPOOL: what size each pool is actually asked for.
 
    2026-09-12. RSPOOL dumped the failing pool beside a working one and the
@@ -2829,6 +2865,35 @@ static inline void ark_shd_note(PpcContext *ctx, int kind, uint32_t obj)
     h[4] = prog ? ppc_load_u32(ctx, prog + 0u) : 0u;
     h[5] = prog ? ppc_load_u32(ctx, prog + 4u) : 0u;
     if (ark_shd_sink) ark_shd_sink(ctx, kind ? "ps" : "vs", i, prog, size);
+}
+
+static inline void ark_fetch_note(PpcContext *ctx, uint32_t count,
+                                 uint32_t attribs)
+{
+    if (!attribs) return;
+    for (uint32_t i = 0; i < g_ark_fs_n; i++)
+        if (g_ark_fs_ptr[i] == attribs && g_ark_fs_count[i] == count) return;
+    if (g_ark_fs_n >= 4u) return;
+    uint32_t i = g_ark_fs_n++;
+    g_ark_fs_ptr[i] = attribs;
+    g_ark_fs_count[i] = count;
+    uint32_t n = count > 6u ? 6u : count;
+    for (uint32_t a = 0; a < n; a++)
+        for (uint32_t w = 0; w < 8u; w++)
+            g_ark_fs_attr[i][a][w] = ppc_load_u32(ctx, attribs + a * 32u + w * 4u);
+}
+
+static inline void ark_unif_note(int kind, uint32_t offset, uint32_t count)
+{
+    g_ark_unif_calls[kind ? 1 : 0]++;
+    for (uint32_t i = 0; i < g_ark_unif_n; i++)
+        if (g_ark_unif[i][0] == (uint32_t)kind && g_ark_unif[i][1] == offset
+            && g_ark_unif[i][2] == count) return;
+    if (g_ark_unif_n >= 10u) return;
+    uint32_t i = g_ark_unif_n++;
+    g_ark_unif[i][0] = (uint32_t)kind;
+    g_ark_unif[i][1] = offset;
+    g_ark_unif[i][2] = count;
 }
 
 static inline void ppc_sample_pc(const PpcContext *ctx) {
