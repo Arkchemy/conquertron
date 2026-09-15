@@ -333,6 +333,7 @@ void ark_draw_ex(PpcContext *ctx, uint32_t mode, uint32_t count,
     if (!g_arkchemy_gx2.initialized || !g_arkchemy_gx2.device
         || !g_arkchemy_gx2.cmdbuf) return;
     g_ark_draw_tried++;
+    ark_fo_note(ARK_FO_DRAW);
 
     if (!g_ark_shdmod_cur[0] || !g_ark_shdmod_cur[1]) { g_ark_draw_noshader++; return; }
     if (g_ark_fs_cur >= ARK_FS_OBJECTS || !g_ark_fs_cur_count) { g_ark_draw_nofetch++; return; }

@@ -349,6 +349,42 @@ typedef struct {
 
 extern ArkchemyGx2State g_arkchemy_gx2; /* real definition in cafeos_state.c -- see its own file comment */
 
+/* FRAMEORD: what order a frame's graphics operations actually happen in.
+ *
+ * Reading the code says draws go into framebuffers[acquired_slot] and that
+ * GX2CopyColorBufferToScanBuffer then copies a guest-memory upload over that
+ * same image -- which would overwrite every drawn frame just before it is
+ * presented, and would explain ~490 draws a run with nothing on screen.
+ *
+ * That is a prediction, and the one thing it rests on is ordering: if the
+ * copy ran BEFORE the draws, they would survive and the explanation is wrong.
+ * The census counts calls but says nothing about sequence, so this records the
+ * sequence itself for the first few frames.
+ *
+ * One byte per event in a fixed ring, no allocation and no formatting on the
+ * hot path -- a probe that costs a frame changes the thing it is measuring.
+ * Decoded at print time in main.c. */
+#define ARK_FO_MAX 96u
+enum { ARK_FO_CLEAR = 1, ARK_FO_DRAW, ARK_FO_COPY, ARK_FO_SWAP, ARK_FO_SETCB };
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint8_t  g_ark_fo[ARK_FO_MAX];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_fo_n = 0, g_ark_fo_frames = 0;
+
+/* Stops recording after a few frames: the question is what one frame looks
+ * like, and a ring that keeps churning for 14,400 of them only shows the
+ * last one, which is the one most likely to be a teardown. */
+static inline void ark_fo_note(uint8_t ev)
+{
+    if (g_ark_fo_frames >= 3u || g_ark_fo_n >= ARK_FO_MAX) return;
+    g_ark_fo[g_ark_fo_n++] = ev;
+    if (ev == ARK_FO_SWAP) g_ark_fo_frames++;
+}
+
 /* deko3d's own diagnosis, before it takes the process down with it.
  *
  * Every DkResult deko3d raises goes through dk::detail::RaiseError, which
@@ -518,8 +554,46 @@ static inline void arkchemy_gx2_ensure_frame_acquired(void) {
     DkImageView const *targets[1];
     if (g_arkchemy_gx2.acquired_slot >= 0) return;
     g_arkchemy_gx2.acquired_slot = dkQueueAcquireImage(g_arkchemy_gx2.queue, g_arkchemy_gx2.swapchain);
-    dkImageViewDefaults(&color_target, &g_arkchemy_gx2.framebuffers[g_arkchemy_gx2.acquired_slot]);
+    /* Render into the GAME's colour buffer, not the swapchain image.
+     *
+     * FRAMEORD measured a drawing frame as
+     *     clear DRAW DRAW setcb clear copy copy swap
+     * -- so with the swapchain bound as the target, each frame was drawn, then
+     * cleared, then overwritten by GX2CopyColorBufferToScanBuffer, and only
+     * then presented. ~490 draws a run reached the GPU and every one of them
+     * was thrown away one step before it was shown.
+     *
+     * The engine's own model is that it renders into a colour buffer and then
+     * asks for that buffer to be copied to the scan buffer. GX2SetColorBuffer
+     * already builds a deko3d image for it, so binding that as the target
+     * makes the clear clear the game's buffer, the draws land in it, and the
+     * copy present it -- each step doing what its GX2 name says.
+     *
+     * The swapchain image is still acquired here, because presenting needs
+     * one; it is just no longer what draws go into. Before GX2SetColorBuffer
+     * has run there is no game buffer yet, so the swapchain is the target and
+     * behaviour is unchanged -- which is what the video path relies on. */
+    if (g_arkchemy_gx2.color_target_bound[0])
+        dkImageViewDefaults(&color_target, &g_arkchemy_gx2.color_target_image[0]);
+    else
+        dkImageViewDefaults(&color_target, &g_arkchemy_gx2.framebuffers[g_arkchemy_gx2.acquired_slot]);
     targets[0] = &color_target;
+    dkCmdBufBindRenderTargets(g_arkchemy_gx2.cmdbuf, targets, 1, NULL);
+}
+
+/* Point rendering at the game's colour buffer as soon as one exists.
+ *
+ * ensure_frame_acquired only runs once per frame, so without this the switch
+ * from swapchain to game buffer would not take effect until the frame after
+ * GX2SetColorBuffer -- and FRAMEORD shows setcb landing mid-frame, after
+ * draws have already happened. */
+static inline void arkchemy_gx2_bind_game_target(void)
+{
+    DkImageView view;
+    DkImageView const *targets[1];
+    if (!g_arkchemy_gx2.initialized || !g_arkchemy_gx2.color_target_bound[0]) return;
+    dkImageViewDefaults(&view, &g_arkchemy_gx2.color_target_image[0]);
+    targets[0] = &view;
     dkCmdBufBindRenderTargets(g_arkchemy_gx2.cmdbuf, targets, 1, NULL);
 }
 
@@ -1303,7 +1377,7 @@ static inline void ppc_import_gx2_GX2SetPrimitiveRestartIndex(PpcContext *ctx) {
     dkCmdBufSetPrimitiveRestart(g_arkchemy_gx2.cmdbuf, true, ctx->r[3]);
 }
 
-static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { ark_gx2_note(59u);
+static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { ark_gx2_note(59u); ark_fo_note(ARK_FO_CLEAR);
     /* void GX2ClearColor(GX2ColorBuffer *colorBuffer, float red, float
      * green, float blue, float alpha) -- real args: r3=colorBuffer
      * (ignored, see below), f1-f4=r,g,b,a.
@@ -1326,7 +1400,7 @@ static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { ark_gx2_note(
                             (float)ctx->f[1], (float)ctx->f[2], (float)ctx->f[3], (float)ctx->f[4]);
 }
 
-static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_note(60u);
+static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_note(60u); ark_fo_note(ARK_FO_SWAP);
     /* void GX2SwapScanBuffers(void) -- real behavior presents the TV
      * scan buffer (and, on real hardware, the separate GamePad/DRC scan
      * buffer -- this runtime has only one real display target, the
@@ -1916,7 +1990,7 @@ static inline void ppc_import_gx2_GX2SetVertexSamplerBorderColor(PpcContext *ctx
  * case): `(bytesPerBlock * width + 127) & ~127` -- replicated here
  * exactly rather than guessed, since there's no public API to query it
  * back after image creation. */
-static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_note(73u);
+static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_note(73u); ark_fo_note(ARK_FO_SETCB);
     uint32_t color_buffer_addr = ctx->r[3];
     uint32_t target = ctx->r[4];
     uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
@@ -2047,6 +2121,8 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
     g_arkchemy_gx2.color_target_mem_block[target] = dkMemBlockCreate(&mem_maker);
     dkImageInitialize(&g_arkchemy_gx2.color_target_image[target], &layout, g_arkchemy_gx2.color_target_mem_block[target], 0);
     g_arkchemy_gx2.color_target_bound[target] = true;
+    /* Take effect now, not next frame -- see arkchemy_gx2_bind_game_target. */
+    if (target == 0u) arkchemy_gx2_bind_game_target();
 
     /* Real guest-memory-to-GPU-memory pixel copy, row by row -- the
      * real guest surface's own row stride is its `pitch` (in pixels,
@@ -2357,7 +2433,7 @@ static inline void ppc_import_gx2_GX2SetVertexTexture(PpcContext *ctx) { ark_gx2
     arkchemy_gx2_set_texture(ctx, texture_addr, DkStage_Vertex, ARKCHEMY_GX2_SAMPLER_VERTEX_BASE, unit);
 }
 
-static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx) { ark_gx2_note(77u);
+static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx) { ark_gx2_note(77u); ark_fo_note(ARK_FO_COPY);
     /* void GX2CopyColorBufferToScanBuffer(const GX2ColorBuffer
      * *colorBuffer, GX2ScanTarget scanTarget) -- real signature
      * confirmed against wut's gx2/display.h. Real PPC ABI: r3=
@@ -2465,7 +2541,22 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
     copy_width = (width < ARKCHEMY_GX2_FB_WIDTH) ? width : ARKCHEMY_GX2_FB_WIDTH;
     copy_height = (height < ARKCHEMY_GX2_FB_HEIGHT) ? height : ARKCHEMY_GX2_FB_HEIGHT;
 
-    dkImageViewDefaults(&src_view, &g_arkchemy_gx2.scan_copy_temp_image);
+    /* Present what the GPU drew, not what guest memory holds.
+     *
+     * The upload above stays, because it is still the only thing that carries
+     * a colour buffer the CPU wrote -- but once the game is rendering, the
+     * pixels that matter are in color_target_image[0], written by draws the
+     * GPU executed. Guest memory has none of them: the recompiled code does
+     * not rasterise, so uploading it over the frame is uploading a buffer
+     * nothing ever drew into.
+     *
+     * That was measured, not assumed. FRAMEORD reported a drawing frame as
+     * `clear DRAW DRAW setcb clear copy copy swap`, so this copy lands after
+     * the draws every time, and before 2026-09-15 it discarded all of them. */
+    if (g_arkchemy_gx2.color_target_bound[0])
+        dkImageViewDefaults(&src_view, &g_arkchemy_gx2.color_target_image[0]);
+    else
+        dkImageViewDefaults(&src_view, &g_arkchemy_gx2.scan_copy_temp_image);
     dkImageViewDefaults(&dst_view, &g_arkchemy_gx2.framebuffers[g_arkchemy_gx2.acquired_slot]);
     src_rect.x = 0; src_rect.y = 0; src_rect.z = 0;
     src_rect.width = copy_width; src_rect.height = copy_height; src_rect.depth = 1;
