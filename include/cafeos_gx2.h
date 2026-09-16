@@ -170,6 +170,14 @@ static inline uint32_t arkchemy_gx2_pow2_align(uint32_t x, uint32_t align) {
  * arkchemy_gx2_retire_memblock. */
 #define ARKCHEMY_GX2_RETIRE_MAX 64u
 
+/* How many distinct colour surfaces keep their own image at once.
+ *
+ * The measured run used four: two scan buffers and two offscreen render
+ * targets. 16 leaves room for the ones a later level adds without making
+ * eviction a normal event -- and eviction is correct when it happens, it just
+ * costs that surface its contents. ARK_SURFPOOL reports whether it does. */
+#define ARKCHEMY_GX2_SURFACE_CACHE 16u
+
 typedef struct {
     bool initialized;
     DkDevice device;
@@ -286,15 +294,39 @@ typedef struct {
      * targets that slot again -- real resource lifecycle management,
      * not a leak. `bound[i]` is real and false until GX2SetColorBuffer
      * has successfully bound something there. */
-    DkImage color_target_image[ARKCHEMY_GX2_NUM_RENDER_TARGETS];
-    DkMemBlock color_target_mem_block[ARKCHEMY_GX2_NUM_RENDER_TARGETS];
+    /* One image per SURFACE, not per render-target slot.
+     *
+     * Measured on 2026-09-16 (SETCBSEQ), the first twelve colour buffers the
+     * game bound to target 0 were four distinct surfaces, in this order:
+     *
+     *   0x25848600 1280x720 REBUILT   <- TV scan buffer
+     *   0x25f51600  854x480 REBUILT   <- GamePad scan buffer
+     *   0x25848600 1280x720 REBUILT
+     *   0x25848600 1280x720 kept
+     *   0x1948100  1024x576 REBUILT   <- offscreen render target
+     *   0x1dc9100  1024x576 REBUILT   <- second offscreen render target
+     *   0x25848600 1280x720 REBUILT
+     *   0x25f51600  854x480 REBUILT
+     *   ...
+     *
+     * That is ordinary render-to-texture: draw the scene into a 1024x576
+     * target (two of them, ping-ponged), then composite to the TV and GamePad
+     * scan buffers. Keyed by render-target index, all four share slot 0, so
+     * every switch destroyed the previous surface's image and its contents.
+     * Over a run: SETCB kept=1 rebuilt=271, and 106 of 110 presents had to
+     * clamp their rectangle because the bound image was the wrong surface.
+     *
+     * Keyed by the guest surface descriptor instead, each surface keeps its
+     * own image and its own contents across switches, which is what the game
+     * is asking for. `color_target_slot[i]` is the entry render target `i`
+     * currently points at, or -1. */
+    DkImage surf_image[ARKCHEMY_GX2_SURFACE_CACHE];
+    DkMemBlock surf_mem_block[ARKCHEMY_GX2_SURFACE_CACHE];
+    uint32_t surf_desc[ARKCHEMY_GX2_SURFACE_CACHE][4]; /* addr, width, height, pitch */
+    uint32_t surf_used_at[ARKCHEMY_GX2_SURFACE_CACHE]; /* for eviction; 0 = free */
+    uint32_t surf_clock;
+    int color_target_slot[ARKCHEMY_GX2_NUM_RENDER_TARGETS];
     bool color_target_bound[ARKCHEMY_GX2_NUM_RENDER_TARGETS];
-    /* The surface descriptor each slot was last built from: guest image
-     * address, width, height, pitch. If GX2SetColorBuffer is handed the same
-     * four again, the image it already has is the image being asked for, and
-     * rebuilding it destroys whatever has been drawn into it. See that
-     * function's own comment. */
-    uint32_t color_target_desc[ARKCHEMY_GX2_NUM_RENDER_TARGETS][4];
 
     /* Real, independent depth-buffer binding (see GX2SetDepthBuffer's
      * own comment for the full real design). Real hardware/GX2 only
@@ -584,6 +616,65 @@ static inline void arkchemy_gx2_retire_memblock(DkMemBlock block) {
 /* Destroy everything held back, for real. Only legal where the GPU is known
  * to have finished every command that was submitted -- immediately after a
  * dkQueueWaitIdle, which is the only such point this file has. */
+/* ARK_SURFPOOL: how the per-surface image cache is behaving. `live` is how
+ * many entries hold a surface, `evicted` how many were pushed out to make
+ * room. An eviction is correct but costs that surface its contents, so a
+ * climbing count means ARKCHEMY_GX2_SURFACE_CACHE is smaller than the number
+ * of colour buffers the game actually cycles through. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_surf_live = 0, g_ark_surf_evicted = 0,
+                  g_ark_surf_hit = 0, g_ark_surf_miss = 0;
+
+/* The cache entry holding this exact surface, or -1. The four-field
+ * descriptor is the whole identity: format, tiling and mip count are pinned
+ * to single values by the caller's own checks before this is reached. */
+static inline int arkchemy_gx2_surface_find(uint32_t addr, uint32_t width,
+                                            uint32_t height, uint32_t pitch) {
+    uint32_t i;
+    for (i = 0; i < ARKCHEMY_GX2_SURFACE_CACHE; i++) {
+        if (g_arkchemy_gx2.surf_used_at[i] != 0u &&
+            g_arkchemy_gx2.surf_desc[i][0] == addr &&
+            g_arkchemy_gx2.surf_desc[i][1] == width &&
+            g_arkchemy_gx2.surf_desc[i][2] == height &&
+            g_arkchemy_gx2.surf_desc[i][3] == pitch)
+            return (int)i;
+    }
+    return -1;
+}
+
+/* Mark an entry as the most recently used one. */
+static inline void arkchemy_gx2_surface_touch(int slot) {
+    g_arkchemy_gx2.surf_clock++;
+    g_arkchemy_gx2.surf_used_at[slot] = g_arkchemy_gx2.surf_clock;
+}
+
+/* A free entry, or the least recently used one. Evicting retires the block
+ * rather than destroying it: commands recorded earlier this frame may still
+ * name it, which is what took the queue down on 2026-09-16. */
+static inline int arkchemy_gx2_surface_claim(void) {
+    uint32_t i, oldest_at;
+    int oldest;
+    for (i = 0; i < ARKCHEMY_GX2_SURFACE_CACHE; i++) {
+        if (g_arkchemy_gx2.surf_used_at[i] == 0u) {
+            g_ark_surf_live++;
+            return (int)i;
+        }
+    }
+    oldest = 0;
+    oldest_at = g_arkchemy_gx2.surf_used_at[0];
+    for (i = 1; i < ARKCHEMY_GX2_SURFACE_CACHE; i++) {
+        if (g_arkchemy_gx2.surf_used_at[i] < oldest_at) {
+            oldest_at = g_arkchemy_gx2.surf_used_at[i];
+            oldest = (int)i;
+        }
+    }
+    arkchemy_gx2_retire_memblock(g_arkchemy_gx2.surf_mem_block[oldest]);
+    g_ark_surf_evicted++;
+    return oldest;
+}
+
 static inline void arkchemy_gx2_drain_retired(void) {
     uint32_t i;
     for (i = 0; i < g_arkchemy_gx2.retire_n; i++) {
@@ -839,8 +930,9 @@ static inline void arkchemy_gx2_ensure_frame_acquired(void) {
      * one; it is just no longer what draws go into. Before GX2SetColorBuffer
      * has run there is no game buffer yet, so the swapchain is the target and
      * behaviour is unchanged -- which is what the video path relies on. */
-    if (g_arkchemy_gx2.color_target_bound[0])
-        dkImageViewDefaults(&color_target, &g_arkchemy_gx2.color_target_image[0]);
+    if (g_arkchemy_gx2.color_target_bound[0] && g_arkchemy_gx2.color_target_slot[0] >= 0)
+        dkImageViewDefaults(&color_target,
+                            &g_arkchemy_gx2.surf_image[g_arkchemy_gx2.color_target_slot[0]]);
     else
         dkImageViewDefaults(&color_target, &g_arkchemy_gx2.framebuffers[g_arkchemy_gx2.acquired_slot]);
     targets[0] = &color_target;
@@ -858,7 +950,8 @@ static inline void arkchemy_gx2_bind_game_target(void)
     DkImageView view;
     DkImageView const *targets[1];
     if (!g_arkchemy_gx2.initialized || !g_arkchemy_gx2.color_target_bound[0]) return;
-    dkImageViewDefaults(&view, &g_arkchemy_gx2.color_target_image[0]);
+    if (g_arkchemy_gx2.color_target_slot[0] < 0) return;
+    dkImageViewDefaults(&view, &g_arkchemy_gx2.surf_image[g_arkchemy_gx2.color_target_slot[0]]);
     targets[0] = &view;
     dkCmdBufBindRenderTargets(g_arkchemy_gx2.cmdbuf, targets, 1, NULL);
 }
@@ -941,6 +1034,12 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { ark_gx2_note(39u);
         g_arkchemy_gx2.texture_descriptor_gpu_addr = dkMemBlockGetGpuAddr(g_arkchemy_gx2.texture_descriptor_mem_block);
     }
 
+    /* -1, not 0: zero would name cache entry 0 as the bound surface before
+     * anything has been bound there. color_target_bound guards every read,
+     * but the sentinel should not depend on a second field being right. */
+    { uint32_t ti;
+      for (ti = 0; ti < ARKCHEMY_GX2_NUM_RENDER_TARGETS; ti++)
+          g_arkchemy_gx2.color_target_slot[ti] = -1; }
     g_arkchemy_gx2.initialized = true;
 }
 
@@ -958,11 +1057,15 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) { ark_gx2_note(40
         /* Real cleanup for any off-swapchain color-buffer bindings
          * (see GX2SetColorBuffer's own comment). */
         uint32_t i;
-        for (i = 0; i < ARKCHEMY_GX2_NUM_RENDER_TARGETS; i++) {
-            if (g_arkchemy_gx2.color_target_bound[i]) {
-                dkMemBlockDestroy(g_arkchemy_gx2.color_target_mem_block[i]);
-                g_arkchemy_gx2.color_target_bound[i] = false;
+        for (i = 0; i < ARKCHEMY_GX2_SURFACE_CACHE; i++) {
+            if (g_arkchemy_gx2.surf_used_at[i] != 0u) {
+                dkMemBlockDestroy(g_arkchemy_gx2.surf_mem_block[i]);
+                g_arkchemy_gx2.surf_used_at[i] = 0u;
             }
+        }
+        for (i = 0; i < ARKCHEMY_GX2_NUM_RENDER_TARGETS; i++) {
+            g_arkchemy_gx2.color_target_bound[i] = false;
+            g_arkchemy_gx2.color_target_slot[i] = -1;
         }
     }
     if (g_arkchemy_gx2.depth_target_bound) {
@@ -2269,6 +2372,7 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
     uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
     uint32_t bytes_per_pixel = 4u; /* RGBA8_UNORM only, see this function's own comment */
     uint32_t dest_stride, image_size, row, copy_bytes;
+    int slot;
     uint8_t *dest_cpu;
     DkImageLayoutMaker layout_maker;
     DkImageLayout layout;
@@ -2341,16 +2445,26 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
      * The upload is not lost, only skipped where it would be a no-op with
      * destructive side effects. A genuinely new surface still takes the full
      * path below, which is what the first call of a run does. */
-    if (g_arkchemy_gx2.color_target_bound[target] &&
-        g_arkchemy_gx2.color_target_desc[target][0] == image_addr &&
-        g_arkchemy_gx2.color_target_desc[target][1] == width &&
-        g_arkchemy_gx2.color_target_desc[target][2] == height &&
-        g_arkchemy_gx2.color_target_desc[target][3] == pitch) {
-        g_ark_scb_kept++;
-        if (target == 0u) ark_scbseq_note(image_addr, width, height, 1u);
-        if (target == 0u) arkchemy_gx2_bind_game_target();
-        return;
+    {
+        int hit = arkchemy_gx2_surface_find(image_addr, width, height, pitch);
+        if (hit >= 0) {
+            /* This surface already has an image, with whatever has been drawn
+             * into it still in place. Point the target at it and bind. The
+             * upload is deliberately skipped: guest memory holds no pixels the
+             * GPU wrote, so re-uploading it would discard the drawn frame --
+             * which is exactly what the old index-keyed path did on every
+             * switch between the game's four colour buffers. */
+            g_ark_surf_hit++;
+            g_ark_scb_kept++;
+            arkchemy_gx2_surface_touch(hit);
+            g_arkchemy_gx2.color_target_slot[target] = hit;
+            g_arkchemy_gx2.color_target_bound[target] = true;
+            if (target == 0u) ark_scbseq_note(image_addr, width, height, 1u);
+            if (target == 0u) arkchemy_gx2_bind_game_target();
+            return;
+        }
     }
+    g_ark_surf_miss++;
     g_ark_scb_rebuilt++;
     if (target == 0u) ark_scbseq_note(image_addr, width, height, 0u);
 
@@ -2432,21 +2546,23 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
      * `m_gpuAddrCompressed` path `DkMemBlockFlags_Image` enables). */
     mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
 
-    if (g_arkchemy_gx2.color_target_bound[target]) {
-        /* Real resource lifecycle: replace, don't leak, a previous
-         * binding at this same real target slot. */
-        arkchemy_gx2_retire_memblock(g_arkchemy_gx2.color_target_mem_block[target]);
-        g_arkchemy_gx2.color_target_bound[target] = false;
-    }
-    g_arkchemy_gx2.color_target_mem_block[target] = dkMemBlockCreate(&mem_maker);
-    dkImageInitialize(&g_arkchemy_gx2.color_target_image[target], &layout, g_arkchemy_gx2.color_target_mem_block[target], 0);
+    /* A surface this cache has not seen. Claim an entry for it -- a free one,
+     * or the least recently used surface, whose block is retired rather than
+     * destroyed because commands recorded earlier this frame may still name
+     * it. Nothing bound at this target slot is touched: another surface's
+     * image is not this call's to free, and the whole point is that it keeps
+     * its contents while a different one is drawn into. */
+    slot = arkchemy_gx2_surface_claim();
+    g_arkchemy_gx2.surf_mem_block[slot] = dkMemBlockCreate(&mem_maker);
+    dkImageInitialize(&g_arkchemy_gx2.surf_image[slot], &layout,
+                      g_arkchemy_gx2.surf_mem_block[slot], 0);
+    g_arkchemy_gx2.surf_desc[slot][0] = image_addr;
+    g_arkchemy_gx2.surf_desc[slot][1] = width;
+    g_arkchemy_gx2.surf_desc[slot][2] = height;
+    g_arkchemy_gx2.surf_desc[slot][3] = pitch;
+    arkchemy_gx2_surface_touch(slot);
+    g_arkchemy_gx2.color_target_slot[target] = slot;
     g_arkchemy_gx2.color_target_bound[target] = true;
-    /* Remember what this was built from, so the next call can tell whether it
-     * is asking for the same surface. */
-    g_arkchemy_gx2.color_target_desc[target][0] = image_addr;
-    g_arkchemy_gx2.color_target_desc[target][1] = width;
-    g_arkchemy_gx2.color_target_desc[target][2] = height;
-    g_arkchemy_gx2.color_target_desc[target][3] = pitch;
     /* Take effect now, not next frame -- see arkchemy_gx2_bind_game_target. */
     if (target == 0u) arkchemy_gx2_bind_game_target();
 
@@ -2460,7 +2576,7 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
      * requirement -- copying row-by-row using each side's own real
      * stride is correct regardless of whether they match. */
     dest_stride = arkchemy_gx2_pow2_align(bytes_per_pixel * width, 128u);
-    dest_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.color_target_mem_block[target]);
+    dest_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.surf_mem_block[slot]);
     copy_bytes = bytes_per_pixel * width;
     if (copy_bytes > pitch * bytes_per_pixel) copy_bytes = pitch * bytes_per_pixel; /* real, defensive: never read past the guest's own declared row */
     for (row = 0; row < height; row++) {
@@ -2880,34 +2996,39 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
      * That was measured, not assumed. FRAMEORD reported a drawing frame as
      * `clear DRAW DRAW setcb clear copy copy swap`, so this copy lands after
      * the draws every time, and before 2026-09-15 it discarded all of them. */
-    if (g_arkchemy_gx2.color_target_bound[0]) {
-        /* The rectangle has to fit the SOURCE, which is not the surface this
-         * call describes.
+    {
+        /* Present THIS surface, not whatever happens to be bound.
          *
-         * copy_width/copy_height above come from the guest surface being
-         * presented and the framebuffer; the image actually read is
-         * color_target_image[0], built by whatever GX2SetColorBuffer last
-         * bound. The game alternates two surfaces -- 1280x720 TV and 854x480
-         * GamePad -- through the one slot, so asking to present the TV
-         * surface while the slot holds the GamePad one runs the rectangle
-         * off the end of the image. deko3d's own validation caught it on
-         * 2026-09-16, once in the run:
+         * The surface to present is the one this call was handed, and the
+         * cache holds an image per surface, so look it up by its own
+         * descriptor. Previously the source was always the image at render
+         * target 0, which on 2026-09-16 was the wrong surface for 106 of 110
+         * presents -- the rectangle had to be clamped to fit, and a clamped
+         * copy presents a corner of the wrong buffer. deko3d's validation
+         * caught the overrun:
          *
          *   [DKDEBUG] deko3d raised DkResult_BadInput (7) in
          *             'dkCmdBufCopyImage': dk_image.cpp:520:
          *             srcRect x/width out of bounds
          *
-         * This clamp keeps the copy legal. It does NOT make it right: a
-         * clamped copy presents a corner of the wrong buffer. The real fix
-         * is to stop two surfaces sharing one slot, and g_ark_cpy_clamped
-         * counts how much is riding on that -- see SETCBSEQ. */
-        uint32_t src_w = g_arkchemy_gx2.color_target_desc[0][1];
-        uint32_t src_h = g_arkchemy_gx2.color_target_desc[0][2];
-        if (src_w < copy_width)  { copy_width  = src_w; g_ark_cpy_clamped++; }
-        if (src_h < copy_height) { copy_height = src_h; g_ark_cpy_clamped++; }
-        dkImageViewDefaults(&src_view, &g_arkchemy_gx2.color_target_image[0]);
-    } else {
-        dkImageViewDefaults(&src_view, &g_arkchemy_gx2.scan_copy_temp_image);
+         * With the right image the rectangle fits by construction, so the
+         * clamp is kept only as a backstop and still counts: g_ark_cpy_clamped
+         * should now be 0, and is worth reading as a check on that claim
+         * rather than an assumption.
+         *
+         * A surface the cache has never seen falls back to the guest-memory
+         * upload, which is what the video path relies on. */
+        int src_slot = arkchemy_gx2_surface_find(image_addr, width, height, pitch);
+        if (src_slot >= 0) {
+            uint32_t src_w = g_arkchemy_gx2.surf_desc[src_slot][1];
+            uint32_t src_h = g_arkchemy_gx2.surf_desc[src_slot][2];
+            if (src_w < copy_width)  { copy_width  = src_w; g_ark_cpy_clamped++; }
+            if (src_h < copy_height) { copy_height = src_h; g_ark_cpy_clamped++; }
+            arkchemy_gx2_surface_touch(src_slot);
+            dkImageViewDefaults(&src_view, &g_arkchemy_gx2.surf_image[src_slot]);
+        } else {
+            dkImageViewDefaults(&src_view, &g_arkchemy_gx2.scan_copy_temp_image);
+        }
     }
     if (copy_width == 0u || copy_height == 0u) { g_ark_cpy_rej_other++; return; }
     dkImageViewDefaults(&dst_view, &g_arkchemy_gx2.framebuffers[g_arkchemy_gx2.acquired_slot]);
