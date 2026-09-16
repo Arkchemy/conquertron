@@ -279,6 +279,12 @@ typedef struct {
     DkImage color_target_image[ARKCHEMY_GX2_NUM_RENDER_TARGETS];
     DkMemBlock color_target_mem_block[ARKCHEMY_GX2_NUM_RENDER_TARGETS];
     bool color_target_bound[ARKCHEMY_GX2_NUM_RENDER_TARGETS];
+    /* The surface descriptor each slot was last built from: guest image
+     * address, width, height, pitch. If GX2SetColorBuffer is handed the same
+     * four again, the image it already has is the image being asked for, and
+     * rebuilding it destroys whatever has been drawn into it. See that
+     * function's own comment. */
+    uint32_t color_target_desc[ARKCHEMY_GX2_NUM_RENDER_TARGETS][4];
 
     /* Real, independent depth-buffer binding (see GX2SetDepthBuffer's
      * own comment for the full real design). Real hardware/GX2 only
@@ -364,6 +370,15 @@ extern ArkchemyGx2State g_arkchemy_gx2; /* real definition in cafeos_state.c -- 
  * One byte per event in a fixed ring, no allocation and no formatting on the
  * hot path -- a probe that costs a frame changes the thing it is measuring.
  * Decoded at print time in main.c. */
+/* Did GX2SetColorBuffer keep the image or rebuild it? A rebuild after the
+ * draws destroys the frame; kept=0 would mean the guard never fires and
+ * the surface descriptor is changing every call, which is a different
+ * problem from the one it was written for. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_scb_kept = 0, g_ark_scb_rebuilt = 0;
+
 #define ARK_FO_MAX 96u
 enum { ARK_FO_CLEAR = 1, ARK_FO_DRAW, ARK_FO_COPY, ARK_FO_SWAP, ARK_FO_SETCB };
 #ifdef __GNUC__
@@ -2034,6 +2049,41 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
     if (format != 0x1au) return;                        /* real scope: UNORM_R8_G8_B8_A8 only */
     if (width == 0u || height == 0u || pitch == 0u) return;
 
+    /* Same surface as last time? Then the image this slot already holds IS
+     * the image being asked for.
+     *
+     * Everything below destroys the memory block, builds a fresh image and
+     * uploads the guest surface into it row by row. That was harmless while
+     * draws went to the swapchain -- nothing of value lived in the colour
+     * target, so rebuilding it destroyed nothing. Since draws render into it,
+     * it is destructive, and FRAMEORD measured this call landing *after* the
+     * draws in a frame:
+     *
+     *     clear DRAW DRAW setcb clear copy copy swap
+     *
+     * so the rebuild wipes the frame that was just drawn. The engine is not
+     * asking for that; it is re-selecting the render target it has used all
+     * along, which GX2 callers do every frame.
+     *
+     * The guest image address, width, height and pitch identify the surface.
+     * Format, tiling and mip count are already pinned to single values by the
+     * checks above, so those four are the whole descriptor here. Unchanged
+     * means keep the image and its contents and just re-bind.
+     *
+     * The upload is not lost, only skipped where it would be a no-op with
+     * destructive side effects. A genuinely new surface still takes the full
+     * path below, which is what the first call of a run does. */
+    if (g_arkchemy_gx2.color_target_bound[target] &&
+        g_arkchemy_gx2.color_target_desc[target][0] == image_addr &&
+        g_arkchemy_gx2.color_target_desc[target][1] == width &&
+        g_arkchemy_gx2.color_target_desc[target][2] == height &&
+        g_arkchemy_gx2.color_target_desc[target][3] == pitch) {
+        g_ark_scb_kept++;
+        if (target == 0u) arkchemy_gx2_bind_game_target();
+        return;
+    }
+    g_ark_scb_rebuilt++;
+
     /* Real bug, found and fixed via real on-hardware diagnostics (a
      * temporary deko3d debug-callback + explicit pre/post-layout size
      * logging, since deko3d's own release-build error text gives no
@@ -2121,6 +2171,12 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
     g_arkchemy_gx2.color_target_mem_block[target] = dkMemBlockCreate(&mem_maker);
     dkImageInitialize(&g_arkchemy_gx2.color_target_image[target], &layout, g_arkchemy_gx2.color_target_mem_block[target], 0);
     g_arkchemy_gx2.color_target_bound[target] = true;
+    /* Remember what this was built from, so the next call can tell whether it
+     * is asking for the same surface. */
+    g_arkchemy_gx2.color_target_desc[target][0] = image_addr;
+    g_arkchemy_gx2.color_target_desc[target][1] = width;
+    g_arkchemy_gx2.color_target_desc[target][2] = height;
+    g_arkchemy_gx2.color_target_desc[target][3] = pitch;
     /* Take effect now, not next frame -- see arkchemy_gx2_bind_game_target. */
     if (target == 0u) arkchemy_gx2_bind_game_target();
 
