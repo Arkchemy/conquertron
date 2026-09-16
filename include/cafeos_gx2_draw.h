@@ -337,6 +337,9 @@ void ark_draw_ex(PpcContext *ctx, uint32_t mode, uint32_t count,
         || !g_arkchemy_gx2.cmdbuf) return;
     g_ark_draw_tried++;
     ark_fo_note(ARK_FO_DRAW);
+    /* Draws land in whatever render target 0 is bound to. */
+    ark_fo_surf(g_arkchemy_gx2.color_target_bound[0]
+                ? g_arkchemy_gx2.color_target_slot[0] : -1);
 
     if (!g_ark_shdmod_cur[0] || !g_ark_shdmod_cur[1]) { g_ark_draw_noshader++; return; }
     if (g_ark_fs_cur >= ARK_FS_OBJECTS || !g_ark_fs_cur_count) { g_ark_draw_nofetch++; return; }

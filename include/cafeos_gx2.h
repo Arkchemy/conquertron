@@ -727,6 +727,22 @@ enum { ARK_FO_CLEAR = 1, ARK_FO_DRAW, ARK_FO_COPY, ARK_FO_SWAP, ARK_FO_SETCB };
 __attribute__((weak))
 #endif
 volatile uint8_t  g_ark_fo[ARK_FO_MAX];
+/* Which surface-cache entry each event touched, 0xFF where it does not apply
+ * or was not known.
+ *
+ * The event type alone stopped being enough once the four surfaces each kept
+ * their own image. The frame reads
+ *
+ *   setcb setcb clear setcb DRAW setcb DRAW setcb clear copy copy swap
+ *
+ * and whether that second clear destroys the frame depends entirely on
+ * whether it lands on the surface the draws went into or on a different one.
+ * Unannotated, that sequence is consistent with both, and guessing between
+ * them is how this problem already cost an eight-build bisection. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint8_t  g_ark_fo_surf[ARK_FO_MAX];
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
@@ -738,8 +754,19 @@ volatile uint32_t g_ark_fo_n = 0, g_ark_fo_frames = 0;
 static inline void ark_fo_note(uint8_t ev)
 {
     if (g_ark_fo_frames >= 3u || g_ark_fo_n >= ARK_FO_MAX) return;
+    g_ark_fo_surf[g_ark_fo_n] = 0xFFu;
     g_ark_fo[g_ark_fo_n++] = ev;
     if (ev == ARK_FO_SWAP) g_ark_fo_frames++;
+}
+
+/* Stamp the surface onto the event just recorded. Separate from ark_fo_note
+ * because the surface is not known at the top of these shims: a setcb has to
+ * decode its descriptor first, and a clear or draw has to read whatever is
+ * currently bound. */
+static inline void ark_fo_surf(int slot)
+{
+    if (g_ark_fo_n == 0u || g_ark_fo_n > ARK_FO_MAX) return;
+    g_ark_fo_surf[g_ark_fo_n - 1u] = (slot < 0) ? 0xFFu : (uint8_t)slot;
 }
 
 /* deko3d's own diagnosis, before it takes the process down with it.
@@ -1766,6 +1793,8 @@ static inline void ppc_import_gx2_GX2ClearColor(PpcContext *ctx) { ark_gx2_note(
      * for that common case; a known, documented gap for the other. */
     (void)ctx;
     arkchemy_gx2_ensure_frame_acquired();
+    ark_fo_surf(g_arkchemy_gx2.color_target_bound[0]
+                ? g_arkchemy_gx2.color_target_slot[0] : -1);
     dkCmdBufClearColorFloat(g_arkchemy_gx2.cmdbuf, 0, DkColorMask_RGBA,
                             (float)ctx->f[1], (float)ctx->f[2], (float)ctx->f[3], (float)ctx->f[4]);
 }
@@ -2459,6 +2488,7 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
             arkchemy_gx2_surface_touch(hit);
             g_arkchemy_gx2.color_target_slot[target] = hit;
             g_arkchemy_gx2.color_target_bound[target] = true;
+            if (target == 0u) ark_fo_surf(hit);
             if (target == 0u) ark_scbseq_note(image_addr, width, height, 1u);
             if (target == 0u) arkchemy_gx2_bind_game_target();
             return;
@@ -2563,6 +2593,7 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
     arkchemy_gx2_surface_touch(slot);
     g_arkchemy_gx2.color_target_slot[target] = slot;
     g_arkchemy_gx2.color_target_bound[target] = true;
+    if (target == 0u) ark_fo_surf(slot);
     /* Take effect now, not next frame -- see arkchemy_gx2_bind_game_target. */
     if (target == 0u) arkchemy_gx2_bind_game_target();
 
@@ -3025,6 +3056,7 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
             if (src_w < copy_width)  { copy_width  = src_w; g_ark_cpy_clamped++; }
             if (src_h < copy_height) { copy_height = src_h; g_ark_cpy_clamped++; }
             arkchemy_gx2_surface_touch(src_slot);
+            ark_fo_surf(src_slot);
             dkImageViewDefaults(&src_view, &g_arkchemy_gx2.surf_image[src_slot]);
         } else {
             dkImageViewDefaults(&src_view, &g_arkchemy_gx2.scan_copy_temp_image);
