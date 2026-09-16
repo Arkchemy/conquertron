@@ -569,6 +569,34 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_cpy_clamped = 0;
 
+/* SCANTGT: the GX2ScanTarget values GX2CopyColorBufferToScanBuffer is handed,
+ * with how many copies each one took, and how many were skipped for not being
+ * the TV.
+ *
+ * wut's gx2/enum.h gives GX2_SCAN_TARGET_TV = 1 and GX2_SCAN_TARGET_DRC0 = 4.
+ * The gate below depends on that, so the raw values are recorded rather than
+ * assumed: if TV is not 1 here, this line says so directly instead of leaving
+ * a black screen to be re-diagnosed from scratch. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_scan_val[4], g_ark_scan_cnt[4], g_ark_scan_n = 0,
+                  g_ark_scan_skipped = 0;
+
+static inline void ark_scan_note(uint32_t target) {
+    uint32_t i;
+    for (i = 0; i < g_ark_scan_n; i++) {
+        if (g_ark_scan_val[i] == target) { g_ark_scan_cnt[i]++; return; }
+    }
+    if (g_ark_scan_n >= 4u) return;
+    g_ark_scan_val[g_ark_scan_n] = target;
+    g_ark_scan_cnt[g_ark_scan_n] = 1u;
+    g_ark_scan_n++;
+}
+
+/* GX2_SCAN_TARGET_TV, from wut's gx2/enum.h. */
+#define ARKCHEMY_GX2_SCAN_TARGET_TV 1u
+
 /* RETIRE: deferred memory-block destruction, and whether it is keeping up.
  *
  * `deferred` counts blocks handed to arkchemy_gx2_retire_memblock, `drained`
@@ -2949,6 +2977,7 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
      * `arkchemy_gx2_create_framebuffers`' own comment), not necessarily
      * matching `colorBuffer`'s own real dimensions. */
     uint32_t color_buffer_addr = ctx->r[3];
+    uint32_t scan_target = ctx->r[4];
     uint32_t dim, width, height, mip_levels, format, tile_mode, pitch, image_addr;
     uint32_t bytes_per_pixel = 4u; /* RGBA8_UNORM only, see this function's own comment */
     uint32_t image_size, copy_width, copy_height, row;
@@ -2971,6 +3000,28 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
     image_addr = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
     ark_cpy_note(dim, width, height, mip_levels, format, tile_mode, pitch, image_addr);
+    ark_scan_note(scan_target);
+    /* scanTarget is not ignorable after all.
+     *
+     * The header above says it is, on the grounds that there is one display
+     * here rather than a TV/DRC pair. That was harmless while no copy ever
+     * reached the scan buffer. Now that they do, both targets blit into the
+     * same acquired swapchain image and the second one wins. Measured on
+     * 2026-09-16, with each event tagged by the surface it touched:
+     *
+     *   setcb#0 setcb#2 clear#2 setcb#3 DRAW#3 setcb#0 DRAW#0
+     *   setcb#1 clear#1 copy#0 copy#1 swap#0
+     *
+     * #0 is the 1280x720 TV scan buffer, #1 the 854x480 GamePad one, #2 and
+     * #3 the ping-ponged 1024x576 offscreen targets. The scene is drawn into
+     * #3, composited into #0, and #0 is presented by copy#0 -- correct, and
+     * the frame is intact at that point. Then copy#1 blits #1 over it, and
+     * #1 holds nothing but the clear that clear#1 just put there.
+     *
+     * On real hardware that second copy goes to the GamePad's own screen.
+     * Here there is one screen, so it has to be dropped rather than drawn
+     * over the frame that was just composited. */
+    if (scan_target != ARKCHEMY_GX2_SCAN_TARGET_TV) { g_ark_scan_skipped++; return; }
     if (dim != 1u) { g_ark_cpy_rej_other++; return; }
     if (tile_mode != 1u && tile_mode != 16u) { g_ark_cpy_rej_tile++; return; }
     if (mip_levels > 1u) { g_ark_cpy_rej_other++; return; }
