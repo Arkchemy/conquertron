@@ -445,6 +445,42 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_cpy_ok = 0, g_ark_cpy_rej_tile = 0, g_ark_cpy_rej_other = 0;
 
+/* The surfaces the PRESENT path refuses, captured separately from the ones
+ * GX2SetColorBuffer refuses.
+ *
+ * Those are different call sites and need not carry the same surface. setcb is
+ * only ever handed one: 854x480 -- the GamePad resolution -- with pitch=0 and
+ * addr=0, a declared surface with no memory. The copy refused 368 times and
+ * what it was handed has never been looked at, which matters more, because the
+ * copy is the only path from the engine to the screen.
+ *
+ * The field offsets are not in question: they match GX2Surface exactly, image
+ * at 0x24, tileMode at 0x30, pitch at 0x3C. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_cpy_seen[4][8];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_cpy_nseen = 0;
+
+static inline void ark_cpy_note(uint32_t dim, uint32_t w, uint32_t h,
+                                uint32_t mips, uint32_t fmt, uint32_t tile,
+                                uint32_t pitch, uint32_t addr)
+{
+    uint32_t i;
+    for (i = 0; i < g_ark_cpy_nseen; i++)
+        if (g_ark_cpy_seen[i][7] == addr &&
+            g_ark_cpy_seen[i][1] == w && g_ark_cpy_seen[i][2] == h) return;
+    if (g_ark_cpy_nseen >= 4u) return;
+    i = g_ark_cpy_nseen++;
+    g_ark_cpy_seen[i][0] = dim;   g_ark_cpy_seen[i][1] = w;
+    g_ark_cpy_seen[i][2] = h;     g_ark_cpy_seen[i][3] = mips;
+    g_ark_cpy_seen[i][4] = fmt;   g_ark_cpy_seen[i][5] = tile;
+    g_ark_cpy_seen[i][6] = pitch; g_ark_cpy_seen[i][7] = addr;
+}
+
 #define ARK_FO_MAX 96u
 enum { ARK_FO_CLEAR = 1, ARK_FO_DRAW, ARK_FO_COPY, ARK_FO_SWAP, ARK_FO_SETCB };
 #ifdef __GNUC__
@@ -2629,6 +2665,7 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
     pitch = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET);
     image_addr = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
+    ark_cpy_note(dim, width, height, mip_levels, format, tile_mode, pitch, image_addr);
     if (dim != 1u) { g_ark_cpy_rej_other++; return; }
     if (tile_mode != 1u && tile_mode != 16u) { g_ark_cpy_rej_tile++; return; }
     if (mip_levels > 1u) { g_ark_cpy_rej_other++; return; }
