@@ -178,6 +178,11 @@ static inline uint32_t arkchemy_gx2_pow2_align(uint32_t x, uint32_t align) {
  * costs that surface its contents. ARK_SURFPOOL reports whether it does. */
 #define ARKCHEMY_GX2_SURFACE_CACHE 16u
 
+/* Side of the square of pixels read back from the presented surface. 64x64 at
+ * 4 bytes is 16KB a frame, which is nothing, and is plenty to tell a flat
+ * clear colour from an image. */
+#define ARKCHEMY_GX2_PEEK 64u
+
 typedef struct {
     bool initialized;
     DkDevice device;
@@ -425,6 +430,17 @@ typedef struct {
      * the GPU is known to be finished with everything submitted. */
     DkMemBlock retire[ARKCHEMY_GX2_RETIRE_MAX];
     uint32_t retire_n;
+
+    /* A CPU-readable copy of a patch of the surface actually presented.
+     *
+     * Every step from allocation to present is now measured and correct, so
+     * the next question is what the draws put in the buffer -- and "is the
+     * screen black" is not something the log can answer by counting calls.
+     * This reads the pixels back. ARKCHEMY_GX2_PEEK px square from the centre
+     * of the presented surface, recorded as a GPU copy in the same command
+     * list as the present, sampled after the dkQueueWaitIdle that follows it. */
+    DkMemBlock peek_mem_block;
+    bool peek_ready;
 } ArkchemyGx2State;
 
 /* GX2EventType's real enumerator count (confirmed against wut's
@@ -596,6 +612,22 @@ static inline void ark_scan_note(uint32_t target) {
 
 /* GX2_SCAN_TARGET_TV, from wut's gx2/enum.h. */
 #define ARKCHEMY_GX2_SCAN_TARGET_TV 1u
+
+/* PEEK: what the presented surface actually contains.
+ *
+ * `frames` is how many were sampled, `varied` how many held more than one
+ * distinct pixel value, and `first`/`other` two of the values seen. A surface
+ * the GPU drew into varies; one holding nothing but a clear colour does not.
+ *
+ * This distinguishes the two explanations that every counter so far leaves
+ * open -- the draws produce an image that something downstream loses, or the
+ * draws produce nothing visible -- and they need completely different work. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_peek_frames = 0, g_ark_peek_varied = 0,
+                  g_ark_peek_first = 0, g_ark_peek_other = 0,
+                  g_ark_peek_distinct = 0;
 
 /* RETIRE: deferred memory-block destruction, and whether it is keeping up.
  *
@@ -1103,6 +1135,10 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) { ark_gx2_note(40
     if (!g_arkchemy_gx2.initialized) return;
     dkQueueWaitIdle(g_arkchemy_gx2.queue);
     arkchemy_gx2_drain_retired();
+    if (g_arkchemy_gx2.peek_mem_block != NULL) {
+        dkMemBlockDestroy(g_arkchemy_gx2.peek_mem_block);
+        g_arkchemy_gx2.peek_mem_block = NULL;
+    }
     dkCmdBufClear(g_arkchemy_gx2.cmdbuf); /* destroys any recorded cmdlists still referencing the framebuffers below */
     dkSwapchainDestroy(g_arkchemy_gx2.swapchain);
     /* DkImage itself needs no explicit per-image destroy call -- only its backing DkMemBlock does */
@@ -1874,6 +1910,31 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
      * frame replaced can finally go. This is the only point in the file where
      * that is true; every destroy outside teardown routes here. */
     arkchemy_gx2_drain_retired();
+    /* ...and the readback recorded with the present has landed. */
+    if (g_arkchemy_gx2.peek_ready) {
+        const uint32_t *px = (const uint32_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.peek_mem_block);
+        uint32_t n = ARKCHEMY_GX2_PEEK * ARKCHEMY_GX2_PEEK, i, distinct = 1u;
+        uint32_t first = px[0], other = px[0];
+        for (i = 1u; i < n; i++) {
+            if (px[i] != first) { other = px[i]; distinct = 2u; break; }
+        }
+        g_ark_peek_frames++;
+        if (distinct > 1u) {
+            g_ark_peek_varied++;
+            /* Keep the first frame that had anything in it, not the last:
+             * the last is whatever was on screen at teardown. */
+            if (g_ark_peek_distinct < 2u) {
+                g_ark_peek_first = first;
+                g_ark_peek_other = other;
+                g_ark_peek_distinct = 2u;
+            }
+        } else if (g_ark_peek_distinct == 0u) {
+            g_ark_peek_first = first;
+            g_ark_peek_other = first;
+            g_ark_peek_distinct = 1u;
+        }
+        g_arkchemy_gx2.peek_ready = false;
+    }
     g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.submitted_timestamp;
     g_arkchemy_gx2.swap_count++;
     g_arkchemy_gx2.flip_count++;
@@ -3121,6 +3182,40 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
     dst_rect.width = copy_width; dst_rect.height = copy_height; dst_rect.depth = 1;
     g_ark_cpy_ok++;
     dkCmdBufCopyImage(g_arkchemy_gx2.cmdbuf, &src_view, &src_rect, &dst_view, &dst_rect, 0);
+
+    /* Read a patch of what is being presented back to the CPU.
+     *
+     * Recorded into the same list as the blit above, so it runs against the
+     * same contents the display gets, and sampled after the dkQueueWaitIdle in
+     * GX2SwapScanBuffers. Taken from the centre because a frame with a letterbox
+     * or a cleared border would look uniform at the edges and say nothing. */
+    if (copy_width >= ARKCHEMY_GX2_PEEK && copy_height >= ARKCHEMY_GX2_PEEK) {
+        DkImageRect peek_rect;
+        DkCopyBuf peek_dst;
+        if (g_arkchemy_gx2.peek_mem_block == NULL) {
+            DkMemBlockMaker peek_maker;
+            dkMemBlockMakerDefaults(&peek_maker, g_arkchemy_gx2.device,
+                                    arkchemy_gx2_pow2_align(
+                                        ARKCHEMY_GX2_PEEK * ARKCHEMY_GX2_PEEK * 4u,
+                                        DK_MEMBLOCK_ALIGNMENT));
+            peek_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+            g_arkchemy_gx2.peek_mem_block = dkMemBlockCreate(&peek_maker);
+        }
+        if (g_arkchemy_gx2.peek_mem_block != NULL) {
+            peek_rect.x = (copy_width  - ARKCHEMY_GX2_PEEK) / 2u;
+            peek_rect.y = (copy_height - ARKCHEMY_GX2_PEEK) / 2u;
+            peek_rect.z = 0;
+            peek_rect.width = ARKCHEMY_GX2_PEEK;
+            peek_rect.height = ARKCHEMY_GX2_PEEK;
+            peek_rect.depth = 1;
+            peek_dst.addr = dkMemBlockGetGpuAddr(g_arkchemy_gx2.peek_mem_block);
+            peek_dst.rowLength = 0;   /* tightly packed */
+            peek_dst.imageHeight = 0;
+            dkCmdBufCopyImageToBuffer(g_arkchemy_gx2.cmdbuf, &src_view, &peek_rect,
+                                      &peek_dst, 0);
+            g_arkchemy_gx2.peek_ready = true;
+        }
+    }
 }
 
 #else /* !__SWITCH__ -- no deko3d on host; see file comment */
