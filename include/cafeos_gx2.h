@@ -427,6 +427,41 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_scb_kept = 0, g_ark_scb_rebuilt = 0;
 
+/* SETCBSEQ: the order GX2SetColorBuffer is handed surfaces, and whether each
+ * call kept the image or rebuilt it.
+ *
+ * kept=1 rebuilt=7 on 2026-09-16 says the idempotence guard almost never
+ * fires, and the frame captured that run was
+ *
+ *   setcb setcb clear setcb DRAW setcb DRAW setcb clear copy
+ *
+ * -- a setcb between every draw. If those are rebuilds, each draw lands in a
+ * fresh empty image and the one before it is gone, which would explain both
+ * the draws never appearing and deko3d's srcRect complaint: two surfaces,
+ * 1280x720 and 854x480, sharing the single slot 0.
+ *
+ * That is a reading of two aggregate counters, not a measurement. This
+ * records the actual sequence -- guest address, size and outcome per call --
+ * so the next run either shows the alternation or rules it out. The first 12
+ * calls are enough; the pattern is established well before the draws. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_scbseq[12][4]; /* addr, width, height, kept(1)/rebuilt(0) */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_scbseq_n = 0;
+
+static inline void ark_scbseq_note(uint32_t addr, uint32_t w, uint32_t h, uint32_t kept) {
+    if (g_ark_scbseq_n >= 12u) return;
+    g_ark_scbseq[g_ark_scbseq_n][0] = addr;
+    g_ark_scbseq[g_ark_scbseq_n][1] = w;
+    g_ark_scbseq[g_ark_scbseq_n][2] = h;
+    g_ark_scbseq[g_ark_scbseq_n][3] = kept;
+    g_ark_scbseq_n++;
+}
+
 /* Why GX2SetColorBuffer refuses the surface it is handed.
  *
  * SETCB reported kept=0 rebuilt=0 while FRAMEORD reported setcb firing, which
@@ -492,6 +527,15 @@ static inline void ark_scb_note_reject(uint32_t dim, uint32_t w, uint32_t h,
 __attribute__((weak))
 #endif
 volatile uint32_t g_ark_cpy_ok = 0, g_ark_cpy_rej_tile = 0, g_ark_cpy_rej_other = 0;
+
+/* Copies whose rectangle had to be cut down to fit the source image, because
+ * the surface being presented is not the one bound as the render target. Each
+ * one is a frame presented from the wrong buffer, not a frame lost -- which is
+ * worse to look at and easier to misread. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_cpy_clamped = 0;
 
 /* RETIRE: deferred memory-block destruction, and whether it is keeping up.
  *
@@ -2303,10 +2347,12 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
         g_arkchemy_gx2.color_target_desc[target][2] == height &&
         g_arkchemy_gx2.color_target_desc[target][3] == pitch) {
         g_ark_scb_kept++;
+        if (target == 0u) ark_scbseq_note(image_addr, width, height, 1u);
         if (target == 0u) arkchemy_gx2_bind_game_target();
         return;
     }
     g_ark_scb_rebuilt++;
+    if (target == 0u) ark_scbseq_note(image_addr, width, height, 0u);
 
     /* Real bug, found and fixed via real on-hardware diagnostics (a
      * temporary deko3d debug-callback + explicit pre/post-layout size
@@ -2834,10 +2880,36 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
      * That was measured, not assumed. FRAMEORD reported a drawing frame as
      * `clear DRAW DRAW setcb clear copy copy swap`, so this copy lands after
      * the draws every time, and before 2026-09-15 it discarded all of them. */
-    if (g_arkchemy_gx2.color_target_bound[0])
+    if (g_arkchemy_gx2.color_target_bound[0]) {
+        /* The rectangle has to fit the SOURCE, which is not the surface this
+         * call describes.
+         *
+         * copy_width/copy_height above come from the guest surface being
+         * presented and the framebuffer; the image actually read is
+         * color_target_image[0], built by whatever GX2SetColorBuffer last
+         * bound. The game alternates two surfaces -- 1280x720 TV and 854x480
+         * GamePad -- through the one slot, so asking to present the TV
+         * surface while the slot holds the GamePad one runs the rectangle
+         * off the end of the image. deko3d's own validation caught it on
+         * 2026-09-16, once in the run:
+         *
+         *   [DKDEBUG] deko3d raised DkResult_BadInput (7) in
+         *             'dkCmdBufCopyImage': dk_image.cpp:520:
+         *             srcRect x/width out of bounds
+         *
+         * This clamp keeps the copy legal. It does NOT make it right: a
+         * clamped copy presents a corner of the wrong buffer. The real fix
+         * is to stop two surfaces sharing one slot, and g_ark_cpy_clamped
+         * counts how much is riding on that -- see SETCBSEQ. */
+        uint32_t src_w = g_arkchemy_gx2.color_target_desc[0][1];
+        uint32_t src_h = g_arkchemy_gx2.color_target_desc[0][2];
+        if (src_w < copy_width)  { copy_width  = src_w; g_ark_cpy_clamped++; }
+        if (src_h < copy_height) { copy_height = src_h; g_ark_cpy_clamped++; }
         dkImageViewDefaults(&src_view, &g_arkchemy_gx2.color_target_image[0]);
-    else
+    } else {
         dkImageViewDefaults(&src_view, &g_arkchemy_gx2.scan_copy_temp_image);
+    }
+    if (copy_width == 0u || copy_height == 0u) { g_ark_cpy_rej_other++; return; }
     dkImageViewDefaults(&dst_view, &g_arkchemy_gx2.framebuffers[g_arkchemy_gx2.acquired_slot]);
     src_rect.x = 0; src_rect.y = 0; src_rect.z = 0;
     src_rect.width = copy_width; src_rect.height = copy_height; src_rect.depth = 1;
