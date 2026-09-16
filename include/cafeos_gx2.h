@@ -379,6 +379,58 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_scb_kept = 0, g_ark_scb_rebuilt = 0;
 
+/* Why GX2SetColorBuffer refuses the surface it is handed.
+ *
+ * SETCB reported kept=0 rebuilt=0 while FRAMEORD reported setcb firing, which
+ * can only mean the function returns at one of its scope checks before
+ * reaching either counter. So color_target_bound[0] has never been true, and
+ * every change made on the assumption that it was -- binding the game buffer
+ * as the render target, presenting it instead of the guest upload -- has been
+ * a no-op taking its fallback branch.
+ *
+ * This records which check refuses and the values it refused, because the
+ * scope limits were chosen from what the code could handle, not from what
+ * this game actually passes. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_scb_rej_dim = 0, g_ark_scb_rej_tile = 0,
+                  g_ark_scb_rej_mip = 0, g_ark_scb_rej_fmt = 0,
+                  g_ark_scb_rej_zero = 0;
+/* Refused surfaces, up to four DISTINCT ones.
+ *
+ * One sample was not enough. The first refused surface came back 854x480 --
+ * the GamePad resolution, not the TV's -- with pitch=0 and addr=0, i.e. a
+ * surface with no memory behind it. That says nothing about the other 209
+ * rejections, and whether the real render target is among them is exactly the
+ * question. Deduplicated on address and dimensions so four slots cover four
+ * genuinely different surfaces rather than four copies of the first. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_scb_first[4][8];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_scb_nseen = 0;
+
+static inline void ark_scb_note_reject(uint32_t dim, uint32_t w, uint32_t h,
+                                       uint32_t mips, uint32_t fmt,
+                                       uint32_t tile, uint32_t pitch,
+                                       uint32_t addr)
+{
+    uint32_t i;
+    for (i = 0; i < g_ark_scb_nseen; i++)
+        if (g_ark_scb_first[i][7] == addr &&
+            g_ark_scb_first[i][1] == w && g_ark_scb_first[i][2] == h) return;
+    if (g_ark_scb_nseen >= 4u) return;
+    i = g_ark_scb_nseen++;
+    g_ark_scb_first[i][0] = dim;   g_ark_scb_first[i][1] = w;
+    g_ark_scb_first[i][2] = h;     g_ark_scb_first[i][3] = mips;
+    g_ark_scb_first[i][4] = fmt;   g_ark_scb_first[i][5] = tile;
+    g_ark_scb_first[i][6] = pitch; g_ark_scb_first[i][7] = addr;
+}
+
 #define ARK_FO_MAX 96u
 enum { ARK_FO_CLEAR = 1, ARK_FO_DRAW, ARK_FO_COPY, ARK_FO_SWAP, ARK_FO_SETCB };
 #ifdef __GNUC__
@@ -2043,11 +2095,21 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
     pitch = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET);
     image_addr = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
-    if (dim != 1u) return;                            /* real scope: DIM_2D only */
-    if (tile_mode != 1u && tile_mode != 16u) return;   /* real scope: already-resolved-linear only */
-    if (mip_levels > 1u) return;                       /* real scope: mip level 0 only */
-    if (format != 0x1au) return;                        /* real scope: UNORM_R8_G8_B8_A8 only */
-    if (width == 0u || height == 0u || pitch == 0u) return;
+    if (dim != 1u) { g_ark_scb_rej_dim++;
+    ark_scb_note_reject(dim, width, height, mip_levels, format, tile_mode, pitch, image_addr);
+        return; }                            /* real scope: DIM_2D only */
+    if (tile_mode != 1u && tile_mode != 16u) { g_ark_scb_rej_tile++;
+    ark_scb_note_reject(dim, width, height, mip_levels, format, tile_mode, pitch, image_addr);
+        return; }   /* real scope: already-resolved-linear only */
+    if (mip_levels > 1u) { g_ark_scb_rej_mip++;
+    ark_scb_note_reject(dim, width, height, mip_levels, format, tile_mode, pitch, image_addr);
+        return; }                       /* real scope: mip level 0 only */
+    if (format != 0x1au) { g_ark_scb_rej_fmt++;
+    ark_scb_note_reject(dim, width, height, mip_levels, format, tile_mode, pitch, image_addr);
+        return; }                        /* real scope: UNORM_R8_G8_B8_A8 only */
+    if (width == 0u || height == 0u || pitch == 0u) { g_ark_scb_rej_zero++;
+    ark_scb_note_reject(dim, width, height, mip_levels, format, tile_mode, pitch, image_addr);
+        return; }
 
     /* Same surface as last time? Then the image this slot already holds IS
      * the image being asked for.
