@@ -183,6 +183,11 @@ static inline uint32_t arkchemy_gx2_pow2_align(uint32_t x, uint32_t align) {
  * clear colour from an image. */
 #define ARKCHEMY_GX2_PEEK 64u
 
+/* The pipeline counters read back each frame, in report order. Together they
+ * localise where the geometry stops: vertices in, vertices shaded, primitives
+ * into the clipper, primitives out of it, fragments shaded, samples written. */
+#define ARKCHEMY_GX2_NCOUNTERS 6u
+
 typedef struct {
     bool initialized;
     DkDevice device;
@@ -441,6 +446,16 @@ typedef struct {
      * list as the present, sampled after the dkQueueWaitIdle that follows it. */
     DkMemBlock peek_mem_block;
     bool peek_ready;
+
+    /* GPU pipeline counters, reported at the end of each frame.
+     *
+     * PEEK can say the frame is one flat colour. It cannot say whether that
+     * colour was cleared there or painted there: #0 is cleared to 0xff000000
+     * and a quad that rasterised opaque black would leave it reading exactly
+     * the same. These counters do not have that ambiguity -- they count work
+     * the GPU actually did, at each stage, whatever colour came out. */
+    DkMemBlock gpucnt_mem_block;
+    bool gpucnt_ready;
 } ArkchemyGx2State;
 
 /* GX2EventType's real enumerator count (confirmed against wut's
@@ -633,6 +648,34 @@ volatile uint32_t g_ark_peek_varied[ARKCHEMY_GX2_SURFACE_CACHE],
                   g_ark_peek_first[ARKCHEMY_GX2_SURFACE_CACHE],
                   g_ark_peek_other[ARKCHEMY_GX2_SURFACE_CACHE],
                   g_ark_peek_seen[ARKCHEMY_GX2_SURFACE_CACHE];
+
+/* GPUCNT: what the GPU pipeline actually did, stage by stage.
+ *
+ * Running totals, read back after the frame the report was recorded in.
+ * The counters, in order: input vertices, vertex shader invocations,
+ * clipper input primitives, clipper output primitives, fragment shader
+ * invocations, samples passed.
+ *
+ * Where the first zero falls is the answer:
+ *   vertices 0            -- the draw never reached the GPU
+ *   vsinv 0               -- vertices fetched, vertex shader never ran
+ *   clipout 0, clipin > 0 -- every primitive was clipped away, so the
+ *                            transform puts the geometry off-screen
+ *   fsinv 0, clipout > 0   -- primitives survived clipping and produced no
+ *                            fragments: degenerate, back-face culled, or a
+ *                            zero-area viewport
+ *   samples 0, fsinv > 0  -- fragments ran and were all discarded, by the
+ *                            depth or stencil test or by discard
+ *   all non-zero          -- the GPU drew, and the black is what it drew:
+ *                            a shading, blend or channel-mask problem */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_gpucnt[ARKCHEMY_GX2_NCOUNTERS];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_gpucnt_frames = 0;
 
 /* RETIRE: deferred memory-block destruction, and whether it is keeping up.
  *
@@ -1143,6 +1186,10 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) { ark_gx2_note(40
     if (g_arkchemy_gx2.peek_mem_block != NULL) {
         dkMemBlockDestroy(g_arkchemy_gx2.peek_mem_block);
         g_arkchemy_gx2.peek_mem_block = NULL;
+    }
+    if (g_arkchemy_gx2.gpucnt_mem_block != NULL) {
+        dkMemBlockDestroy(g_arkchemy_gx2.gpucnt_mem_block);
+        g_arkchemy_gx2.gpucnt_mem_block = NULL;
     }
     dkCmdBufClear(g_arkchemy_gx2.cmdbuf); /* destroys any recorded cmdlists still referencing the framebuffers below */
     dkSwapchainDestroy(g_arkchemy_gx2.swapchain);
@@ -1907,6 +1954,35 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
     if (g_arkchemy_gx2.acquired_slot < 0) return;
     /* Queued draws go in immediately before the list is closed: after all
      * the state this frame bound, and still inside the same list. */
+    /* Ask the GPU what it did this frame, recorded last so it covers all of
+     * it. Each report writes 16 bytes: the counter, then a timestamp. */
+    {
+        static const DkCounter which[ARKCHEMY_GX2_NCOUNTERS] = {
+            DkCounter_InputVertices,
+            DkCounter_VertexShaderInvocations,
+            DkCounter_ClipperInputPrimitives,
+            DkCounter_ClipperOutputPrimitives,
+            DkCounter_FragmentShaderInvocations,
+            DkCounter_SamplesPassed,
+        };
+        uint32_t ci;
+        if (g_arkchemy_gx2.gpucnt_mem_block == NULL) {
+            DkMemBlockMaker cnt_maker;
+            dkMemBlockMakerDefaults(&cnt_maker, g_arkchemy_gx2.device,
+                                    arkchemy_gx2_pow2_align(
+                                        ARKCHEMY_GX2_NCOUNTERS * 16u,
+                                        DK_MEMBLOCK_ALIGNMENT));
+            cnt_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+            g_arkchemy_gx2.gpucnt_mem_block = dkMemBlockCreate(&cnt_maker);
+        }
+        if (g_arkchemy_gx2.gpucnt_mem_block != NULL) {
+            DkGpuAddr cnt_addr = dkMemBlockGetGpuAddr(g_arkchemy_gx2.gpucnt_mem_block);
+            for (ci = 0; ci < ARKCHEMY_GX2_NCOUNTERS; ci++)
+                dkCmdBufReportCounter(g_arkchemy_gx2.cmdbuf, which[ci],
+                                      cnt_addr + (DkGpuAddr)ci * 16u);
+            g_arkchemy_gx2.gpucnt_ready = true;
+        }
+    }
     dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
     dkQueuePresentImage(g_arkchemy_gx2.queue, g_arkchemy_gx2.swapchain, g_arkchemy_gx2.acquired_slot);
@@ -1915,6 +1991,18 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
      * frame replaced can finally go. This is the only point in the file where
      * that is true; every destroy outside teardown routes here. */
     arkchemy_gx2_drain_retired();
+    if (g_arkchemy_gx2.gpucnt_ready) {
+        const uint64_t *rep = (const uint64_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.gpucnt_mem_block);
+        uint32_t ci;
+        for (ci = 0; ci < ARKCHEMY_GX2_NCOUNTERS; ci++) {
+            /* Running totals. 32 bits is plenty for "did this ever happen",
+             * and saturating beats wrapping quietly back through zero. */
+            uint64_t v = rep[ci * 2u];
+            g_ark_gpucnt[ci] = (v > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)v;
+        }
+        g_ark_gpucnt_frames++;
+        g_arkchemy_gx2.gpucnt_ready = false;
+    }
     /* ...and the readback recorded with the present has landed. */
     if (g_arkchemy_gx2.peek_ready) {
         const uint32_t *base = (const uint32_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.peek_mem_block);
