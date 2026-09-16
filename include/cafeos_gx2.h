@@ -687,6 +687,12 @@ volatile uint32_t g_ark_gpucnt[ARKCHEMY_GX2_NCOUNTERS];
 __attribute__((weak))
 #endif
 volatile uint32_t g_ark_texup_n = 0, g_ark_texup_flat = 0;
+/* Textures that were served straight from the surface cache -- the GPU's own
+ * rendered image -- against ones uploaded from guest memory. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_tex_from_rt = 0, g_ark_tex_from_guest = 0;
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
@@ -3059,6 +3065,51 @@ static inline void arkchemy_gx2_set_texture(PpcContext *ctx, uint32_t texture_ad
         arkchemy_gx2_retire_memblock(g_arkchemy_gx2.texture_staging_mem_block[slot]);
         g_arkchemy_gx2.texture_bound[slot] = false;
     }
+    /* If this texture IS a surface the GPU has rendered into, sample that
+     * image. Do not upload guest memory over it.
+     *
+     * Measured on 2026-09-17: every one of 284 textures uploaded in a run came
+     * back TEXUP FLAT 0x00000000, and every one was 1024x576 -- the exact size
+     * of the two offscreen render targets the scene is drawn into. The engine
+     * is doing render-to-texture: draw into the 1024x576 target, bind it as a
+     * texture, composite it onto the scan buffer.
+     *
+     * Guest memory for such a surface is empty and always will be. The
+     * recompiled code does not rasterise; the pixels are in the deko3d image
+     * in the surface cache, written by the GPU. Uploading the guest bytes
+     * replaces a rendered frame with zeros, which is exactly the black that
+     * survived every other fix: channel masks were 0x7 and 0xf with writes
+     * enabled, the GPU shaded 207M fragments and passed 133M samples, and it
+     * was faithfully compositing an all-zero texture the whole time.
+     *
+     * This is the same mistake as GX2SetColorBuffer's, one step further along
+     * the frame. There it re-uploaded guest memory over a rendered colour
+     * buffer on every re-bind; here it does it on every texture bind. Both
+     * come from treating a guest surface as the source of truth for memory
+     * only the GPU ever writes. */
+    {
+        int rt = arkchemy_gx2_surface_find(image_addr, width, height, pitch);
+        if (rt >= 0) {
+            DkImageView rt_view;
+            DkImageDescriptor rt_desc;
+            DkResHandle rt_handle;
+            arkchemy_gx2_surface_touch(rt);
+            dkImageViewDefaults(&rt_view, &g_arkchemy_gx2.surf_image[rt]);
+            dkImageDescriptorInitialize(&rt_desc, &rt_view, false, false);
+            dkCmdBufPushData(g_arkchemy_gx2.cmdbuf,
+                             g_arkchemy_gx2.texture_descriptor_gpu_addr
+                                 + (uint64_t)slot * sizeof(DkImageDescriptor),
+                             &rt_desc, sizeof(DkImageDescriptor));
+            dkCmdBufBindImageDescriptorSet(g_arkchemy_gx2.cmdbuf,
+                                           g_arkchemy_gx2.texture_descriptor_gpu_addr,
+                                           ARKCHEMY_GX2_NUM_SAMPLER_DESCRIPTORS);
+            rt_handle = dkMakeTextureHandle(slot, slot);
+            dkCmdBufBindTextures(g_arkchemy_gx2.cmdbuf, stage, index, &rt_handle, 1);
+            g_ark_tex_from_rt++;
+            return;
+        }
+    }
+    g_ark_tex_from_guest++;
     g_arkchemy_gx2.texture_mem_block[slot] = dkMemBlockCreate(&mem_maker);
     dkImageInitialize(&g_arkchemy_gx2.texture_image[slot], &layout, g_arkchemy_gx2.texture_mem_block[slot], 0);
     g_arkchemy_gx2.texture_staging_mem_block[slot] = dkMemBlockCreate(&staging_maker);
@@ -3098,6 +3149,7 @@ static inline void arkchemy_gx2_set_texture(PpcContext *ctx, uint32_t texture_ad
     dkImageViewDefaults(&dst_view, &g_arkchemy_gx2.texture_image[slot]);
     dst_rect.x = 0; dst_rect.y = 0; dst_rect.z = 0;
     dst_rect.width = width; dst_rect.height = height; dst_rect.depth = 1;
+    (void)0;
     src_buf.addr = dkMemBlockGetGpuAddr(g_arkchemy_gx2.texture_staging_mem_block[slot]);
     src_buf.rowLength = 0;
     src_buf.imageHeight = 0;
