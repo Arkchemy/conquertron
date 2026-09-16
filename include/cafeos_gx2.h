@@ -3252,10 +3252,36 @@ static inline void ppc_import_gx2_GX2CalcSurfaceSizeAndAlignment(PpcContext *ctx
         return;
     }
 
-    if (tile_mode == 1u || (tile_mode == 0u && dim == 0u)) {
-        /* TM_LINEAR_ALIGNED, either explicit or real-upgraded from
-         * TM_LINEAR_GENERAL/DEFAULT on a real 1D surface (see this
-         * section's own file comment). */
+    if (tile_mode == 1u || (tile_mode == 0u && dim <= 1u)) {
+        /* TM_LINEAR_ALIGNED, either explicit or upgraded from
+         * TM_LINEAR_GENERAL/DEFAULT.
+         *
+         * DEFAULT on a 2D surface (dim == 1) used to fall past every branch
+         * here into the documented gap at the end, which leaves every guest
+         * field untouched. That is where the entire graphics path was
+         * stopping, measured on 2026-09-16:
+         *
+         *   the game asks GX2 to size its colour buffers -> this returns
+         *   without writing imageSize, pitch or tileMode -> the game reads
+         *   imageSize 0, allocates nothing, and image stays NULL -> every
+         *   consumer downstream correctly refuses a surface with no memory.
+         *
+         * COPYSURF caught it: both buffers handed to the present path, the
+         * 1280x720 TV one and the 854x480 GamePad one, came back
+         * `tile=0 pitch=0 addr=0x0`. Not a tiling-support problem, which is
+         * what the tile=368 rejection count looked like on its own -- a
+         * sizing call that never answered.
+         *
+         * Real hardware resolves DEFAULT to a macro-tiled mode here. This
+         * resolves it to LINEAR_ALIGNED instead, which is a real GX2 mode the
+         * rest of this shim can actually render into and present, and the
+         * write-back below already tells the game which mode it got. The game
+         * then sizes and allocates against that answer, so guest and host
+         * agree even though the answer differs from retail's.
+         *
+         * Limited to dim <= 1 (1D and 2D) deliberately: 3D and cube surfaces
+         * have their own layout rules and nothing here has been checked
+         * against them. */
         uint32_t out_height, out_slices;
         int supported;
         arkchemy_gx2_calc_dim_outer(dim, height, depth, &out_height, &out_slices, &supported);
