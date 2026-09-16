@@ -106,6 +106,36 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_unif_file[2][ARK_UNIF_WORDS];
 
+/* DRAWIN: the actual numbers going into the first few draws.
+ *
+ * Every surface read back flat on 2026-09-16 -- including the 1024x576 target
+ * the scene is drawn into, which held 0x00000000 across 78 frames. So the
+ * draws record correctly (tried=239 drawn=239, no refusals) and rasterise
+ * nothing, and the state feeding them is present: 7 shaders loaded, uniforms
+ * uploaded to both stages, attribute streams set, viewport and scissor
+ * forwarded field-for-field.
+ *
+ * Present is not the same as right. This captures the values themselves for
+ * the first ARK_DRAWIN draws: the primitive and vertex count, the vertex
+ * stride, the first vertex's leading words, and the vertex constant file's
+ * first 16 -- which UNIFREG shows the game writing as one block at offset 0,
+ * the shape of a 4x4 matrix.
+ *
+ * An all-zero matrix collapses every vertex onto the origin and rasterises
+ * nothing, which matches exactly what was measured. So does a plausible
+ * matrix with zeroed vertex data. So does neither, in which case the input is
+ * sound and the fault is in the translated shader or the pipeline state, and
+ * that is a different search. Reading the numbers is what tells them apart. */
+#define ARK_DRAWIN 4u
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_drawin[ARK_DRAWIN][28];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_drawin_n = 0;
+
 /* -- why a draw did not happen -------------------------------------------- */
 #ifdef __GNUC__
 __attribute__((weak))
@@ -554,6 +584,25 @@ void ark_draw_ex(PpcContext *ctx, uint32_t mode, uint32_t count,
      * address, no relocation against it, and the compiler cannot reason about
      * the callee at all. If the boot survives this, the draw path works and
      * the underlying cause can be found without blocking a picture on it. */
+    if (g_ark_drawin_n < ARK_DRAWIN) {
+        volatile uint32_t *rec = g_ark_drawin[g_ark_drawin_n++];
+        uint32_t k;
+        const uint32_t *v0 = NULL;
+        for (k = 0; k <= highest; k++) {
+            if ((used_mask & (1u << k)) && g_ark_vb_block[k]) {
+                v0 = (const uint32_t *)dkMemBlockGetCpuAddr(g_ark_vb_block[k]);
+                rec[2] = g_ark_vb_stride[k];
+                break;
+            }
+        }
+        rec[0] = (uint32_t)prim;
+        rec[1] = count;
+        rec[3] = attrib_n;
+        /* The first vertex, as the GPU will read it: already byte-swapped. */
+        for (k = 0; k < 8u; k++) rec[4 + k] = v0 ? v0[k] : 0u;
+        /* The vertex constant file's first 16 words -- a 4x4 matrix's shape. */
+        for (k = 0; k < 16u; k++) rec[12 + k] = g_ark_unif_file[0][k];
+    }
     static void (*volatile draw_fn)(DkCmdBuf, DkPrimitive, uint32_t, uint32_t,
                                     uint32_t, uint32_t) = dkCmdBufDraw;
     draw_fn(g_arkchemy_gx2.cmdbuf, prim, count,
