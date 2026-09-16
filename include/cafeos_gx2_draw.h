@@ -130,7 +130,7 @@ volatile uint32_t g_ark_unif_file[2][ARK_UNIF_WORDS];
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_drawin[ARK_DRAWIN][28];
+volatile uint32_t g_ark_drawin[ARK_DRAWIN][34];
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
@@ -602,6 +602,24 @@ void ark_draw_ex(PpcContext *ctx, uint32_t mode, uint32_t count,
         for (k = 0; k < 8u; k++) rec[4 + k] = v0 ? v0[k] : 0u;
         /* The vertex constant file's first 16 words -- a 4x4 matrix's shape. */
         for (k = 0; k < 16u; k++) rec[12 + k] = g_ark_unif_file[0][k];
+        /* The colour-output state in effect for this draw.
+         *
+         * GPUCNT came back all non-zero on 2026-09-17 -- 1028 vertices, 1028
+         * shaded, 514 primitives in and 514 out of the clipper, 207M fragments
+         * and 133M samples passed, which is a full-screen quad's worth on both
+         * surfaces every frame. So the GPU rasterises and the result is black,
+         * and the remaining suspects are all on the colour path.
+         *
+         * `samples passed` counts the depth and stencil test, not the colour
+         * write, so a zeroed channel mask produces exactly this signature:
+         * every fragment shaded, every sample passed, nothing written. That is
+         * what these four record. */
+        rec[28] = g_arkchemy_gx2.channel_masks;
+        rec[29] = g_arkchemy_gx2.color_write_enable;
+        rec[30] = g_arkchemy_gx2.color_write_enable ? g_arkchemy_gx2.channel_masks : 0u;
+        rec[31] = g_ark_shdmod_cur[0];
+        rec[32] = g_ark_shdmod_cur[1];
+        rec[33] = g_arkchemy_gx2.texture_descriptor_gpu_addr ? 1u : 0u;
     }
     static void (*volatile draw_fn)(DkCmdBuf, DkPrimitive, uint32_t, uint32_t,
                                     uint32_t, uint32_t) = dkCmdBufDraw;

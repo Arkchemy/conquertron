@@ -672,6 +672,25 @@ volatile uint32_t g_ark_peek_varied[ARKCHEMY_GX2_SURFACE_CACHE],
 __attribute__((weak))
 #endif
 volatile uint32_t g_ark_gpucnt[ARKCHEMY_GX2_NCOUNTERS];
+
+/* TEXUP: whether the texture data uploaded for sampling has anything in it.
+ *
+ * The quads being drawn carry texture coordinates and the game sets a pixel
+ * texture 438 times over 260 draws, so every draw samples something. If what
+ * it samples is uniform black, a correct composite produces black and the
+ * fault is upstream, in whatever was meant to fill that texture.
+ *
+ * Checked on the CPU side of the upload, on the bytes about to be copied, so
+ * it costs one pass over data already being walked and needs no GPU work.
+ * `n` is textures uploaded, `flat` those whose every byte matched the first. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_texup_n = 0, g_ark_texup_flat = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_texup[6][5]; /* width, height, flat?, first word, other word */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
@@ -3055,6 +3074,25 @@ static inline void arkchemy_gx2_set_texture(PpcContext *ctx, uint32_t texture_ad
         for (i = 0; i < copy_bytes; i++) {
             staging_cpu[dst_off + i] = ppc_load_u8(ctx, src_off + i);
         }
+    }
+
+    /* Does this texture contain anything? See TEXUP. */
+    {
+        const uint32_t *tw = (const uint32_t *)staging_cpu;
+        uint32_t words = (bytes_per_pixel * width * height) / 4u;
+        uint32_t ti, first = words ? tw[0] : 0u, other = first;
+        for (ti = 1u; ti < words; ti++) {
+            if (tw[ti] != first) { other = tw[ti]; break; }
+        }
+        if (other == first) g_ark_texup_flat++;
+        if (g_ark_texup_n < 6u) {
+            g_ark_texup[g_ark_texup_n][0] = width;
+            g_ark_texup[g_ark_texup_n][1] = height;
+            g_ark_texup[g_ark_texup_n][2] = (other == first) ? 1u : 0u;
+            g_ark_texup[g_ark_texup_n][3] = first;
+            g_ark_texup[g_ark_texup_n][4] = other;
+        }
+        g_ark_texup_n++;
     }
 
     dkImageViewDefaults(&dst_view, &g_arkchemy_gx2.texture_image[slot]);
