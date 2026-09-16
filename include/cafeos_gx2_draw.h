@@ -263,7 +263,10 @@ static inline void *ark_draw_vb_memory(uint32_t i, uint32_t need)
     if (g_ark_vb_block[i] && g_ark_vb_block_size[i] >= rounded)
         return dkMemBlockGetCpuAddr(g_ark_vb_block[i]);
     if (g_ark_vb_block[i]) {
-        dkMemBlockDestroy(g_ark_vb_block[i]);
+        /* Deferred, not destroyed: draws recorded earlier this frame still
+         * name this block, and the GPU does not read it until the submit in
+         * GX2SwapScanBuffers. See arkchemy_gx2_retire_memblock. */
+        arkchemy_gx2_retire_memblock(g_ark_vb_block[i]);
         g_ark_vb_block[i] = NULL;
         g_ark_vb_block_size[i] = 0;
     }

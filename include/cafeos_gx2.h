@@ -160,6 +160,16 @@ static inline uint32_t arkchemy_gx2_pow2_align(uint32_t x, uint32_t align) {
  * gx2/enum.h: GX2_RENDER_TARGET_0 through _6). */
 #define ARKCHEMY_GX2_NUM_RENDER_TARGETS 7u
 
+/* How many replaced memory blocks can be held back for one frame before
+ * being destroyed for real -- see `retire` in ArkchemyGx2State.
+ *
+ * The measured frame that exposed the need for this held two copies and
+ * three colour-buffer rebuilds, so five. 64 leaves room for every texture
+ * slot and vertex buffer in this file to be recycled in a single frame and
+ * still not fill it. Overflow leaks rather than faults, deliberately: see
+ * arkchemy_gx2_retire_memblock. */
+#define ARKCHEMY_GX2_RETIRE_MAX 64u
+
 typedef struct {
     bool initialized;
     DkDevice device;
@@ -345,6 +355,44 @@ typedef struct {
     DkImage scan_copy_temp_image;
     DkMemBlock scan_copy_temp_mem_block;
     bool scan_copy_temp_bound;
+
+    /* Memory blocks that have been replaced but may still be named by
+     * commands already recorded into the command buffer and not yet
+     * submitted.
+     *
+     * Every dkCmdBuf* call in this file RECORDS; the GPU does not touch
+     * any of the memory named until GX2SwapScanBuffers submits the list.
+     * Destroying a block between the record and the submit unmaps memory
+     * the GPU is about to read, and the fault does not name the call that
+     * freed it -- it surfaces at whatever sync point the queue notices,
+     * and kills the queue for the rest of the process.
+     *
+     * Measured on 2026-09-16, the first run in which any copy reached the
+     * scan buffer at all:
+     *
+     *   FRAMEORD n=8 frames=1 : setcb setcb clear setcb clear copy copy swap
+     *   [DKDEBUG] dkCmdBufBarrier: Queue (0) entered error state
+     *   [DKDEBUG]   GPU page fault (info 0x00001842)
+     *   [DKDEBUG]   Address: 0x0502280000  Access type: Read
+     *   [DKDEBUG] deko3d raised DkResult_Fail (1) in 'dkQueueSubmitCommands':
+     *             attempt to submit commands to a queue in error state
+     *
+     * Two copies and three colour-buffer rebuilds land inside one frame,
+     * ahead of the single submit at 'swap'. The second copy freed the block
+     * the first copy's recorded blit reads; the third setcb freed the block
+     * the first clear was recorded against. The guest thread stopped dead at
+     * main frame 7380 with its call counter frozen at 1,711,253, because
+     * from then on every submit failed.
+     *
+     * This was latent in every build before it. It could not fire while
+     * COPYPATH ok=0, which it was until the tiling fix, because nothing was
+     * ever recorded against these blocks in the first place.
+     *
+     * So destroys are deferred to here and drained after the
+     * dkQueueWaitIdle in GX2SwapScanBuffers, which is the one point where
+     * the GPU is known to be finished with everything submitted. */
+    DkMemBlock retire[ARKCHEMY_GX2_RETIRE_MAX];
+    uint32_t retire_n;
 } ArkchemyGx2State;
 
 /* GX2EventType's real enumerator count (confirmed against wut's
@@ -444,6 +492,63 @@ static inline void ark_scb_note_reject(uint32_t dim, uint32_t w, uint32_t h,
 __attribute__((weak))
 #endif
 volatile uint32_t g_ark_cpy_ok = 0, g_ark_cpy_rej_tile = 0, g_ark_cpy_rej_other = 0;
+
+/* RETIRE: deferred memory-block destruction, and whether it is keeping up.
+ *
+ * `deferred` counts blocks handed to arkchemy_gx2_retire_memblock, `drained`
+ * the ones actually destroyed after a dkQueueWaitIdle, `peak` the most ever
+ * held at once, and `leaked` the ones dropped because the list was full.
+ *
+ * deferred == drained at the end of a run means every block was released;
+ * a standing difference equal to `peak` is just the current frame's, not a
+ * leak. A non-zero `leaked` means ARKCHEMY_GX2_RETIRE_MAX is too small for
+ * what a frame actually recycles, which is a sizing fact worth having rather
+ * than a crash. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ret_deferred = 0, g_ark_ret_drained = 0,
+                  g_ark_ret_peak = 0, g_ark_ret_leaked = 0;
+
+/* Hand a replaced memory block over to be destroyed after the next submit
+ * completes, instead of destroying it here.
+ *
+ * Callers must use this for every block that a recorded command could name:
+ * colour and depth targets, texture and staging blocks, vertex buffers, and
+ * the scan-copy staging block. Destroying one directly is only safe at
+ * teardown, after the queue has been drained, because dkCmdBuf* calls record
+ * rather than execute -- see `retire` in ArkchemyGx2State for the run this
+ * was measured on.
+ *
+ * Overflow leaks the block rather than destroying it. A leak costs memory and
+ * shows up in the RETIRE counters; a destroy here would cost the queue and
+ * take the whole run with it, and would do so at some later sync point that
+ * names neither this call nor the frame it happened in. The trade is
+ * deliberate and one-directional. */
+static inline void arkchemy_gx2_retire_memblock(DkMemBlock block) {
+    if (block == NULL) return;
+    if (g_arkchemy_gx2.retire_n >= ARKCHEMY_GX2_RETIRE_MAX) {
+        g_ark_ret_leaked++;
+        return;
+    }
+    g_arkchemy_gx2.retire[g_arkchemy_gx2.retire_n++] = block;
+    g_ark_ret_deferred++;
+    if (g_arkchemy_gx2.retire_n > g_ark_ret_peak)
+        g_ark_ret_peak = g_arkchemy_gx2.retire_n;
+}
+
+/* Destroy everything held back, for real. Only legal where the GPU is known
+ * to have finished every command that was submitted -- immediately after a
+ * dkQueueWaitIdle, which is the only such point this file has. */
+static inline void arkchemy_gx2_drain_retired(void) {
+    uint32_t i;
+    for (i = 0; i < g_arkchemy_gx2.retire_n; i++) {
+        dkMemBlockDestroy(g_arkchemy_gx2.retire[i]);
+        g_arkchemy_gx2.retire[i] = NULL;
+        g_ark_ret_drained++;
+    }
+    g_arkchemy_gx2.retire_n = 0;
+}
 
 /* The surfaces the PRESENT path refuses, captured separately from the ones
  * GX2SetColorBuffer refuses.
@@ -799,6 +904,7 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) { ark_gx2_note(40
     (void)ctx;
     if (!g_arkchemy_gx2.initialized) return;
     dkQueueWaitIdle(g_arkchemy_gx2.queue);
+    arkchemy_gx2_drain_retired();
     dkCmdBufClear(g_arkchemy_gx2.cmdbuf); /* destroys any recorded cmdlists still referencing the framebuffers below */
     dkSwapchainDestroy(g_arkchemy_gx2.swapchain);
     /* DkImage itself needs no explicit per-image destroy call -- only its backing DkMemBlock does */
@@ -1560,6 +1666,10 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
     dkQueuePresentImage(g_arkchemy_gx2.queue, g_arkchemy_gx2.swapchain, g_arkchemy_gx2.acquired_slot);
     dkQueueWaitIdle(g_arkchemy_gx2.queue);
+    /* The GPU has finished everything submitted above, so the blocks this
+     * frame replaced can finally go. This is the only point in the file where
+     * that is true; every destroy outside teardown routes here. */
+    arkchemy_gx2_drain_retired();
     g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.submitted_timestamp;
     g_arkchemy_gx2.swap_count++;
     g_arkchemy_gx2.flip_count++;
@@ -1616,6 +1726,7 @@ static inline void ppc_import_gx2_GX2DrawDone(PpcContext *ctx) { ark_gx2_note(62
     dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
     dkQueueWaitIdle(g_arkchemy_gx2.queue);
+    arkchemy_gx2_drain_retired(); /* submitted above and now finished */
     g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.submitted_timestamp;
     ctx->r[3] = 1; /* TRUE */
 }
@@ -1650,6 +1761,7 @@ static inline void ppc_import_gx2_GX2WaitForVsync(PpcContext *ctx) { ark_gx2_not
     dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
     dkQueueWaitIdle(g_arkchemy_gx2.queue);
+    arkchemy_gx2_drain_retired(); /* submitted above and now finished */
     g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.submitted_timestamp;
 }
 
@@ -2277,7 +2389,7 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
     if (g_arkchemy_gx2.color_target_bound[target]) {
         /* Real resource lifecycle: replace, don't leak, a previous
          * binding at this same real target slot. */
-        dkMemBlockDestroy(g_arkchemy_gx2.color_target_mem_block[target]);
+        arkchemy_gx2_retire_memblock(g_arkchemy_gx2.color_target_mem_block[target]);
         g_arkchemy_gx2.color_target_bound[target] = false;
     }
     g_arkchemy_gx2.color_target_mem_block[target] = dkMemBlockCreate(&mem_maker);
@@ -2421,8 +2533,8 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) { ark_gx2_n
     if (g_arkchemy_gx2.depth_target_bound) {
         /* Real resource lifecycle: replace, don't leak, a previous
          * real depth-buffer binding. */
-        dkMemBlockDestroy(g_arkchemy_gx2.depth_target_mem_block);
-        dkMemBlockDestroy(g_arkchemy_gx2.depth_target_staging_mem_block);
+        arkchemy_gx2_retire_memblock(g_arkchemy_gx2.depth_target_mem_block);
+        arkchemy_gx2_retire_memblock(g_arkchemy_gx2.depth_target_staging_mem_block);
         g_arkchemy_gx2.depth_target_bound = false;
     }
     g_arkchemy_gx2.depth_target_mem_block = dkMemBlockCreate(&mem_maker);
@@ -2542,8 +2654,8 @@ static inline void arkchemy_gx2_set_texture(PpcContext *ctx, uint32_t texture_ad
 
     if (g_arkchemy_gx2.texture_bound[slot]) {
         /* Real resource lifecycle: replace, don't leak, a previous real binding at this slot. */
-        dkMemBlockDestroy(g_arkchemy_gx2.texture_mem_block[slot]);
-        dkMemBlockDestroy(g_arkchemy_gx2.texture_staging_mem_block[slot]);
+        arkchemy_gx2_retire_memblock(g_arkchemy_gx2.texture_mem_block[slot]);
+        arkchemy_gx2_retire_memblock(g_arkchemy_gx2.texture_staging_mem_block[slot]);
         g_arkchemy_gx2.texture_bound[slot] = false;
     }
     g_arkchemy_gx2.texture_mem_block[slot] = dkMemBlockCreate(&mem_maker);
@@ -2688,7 +2800,7 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
     mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
 
     if (g_arkchemy_gx2.scan_copy_temp_bound) {
-        dkMemBlockDestroy(g_arkchemy_gx2.scan_copy_temp_mem_block);
+        arkchemy_gx2_retire_memblock(g_arkchemy_gx2.scan_copy_temp_mem_block);
         g_arkchemy_gx2.scan_copy_temp_bound = false;
     }
     g_arkchemy_gx2.scan_copy_temp_mem_block = dkMemBlockCreate(&mem_maker);
