@@ -431,6 +431,20 @@ static inline void ark_scb_note_reject(uint32_t dim, uint32_t w, uint32_t h,
     g_ark_scb_first[i][6] = pitch; g_ark_scb_first[i][7] = addr;
 }
 
+/* The present path has the SAME scope checks as GX2SetColorBuffer, including
+ * the linear-tiling one. If the game's colour buffer is tile 0, both refuse
+ * it -- so nothing the engine draws is ever copied to the scan buffer, and
+ * the only thing reaching the screen is the video path, which carries its own
+ * staging buffer and bypasses all of this.
+ *
+ * That would mean the frame is not drawn-then-overwritten, as the earlier
+ * reading had it. It is never presented at all. These counters separate those
+ * two, which need completely different fixes. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_cpy_ok = 0, g_ark_cpy_rej_tile = 0, g_ark_cpy_rej_other = 0;
+
 #define ARK_FO_MAX 96u
 enum { ARK_FO_CLEAR = 1, ARK_FO_DRAW, ARK_FO_COPY, ARK_FO_SWAP, ARK_FO_SETCB };
 #ifdef __GNUC__
@@ -2615,11 +2629,11 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
     pitch = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET);
     image_addr = ppc_load_u32(ctx, color_buffer_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
-    if (dim != 1u) return;
-    if (tile_mode != 1u && tile_mode != 16u) return;
-    if (mip_levels > 1u) return;
-    if (format != 0x1au) return;
-    if (width == 0u || height == 0u || pitch == 0u) return;
+    if (dim != 1u) { g_ark_cpy_rej_other++; return; }
+    if (tile_mode != 1u && tile_mode != 16u) { g_ark_cpy_rej_tile++; return; }
+    if (mip_levels > 1u) { g_ark_cpy_rej_other++; return; }
+    if (format != 0x1au) { g_ark_cpy_rej_other++; return; }
+    if (width == 0u || height == 0u || pitch == 0u) { g_ark_cpy_rej_other++; return; }
 
     dkImageLayoutMakerDefaults(&layout_maker, g_arkchemy_gx2.device);
     layout_maker.flags = DkImageFlags_PitchLinear | DkImageFlags_UsageRender;
@@ -2680,6 +2694,7 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
     src_rect.width = copy_width; src_rect.height = copy_height; src_rect.depth = 1;
     dst_rect.x = 0; dst_rect.y = 0; dst_rect.z = 0;
     dst_rect.width = copy_width; dst_rect.height = copy_height; dst_rect.depth = 1;
+    g_ark_cpy_ok++;
     dkCmdBufCopyImage(g_arkchemy_gx2.cmdbuf, &src_view, &src_rect, &dst_view, &dst_rect, 0);
 }
 
