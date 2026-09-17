@@ -103,6 +103,18 @@ static inline void arkchemy_vpad_update(const PadState *pad) {
 }
 #endif /* __SWITCH__ */
 
+/* INPUT: whether the game reads the pad at all, and what it is handed.
+ *
+ * The loading investigation ended with the engine booting cleanly -- three
+ * archives, try-then-fall-back working as designed -- and then never asking
+ * for a level. A title or legal screen waiting on a button is the obvious
+ * candidate, and main.c already synthesises an A press for six frames out of
+ * every 180 precisely so unattended runs get past one.
+ *
+ * None of that matters if the game never calls VPADRead. These counters say
+ * which: `reads` is calls that returned a sample, `nosample` calls that did
+ * not, and `a_seen` reads where A was held, so a synthetic press that nothing
+ * collects is distinguishable from one nothing acts on. */
 static inline void ppc_import_vpad_VPADRead(PpcContext *ctx) {
     /* int32_t VPADRead(chan, buffers, count, outError) -- r6 is
      * outError (VPADReadError*); VPAD_READ_NO_SAMPLES = -1, confirmed
@@ -111,6 +123,7 @@ static inline void ppc_import_vpad_VPADRead(PpcContext *ctx) {
     uint32_t buffers_addr = ctx->r[4];
     uint32_t count = ctx->r[5];
     if (count == 0) {
+        g_ark_in_nosample++;
         if (ctx->r[6] != 0) ppc_store_u32(ctx, ctx->r[6], (uint32_t)-1); /* VPAD_READ_NO_SAMPLES */
         ctx->r[3] = 0;
         return;
@@ -125,6 +138,9 @@ static inline void ppc_import_vpad_VPADRead(PpcContext *ctx) {
      * "last read") since only VPADRead's own real semantics need it. */
     static uint32_t s_prev_held = 0;
     uint32_t held = g_arkchemy_vpad.held;
+    g_ark_in_reads++;
+    if (held & 0x8000u) g_ark_in_a_seen++;
+    if (held) g_ark_in_held_any++;
     uint32_t trigger = held & ~s_prev_held;
     uint32_t release = s_prev_held & ~held;
     s_prev_held = held;

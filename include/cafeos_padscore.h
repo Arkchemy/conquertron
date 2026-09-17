@@ -25,7 +25,7 @@
  * caller should read from that buffer at all.
  */
 static inline void ppc_import_padscore_KPADInit(PpcContext *ctx) { (void)ctx; }
-static inline void ppc_import_padscore_KPADRead(PpcContext *ctx) { ctx->r[3] = 0; /* uint32_t: 0 samples read */ }
+static inline void ppc_import_padscore_KPADRead(PpcContext *ctx) { g_ark_in_kpad++; ctx->r[3] = 0; /* uint32_t: 0 samples read */ }
 static inline void ppc_import_padscore_KPADSetConnectCallback(PpcContext *ctx) { ctx->r[3] = 0; /* returns the previous callback -- none was ever set */ }
 static inline void ppc_import_padscore_KPADEnableDPD(PpcContext *ctx) { (void)ctx; }
 static inline void ppc_import_padscore_KPADDisableDPD(PpcContext *ctx) { (void)ctx; }

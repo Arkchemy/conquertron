@@ -1421,6 +1421,15 @@ __attribute__((weak))
  * those branches, and reasoning built on that attribution is unsupported. */
 /* Defined further down with the STREAMLOAD probe; declared here because
  * ark_igzstate below reads it and C has no forward use at file scope. */
+/* INPUT counters. Here rather than in cafeos_vpad.h because
+ * cafeos_padscore.h's KPADRead bumps one of them and includes only this
+ * header. See cafeos_vpad.h's VPADRead for what they mean. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_in_reads = 0, g_ark_in_nosample = 0,
+                  g_ark_in_a_seen = 0, g_ark_in_kpad = 0, g_ark_in_held_any = 0;
+
 extern volatile uint32_t g_ark_sl_n;
 #ifdef __GNUC__
 __attribute__((weak))
