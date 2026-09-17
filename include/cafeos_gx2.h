@@ -696,7 +696,7 @@ volatile uint32_t g_ark_tex_from_rt = 0, g_ark_tex_from_guest = 0;
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_texup[6][5]; /* width, height, flat?, first word, other word */
+volatile uint32_t g_ark_texup[6][9]; /* width, height, flat?, first, other, addr, pitch, mips, tile */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
@@ -3137,6 +3137,16 @@ static inline void arkchemy_gx2_set_texture(PpcContext *ctx, uint32_t texture_ad
         }
         if (other == first) g_ark_texup_flat++;
         if (g_ark_texup_n < 6u) {
+            /* The full descriptor, so a miss can be compared field by field
+             * against what the surface cache holds. TEXSRC came back 172 from
+             * the cache and 172 uploaded on 2026-09-17, and every uploaded one
+             * was 1024x576 and empty -- the same size as the cached render
+             * targets. An even split on surfaces that size means the lookup
+             * key differs somewhere, and the key is addr/width/height/pitch. */
+            g_ark_texup[g_ark_texup_n][5] = image_addr;
+            g_ark_texup[g_ark_texup_n][6] = pitch;
+            g_ark_texup[g_ark_texup_n][7] = mip_levels;
+            g_ark_texup[g_ark_texup_n][8] = tile_mode;
             g_ark_texup[g_ark_texup_n][0] = width;
             g_ark_texup[g_ark_texup_n][1] = height;
             g_ark_texup[g_ark_texup_n][2] = (other == first) ? 1u : 0u;

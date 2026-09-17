@@ -136,6 +136,28 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_drawin_n = 0;
 
+/* DRAWSIZE: how big the draws are.
+ *
+ * GPUCNT reported 992 vertices and 496 primitives across a run: 992/4 = 248
+ * draws, 248 x 2 = 496 triangles. Every draw a four-vertex strip, every strip
+ * two triangles. If that holds for all of them then nothing in the run is
+ * scene geometry -- they are all full-screen quads, which is what DRAWIN's
+ * vertices and orthographic matrices already showed the sampled ones to be.
+ *
+ * That matters because it changes what "the screen is black" means. A
+ * composite chain running correctly over a scene that was never drawn is not
+ * a graphics bug, and the engine has only just started decompressing archives
+ * (INFLATE lzma n=139, first non-zero of the project).
+ *
+ * The arithmetic above is consistent with that but does not establish it: a
+ * run of large draws and a matching run of tiny ones average out the same.
+ * This counts them. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_dsz_quad = 0, g_ark_dsz_small = 0,
+                  g_ark_dsz_mid = 0, g_ark_dsz_big = 0, g_ark_dsz_max = 0;
+
 /* -- why a draw did not happen -------------------------------------------- */
 #ifdef __GNUC__
 __attribute__((weak))
@@ -584,6 +606,11 @@ void ark_draw_ex(PpcContext *ctx, uint32_t mode, uint32_t count,
      * address, no relocation against it, and the compiler cannot reason about
      * the callee at all. If the boot survives this, the draw path works and
      * the underlying cause can be found without blocking a picture on it. */
+    if (count == 4u)        g_ark_dsz_quad++;
+    else if (count <= 32u)  g_ark_dsz_small++;
+    else if (count <= 256u) g_ark_dsz_mid++;
+    else                    g_ark_dsz_big++;
+    if (count > g_ark_dsz_max) g_ark_dsz_max = count;
     if (g_ark_drawin_n < ARK_DRAWIN) {
         volatile uint32_t *rec = g_ark_drawin[g_ark_drawin_n++];
         uint32_t k;
