@@ -702,6 +702,38 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_gpucnt_frames = 0;
 
+/* TIMING: where the wall clock goes, in nanoseconds, instrumented.
+ *
+ * VPADRead was called 90 times in a 14,400-host-frame run, against GPUCNT's 91
+ * presented frames. The game reads the pad exactly once per frame it presents,
+ * so those 91 are the game's own frames: 91 in four minutes, about one every
+ * 2.6 seconds.
+ *
+ * The game is not stuck waiting for anything. It is running, and it is running
+ * roughly 160 times slower than it should. Three archives and no level in four
+ * minutes is what a correct boot sequence looks like at 0.4 fps.
+ *
+ * The suspects are this file's own per-pixel loops, which walk guest memory a
+ * byte at a time through ppc_load_u8: the present upload at 1280x720x4, the
+ * texture upload at 1024x576x4 and 180 of them a run through the guest path,
+ * and setcb's, now mostly avoided by the surface cache. Plus the unconditional
+ * dkQueueWaitIdle after every submit.
+ *
+ * Those are candidates, not an answer. Every earlier attempt to reason about
+ * this project's timing from call counts has been wrong -- "526 frames
+ * presented" was identical before and after a real video-path fix -- so this
+ * measures instead of estimating. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint64_t g_ark_t_copyup = 0, g_ark_t_texup = 0, g_ark_t_setcbup = 0,
+                  g_ark_t_waitidle = 0, g_ark_t_frame = 0, g_ark_t_setcbup_mark = 0,
+                  g_ark_t_frame_last = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_t_frames = 0;
+
 /* RETIRE: deferred memory-block destruction, and whether it is keeping up.
  *
  * `deferred` counts blocks handed to arkchemy_gx2_retire_memblock, `drained`
@@ -2011,7 +2043,15 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
     dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
     dkQueuePresentImage(g_arkchemy_gx2.queue, g_arkchemy_gx2.swapchain, g_arkchemy_gx2.acquired_slot);
-    dkQueueWaitIdle(g_arkchemy_gx2.queue);
+    { uint64_t tw = arkchemy_gx2_host_ticks();
+      dkQueueWaitIdle(g_arkchemy_gx2.queue);
+      g_ark_t_waitidle += arkchemy_gx2_host_ticks() - tw; }
+    /* Wall clock between one present and the next: the game's own frame time,
+     * which every other figure here is a share of. */
+    { uint64_t now = arkchemy_gx2_host_ticks();
+      if (g_ark_t_frame_last) { g_ark_t_frame += now - g_ark_t_frame_last;
+                                g_ark_t_frames++; }
+      g_ark_t_frame_last = now; }
     /* The GPU has finished everything submitted above, so the blocks this
      * frame replaced can finally go. This is the only point in the file where
      * that is true; every destroy outside teardown routes here. */
@@ -2822,6 +2862,7 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
      * stride is correct regardless of whether they match. */
     dest_stride = arkchemy_gx2_pow2_align(bytes_per_pixel * width, 128u);
     dest_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.surf_mem_block[slot]);
+    g_ark_t_setcbup_mark = arkchemy_gx2_host_ticks();
     copy_bytes = bytes_per_pixel * width;
     if (copy_bytes > pitch * bytes_per_pixel) copy_bytes = pitch * bytes_per_pixel; /* real, defensive: never read past the guest's own declared row */
     for (row = 0; row < height; row++) {
@@ -2831,6 +2872,7 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
             dest_cpu[(uint64_t)row * dest_stride + i] = ppc_load_u8(ctx, src_off + i);
         }
     }
+    g_ark_t_setcbup += arkchemy_gx2_host_ticks() - g_ark_t_setcbup_mark;
 }
 
 /* void GX2SetDepthBuffer(const GX2DepthBuffer *depthBuffer) -- real
@@ -3118,6 +3160,7 @@ static inline void arkchemy_gx2_set_texture(PpcContext *ctx, uint32_t texture_ad
     staging_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.texture_staging_mem_block[slot]);
     copy_bytes = bytes_per_pixel * width;
     if (copy_bytes > pitch * bytes_per_pixel) copy_bytes = pitch * bytes_per_pixel;
+    { uint64_t t0 = arkchemy_gx2_host_ticks();
     for (row = 0; row < height; row++) {
         uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
         uint32_t dst_off = row * bytes_per_pixel * width;
@@ -3126,6 +3169,7 @@ static inline void arkchemy_gx2_set_texture(PpcContext *ctx, uint32_t texture_ad
             staging_cpu[dst_off + i] = ppc_load_u8(ctx, src_off + i);
         }
     }
+    g_ark_t_texup += arkchemy_gx2_host_ticks() - t0; }
 
     /* Does this texture contain anything? See TEXUP. */
     {
@@ -3313,6 +3357,7 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
     g_arkchemy_gx2.scan_copy_temp_bound = true;
 
     dest_cpu = (uint8_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.scan_copy_temp_mem_block);
+    { uint64_t t0 = arkchemy_gx2_host_ticks();
     for (row = 0; row < height; row++) {
         uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
         uint32_t dst_off = row * layout_maker.pitchStride;
@@ -3321,6 +3366,7 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
             dest_cpu[dst_off + i] = ppc_load_u8(ctx, src_off + i);
         }
     }
+    g_ark_t_copyup += arkchemy_gx2_host_ticks() - t0; }
 
     arkchemy_gx2_ensure_frame_acquired();
 
