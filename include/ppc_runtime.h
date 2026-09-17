@@ -1399,6 +1399,36 @@ static inline void ark_setstatus(uint32_t item, uint32_t val, uint32_t lr)
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
+/* Which stream load each igz load belongs to.
+ *
+ * IGZSTATE on 2026-09-17 came back strictly alternating -- Failed, Finished,
+ * Failed, Finished, Failed -- across six loads, against three STREAMLOAD calls
+ * and three successful igArchive::open returns. Six loads, three streams,
+ * three opens, three finishes.
+ *
+ * That is the exact signature of try-then-fall-back: each stream load attempts
+ * one location, fails, attempts another, succeeds. If so the three failures
+ * are routine probing and there is no loading bug here at all.
+ *
+ * It is also the signature of three streams each failing once for a real
+ * reason and succeeding on a retry that papers over it. The counts cannot
+ * separate those. Recording which stream each load belongs to can: two loads
+ * against the same stream name is the first reading, one each is the second.
+ *
+ * This replaces, rather than extends, the note that had IGZSTATE's ret coming
+ * from isFileWorkFinished. IGZWORK sits on both of that function's failure
+ * branches and recorded nothing all run, so whatever produces ret=0x1 is not
+ * those branches, and reasoning built on that attribution is unsupported. */
+/* Defined further down with the STREAMLOAD probe; declared here because
+ * ark_igzstate below reads it and C has no forward use at file scope. */
+extern volatile uint32_t g_ark_sl_n;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_igs_stream[6];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
 volatile uint32_t g_ark_igs_n = 0, g_ark_igs_calls = 0, g_ark_igs_iter = 0,
                   g_ark_igs_state[6], g_ark_igs_ret[6], g_ark_igs_iters[6],
                   g_ark_igs_maxstate = 0;
@@ -1409,6 +1439,8 @@ static inline void ark_igzstate(uint32_t state, uint32_t ret, uint32_t iters)
     if (state > g_ark_igs_maxstate) g_ark_igs_maxstate = state;
     if (i >= 6u) return;
     g_ark_igs_n = i + 1u;
+    /* The stream load in flight when this one ended. See g_ark_igs_stream. */
+    g_ark_igs_stream[i] = g_ark_sl_n;
     g_ark_igs_state[i] = state;
     g_ark_igs_ret[i] = ret;
     g_ark_igs_iters[i] = iters;
