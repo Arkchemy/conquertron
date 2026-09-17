@@ -40,8 +40,77 @@ scrutiny than the translator because they are hand-written and look simple.
       registers cannot unwind the **host** call stack the recompiled code runs
       on. Not yet implicated in a real bug, but it cannot work as written and
       will matter to any code using it for error handling.
-- [ ] GX2 is 140 shims that mostly record and discard. That is fine until
-      rendering is real; see jouster's roadmap.
+- [x] GX2 is no longer "shims that mostly record and discard". As of
+      2026-09-16 the path is real end to end: surfaces are sized and
+      allocated, each one keeps its own deko3d image across re-binds, draws
+      are recorded with full state, the scan target is honoured, and a
+      composited frame reaches the display. deko3d's own pipeline counters
+      confirm the geometry rasterising and passing the depth test.
+
+      Five separate faults were between the engine and the screen, each
+      hiding the next, all in this repository:
+
+      - `GX2CalcSurfaceSizeAndAlignment` left every guest field untouched for
+        `TILE_MODE_DEFAULT` on a 2D surface, so colour buffers were never
+        allocated at all. One condition, `dim == 0u` widened to `dim <= 1u`.
+      - Memory blocks were destroyed while commands recorded against them were
+        still unsubmitted, which killed the GPU queue on the first frame that
+        ever reached the scan buffer. Fixed with a retirement list drained only
+        after a `dkQueueWaitIdle` that follows a submit.
+      - The colour-image cache was keyed by render-target index, so the four
+        surfaces the game actually drives -- two scan buffers and two
+        ping-ponged 1024x576 offscreen targets -- shared one slot and each
+        wiped the others. Now keyed by the guest surface descriptor.
+      - `GX2CopyColorBufferToScanBuffer` ignored its scan-target argument by an
+        explicit documented simplification, so the GamePad copy blitted over
+        the composited TV frame every time. Harmless while no copy ever ran.
+      - A render target bound as a texture was overwritten with guest memory,
+        which for a GPU-written surface is always zero. Same wrong assumption
+        as the colour-buffer case, one step further along the frame.
+
+      The common thread is worth stating: **four of the five came from
+      treating the guest surface as the source of truth for memory only the
+      GPU ever writes.** That is a shim-design principle, not five bugs.
+
+- [ ] The per-pixel upload loops (`ppc_load_u8` a byte at a time, in
+      `GX2SetColorBuffer`, `GX2CopyColorBufferToScanBuffer` and
+      `arkchemy_gx2_set_texture`) are measured at 5% of a run. Ugly, and not
+      the bottleneck -- they were nearly rewritten first on the assumption
+      they were. Worth doing, worth doing after the things that are.
+- [ ] Nothing here has been tested above `dim <= 1`. 3D and cube surfaces have
+      layout rules the tiling fix deliberately did not touch.
+
+## The thing nobody can explain yet
+
+Buffering the diagnostic log's stdio stream stops the recompiled game booting.
+
+Not a subtle degradation -- the boot takes a different, much shorter path, and
+the difference is stark and perfectly reproducible on identical binaries with
+one setting changed from the SD card:
+
+    79d8ac6c  flush=256  frames=14400 draws=0   modules=2
+    79d8ac6c  flush=1    frames=14400 draws=284 modules=7
+    79d8ac6c  flush=1    frames=14400 draws=345 modules=7
+
+Ruled out by measurements that addressed each directly: the flush cadence (the
+cost was paid back and the boot stayed broken), the buffer living in BSS (moved
+to the heap, still broken), run length, and main-thread scheduling (14,340
+frames of 8ms sleep is 115 seconds against the 108 seconds of flushing it
+replaced, and it changed the guest's work by 0.14%).
+
+It costs 31% of every run, since the log cannot be buffered until it is
+understood. But the interesting part is not the 31%. **A recompiled program
+should not be able to tell whether the host's logging is buffered.** That it
+can means something in this runtime depends on a timing or scheduling property
+nobody chose, and that is a conquertron-level fact rather than a jouster one.
+
+- [ ] Attribute `checkpoint()` calls by thread. The guest thread calls it too,
+      so the per-line `fflush` is a blocking syscall on *that* thread as well
+      as the harness's. If nearly all calls turn out to be main-thread, this
+      dies immediately and filesystem contention becomes the leading
+      explanation -- the game reads its archives off the same SD card.
+- [ ] Then, if it is the guest thread: make it block periodically from a Cafe
+      OS shim with no logging involved, and see whether that substitutes.
 
 ## The memory model
 
