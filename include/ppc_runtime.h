@@ -1306,6 +1306,25 @@ __attribute__((weak))
 volatile uint32_t g_ark_ss_n = 0, g_ark_ss_total = 0,
                   g_ark_ss_item[12], g_ark_ss_val[12], g_ark_ss_lr[12];
 
+/* SSHIST: the full status history of each work item, in order.
+ *
+ * SETSTATUS on 2026-09-17 shows items reaching status 4, and
+ * isFileWorkFinished treats anything above 2 as finished-with-error, which is
+ * what puts three of six igz loads into kStateFailed. What it does not show is
+ * whether 4 arrives instead of a completion or after one.
+ *
+ * 1 -> 4 is a read that genuinely failed, and the work is upstream in the
+ * archive. 1 -> 2 -> 4 is a read that completed and was then marked something
+ * else, and the loader is reading the byte after the item has been recycled --
+ * a completely different fix, in the loader's timing rather than the archive.
+ *
+ * The aggregate cannot tell those apart. The sequence can. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_sh_n = 0, g_ark_sh_item[4],
+                  g_ark_sh_len[4], g_ark_sh_val[4][8], g_ark_sh_lr[4][8];
+
 static inline void ark_igzwork(uint32_t site, uint32_t fwi, uint32_t status)
 {
     uint32_t i = g_ark_iw_n;
@@ -1332,6 +1351,25 @@ static inline void ark_setstatus(uint32_t item, uint32_t val, uint32_t lr)
         g_ark_ss_item[i] = item;
         g_ark_ss_val[i] = val;
         g_ark_ss_lr[i] = lr;
+    }
+    /* ...and the per-item sequence. See SSHIST. */
+    for (i = 0; i < g_ark_sh_n; i++) {
+        if (g_ark_sh_item[i] == item) {
+            uint32_t k = g_ark_sh_len[i];
+            if (k < 8u) {
+                g_ark_sh_val[i][k] = val;
+                g_ark_sh_lr[i][k] = lr;
+                g_ark_sh_len[i] = k + 1u;
+            }
+            return;
+        }
+    }
+    if (g_ark_sh_n < 4u) {
+        i = g_ark_sh_n++;
+        g_ark_sh_item[i] = item;
+        g_ark_sh_val[i][0] = val;
+        g_ark_sh_lr[i][0] = lr;
+        g_ark_sh_len[i] = 1u;
     }
 }
 
