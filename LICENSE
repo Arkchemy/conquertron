@@ -102,25 +102,48 @@ grant permission to do any of the above.
    cores or libraries, which remain governed by their own real,
    independent licenses regardless of this section.
 
-8. THIRD-PARTY LICENSES
+8. SKYLANDERS REVERSE ENGINEERING DISCORD -- CONDITIONAL, NOT
+   ABSOLUTE, EXCLUSION
+   The staff and members of the "Skylanders Reverse Engineering" Discord
+   server are not granted permission to use, integrate, fork, or build
+   upon this Software or any derivative work of it, UNLESS they are a
+   member of the Arkchemy Discord server and have obtained permission
+   under section 1 through it.
+
+   The reason is stated rather than implied. That server prohibits the
+   discussion, development and promotion of generative AI within its
+   scope, including in direct messages to its members, and extends that
+   to projects associated with the technology. Arkchemy is built openly
+   with generative AI as part of its toolchain and says so in its own
+   commit history. A project cannot reasonably be treated as unwelcome
+   in a space and as a resource that space draws on.
+
+   This exclusion is conditional and is meant to be lifted. Joining the
+   Arkchemy Discord is the entire condition. Nobody is asked to
+   renounce anything, no view of the technology is required, and
+   holding a different one is not a bar. Membership of any community,
+   including that one, does not by itself grant or remove any
+   permission under this license; only section 1 does.
+
+9. THIRD-PARTY LICENSES
    Where this Software depends on separately-licensed third-party
    components (e.g. emulation cores, libraries), those components
    remain governed by their own real, independent licenses, which this
    license does not override or supersede.
 
-9. LICENSE MAY CHANGE
+10. LICENSE MAY CHANGE
    This license may be revised in the future at Aaron's/Arkchemy's
    discretion. Continued use of the Software, or of any Arkchemy
    project/service/mode (including fully offline modes), requires
    agreement to whichever version of this license is current at the
    time of use.
 
-10. LICENSE PRESERVATION
+11. LICENSE PRESERVATION
    This complete license text must be included in all copies,
    substantial portions, or derivative works of the Software that
    permission has been granted for.
 
-11. CONFIDENTIAL PROJECT PLANNING MATERIAL
+12. CONFIDENTIAL PROJECT PLANNING MATERIAL
    This project's internal planning documentation (currently hosted on
    Notion) is confidential and is NOT covered by the permissions in
    this license: no part of it may be copied, quoted, redistributed,
@@ -132,7 +155,7 @@ grant permission to do any of the above.
    confidentiality obligation survives any change to this license
    under Section 9 and applies independently of it.
 
-12. ENFORCEMENT
+13. ENFORCEMENT
    If a use, copy, fork, port, publication, or derivative work is
    found not to comply with this license, Aaron/Arkchemy will attempt
    to contact the responsible party -- through GitHub, GitLab, or
