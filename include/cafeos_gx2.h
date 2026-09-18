@@ -671,7 +671,7 @@ volatile uint32_t g_ark_peek_varied[ARKCHEMY_GX2_SURFACE_CACHE],
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_gpucnt[ARKCHEMY_GX2_NCOUNTERS];
+volatile uint64_t g_ark_gpucnt[ARKCHEMY_GX2_NCOUNTERS];
 
 /* TEXUP: whether the texture data uploaded for sampling has anything in it.
  *
@@ -2060,10 +2060,14 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
         const uint64_t *rep = (const uint64_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.gpucnt_mem_block);
         uint32_t ci;
         for (ci = 0; ci < ARKCHEMY_GX2_NCOUNTERS; ci++) {
-            /* Running totals. 32 bits is plenty for "did this ever happen",
-             * and saturating beats wrapping quietly back through zero. */
-            uint64_t v = rep[ci * 2u];
-            g_ark_gpucnt[ci] = (v > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)v;
+            /* 64-bit, not 32.
+             *
+             * "32 bits is plenty for did this ever happen" was true when the
+             * guest managed 103 frames a run. At -O2 it manages 3,263, and
+             * both fsinv and samples came back as exactly 0xFFFFFFFF on
+             * 2026-09-18 -- saturated, which is the clamp working and the
+             * width being wrong. A 17x speedup is enough to outgrow a probe. */
+            g_ark_gpucnt[ci] = rep[ci * 2u];
         }
         g_ark_gpucnt_frames++;
         g_arkchemy_gx2.gpucnt_ready = false;
@@ -2868,9 +2872,9 @@ static inline void ppc_import_gx2_GX2SetColorBuffer(PpcContext *ctx) { ark_gx2_n
     for (row = 0; row < height; row++) {
         uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
         uint32_t i;
-        for (i = 0; i < copy_bytes; i++) {
-            dest_cpu[(uint64_t)row * dest_stride + i] = ppc_load_u8(ctx, src_off + i);
-        }
+        /* One block move per row, not one masked index per byte. */
+        ppc_read_block(ctx, &dest_cpu[(uint64_t)row * dest_stride], src_off, copy_bytes);
+        (void)i;
     }
     g_ark_t_setcbup += arkchemy_gx2_host_ticks() - g_ark_t_setcbup_mark;
 }
@@ -3004,9 +3008,9 @@ static inline void ppc_import_gx2_GX2SetDepthBuffer(PpcContext *ctx) { ark_gx2_n
         uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
         uint32_t dst_off = row * bytes_per_pixel * width;
         uint32_t i;
-        for (i = 0; i < copy_bytes; i++) {
-            staging_cpu[dst_off + i] = ppc_load_u8(ctx, src_off + i);
-        }
+        /* One block move per row, not one masked index per byte. */
+        ppc_read_block(ctx, &staging_cpu[dst_off], src_off, copy_bytes);
+        (void)i;
     }
 
     /* Real, recorded (not yet submitted) GPU blit from the real
@@ -3165,9 +3169,9 @@ static inline void arkchemy_gx2_set_texture(PpcContext *ctx, uint32_t texture_ad
         uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
         uint32_t dst_off = row * bytes_per_pixel * width;
         uint32_t i;
-        for (i = 0; i < copy_bytes; i++) {
-            staging_cpu[dst_off + i] = ppc_load_u8(ctx, src_off + i);
-        }
+        /* One block move per row, not one masked index per byte. */
+        ppc_read_block(ctx, &staging_cpu[dst_off], src_off, copy_bytes);
+        (void)i;
     }
     g_ark_t_texup += arkchemy_gx2_host_ticks() - t0; }
 
@@ -3362,9 +3366,9 @@ static inline void ppc_import_gx2_GX2CopyColorBufferToScanBuffer(PpcContext *ctx
         uint32_t src_off = image_addr + row * pitch * bytes_per_pixel;
         uint32_t dst_off = row * layout_maker.pitchStride;
         uint32_t i;
-        for (i = 0; i < bytes_per_pixel * width; i++) {
-            dest_cpu[dst_off + i] = ppc_load_u8(ctx, src_off + i);
-        }
+        /* One block move per row, not one masked index per byte. */
+        ppc_read_block(ctx, &dest_cpu[dst_off], src_off, bytes_per_pixel * width);
+        (void)i;
     }
     g_ark_t_copyup += arkchemy_gx2_host_ticks() - t0; }
 

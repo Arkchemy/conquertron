@@ -3060,6 +3060,36 @@ static inline uint8_t ppc_load_u8(const PpcContext *ctx, uint32_t addr) {
     return ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
 }
 
+/* Copy a run of guest bytes out in one go.
+ *
+ * Every caller of this was a `for (i = 0; i < n; i++) dst[i] =
+ * ppc_load_u8(ctx, src + i);` loop over a whole texture or framebuffer row.
+ * That is correct and it is one masked index per byte, which no compiler can
+ * turn into a block move because it cannot prove the mask never wraps.
+ *
+ * Measured after -O2 landed on 2026-09-18: those loops were 5% of a run when
+ * the guest was slow and are 23% now that it is 17x faster -- 41s of texture
+ * upload and 36s of present upload in a 339s frame budget. They did not get
+ * slower; everything around them got faster.
+ *
+ * The arena is a power-of-two array and the mask is the only thing between an
+ * address and a host pointer, so a run that does not cross the end of the
+ * arena is exactly one memcpy. One that does is two. Nothing else differs
+ * from the loop it replaces, byte for byte. */
+static inline void ppc_read_block(const PpcContext *ctx, void *dst,
+                                  uint32_t addr, uint32_t len) {
+    uint32_t off = addr & (PPC_MEM_SIZE - 1);
+    uint32_t first = PPC_MEM_SIZE - off;
+    if (len <= first) {
+        memcpy(dst, &ctx->shared->mem[off], len);
+        return;
+    }
+    /* Wraps the end of the arena. Rare to the point of never in practice, and
+     * cheaper to handle than to reason about not handling. */
+    memcpy(dst, &ctx->shared->mem[off], first);
+    memcpy((uint8_t *)dst + first, &ctx->shared->mem[0], len - first);
+}
+
 static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
     // Real gap found and fixed 2026-08-20: g_ppc_watch_store_addr's check
     // only lived in ppc_store_u32, so it silently missed real writes made
