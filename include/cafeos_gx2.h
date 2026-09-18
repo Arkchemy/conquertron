@@ -159,6 +159,10 @@ static inline uint32_t arkchemy_gx2_pow2_align(uint32_t x, uint32_t align) {
 /* Real GX2RenderTarget slot count (confirmed against wut's
  * gx2/enum.h: GX2_RENDER_TARGET_0 through _6). */
 #define ARKCHEMY_GX2_NUM_RENDER_TARGETS 7u
+/* Frames of command memory in flight. Three is one being recorded, one in the
+ * GPU's hands, and one of slack, at 64KB a slot. Two would work and leave no
+ * room for a frame that runs long. */
+#define ARKCHEMY_GX2_CMD_SLOTS 3u
 
 /* How many replaced memory blocks can be held back for one frame before
  * being destroyed for real -- see `retire` in ArkchemyGx2State.
@@ -191,7 +195,27 @@ static inline uint32_t arkchemy_gx2_pow2_align(uint32_t x, uint32_t align) {
 typedef struct {
     bool initialized;
     DkDevice device;
-    DkMemBlock cmd_mem_block;
+    /* Command memory in rotation, one block per frame in flight.
+     *
+     * There used to be one block and an unconditional dkQueueWaitIdle after
+     * every present, so the CPU stopped dead until the GPU had finished the
+     * frame before touching the memory again. GX2SwapScanBuffers' own comment
+     * called that "a real, deliberate simplification ... a real, known place
+     * to come back to once double-buffered command memory is worth the added
+     * complexity."
+     *
+     * Measured 2026-09-18, it became worth it: the wait was 39,572ms of a
+     * 352,718ms run, 11%, and the second largest cost after the log. It did
+     * not get slower -- the guest went from 3,263 frames a run to 5,689, and
+     * each one pays the wait once.
+     *
+     * With a block and a fence per slot, the CPU only waits when the GPU is a
+     * full rotation behind, which on a frame this light is close to never. */
+    DkMemBlock cmd_mem_block[ARKCHEMY_GX2_CMD_SLOTS];
+    DkFence cmd_fence[ARKCHEMY_GX2_CMD_SLOTS];
+    bool cmd_fence_valid[ARKCHEMY_GX2_CMD_SLOTS];
+    uint64_t cmd_ts[ARKCHEMY_GX2_CMD_SLOTS];
+    uint32_t cmd_slot;
     DkCmdBuf cmdbuf;
     DkQueue queue;
 
@@ -433,8 +457,8 @@ typedef struct {
      * So destroys are deferred to here and drained after the
      * dkQueueWaitIdle in GX2SwapScanBuffers, which is the one point where
      * the GPU is known to be finished with everything submitted. */
-    DkMemBlock retire[ARKCHEMY_GX2_RETIRE_MAX];
-    uint32_t retire_n;
+    DkMemBlock retire[ARKCHEMY_GX2_CMD_SLOTS][ARKCHEMY_GX2_RETIRE_MAX];
+    uint32_t retire_n[ARKCHEMY_GX2_CMD_SLOTS];
 
     /* A CPU-readable copy of a patch of the surface actually presented.
      *
@@ -768,14 +792,17 @@ volatile uint32_t g_ark_ret_deferred = 0, g_ark_ret_drained = 0,
  * deliberate and one-directional. */
 static inline void arkchemy_gx2_retire_memblock(DkMemBlock block) {
     if (block == NULL) return;
-    if (g_arkchemy_gx2.retire_n >= ARKCHEMY_GX2_RETIRE_MAX) {
-        g_ark_ret_leaked++;
-        return;
+    {
+        uint32_t sl = g_arkchemy_gx2.cmd_slot;
+        if (g_arkchemy_gx2.retire_n[sl] >= ARKCHEMY_GX2_RETIRE_MAX) {
+            g_ark_ret_leaked++;
+            return;
+        }
+        g_arkchemy_gx2.retire[sl][g_arkchemy_gx2.retire_n[sl]++] = block;
+        g_ark_ret_deferred++;
+        if (g_arkchemy_gx2.retire_n[sl] > g_ark_ret_peak)
+            g_ark_ret_peak = g_arkchemy_gx2.retire_n[sl];
     }
-    g_arkchemy_gx2.retire[g_arkchemy_gx2.retire_n++] = block;
-    g_ark_ret_deferred++;
-    if (g_arkchemy_gx2.retire_n > g_ark_ret_peak)
-        g_ark_ret_peak = g_arkchemy_gx2.retire_n;
 }
 
 /* Destroy everything held back, for real. Only legal where the GPU is known
@@ -840,14 +867,22 @@ static inline int arkchemy_gx2_surface_claim(void) {
     return oldest;
 }
 
-static inline void arkchemy_gx2_drain_retired(void) {
+static inline void arkchemy_gx2_drain_slot(uint32_t sl) {
     uint32_t i;
-    for (i = 0; i < g_arkchemy_gx2.retire_n; i++) {
-        dkMemBlockDestroy(g_arkchemy_gx2.retire[i]);
-        g_arkchemy_gx2.retire[i] = NULL;
+    for (i = 0; i < g_arkchemy_gx2.retire_n[sl]; i++) {
+        dkMemBlockDestroy(g_arkchemy_gx2.retire[sl][i]);
+        g_arkchemy_gx2.retire[sl][i] = NULL;
         g_ark_ret_drained++;
     }
-    g_arkchemy_gx2.retire_n = 0;
+    g_arkchemy_gx2.retire_n[sl] = 0;
+}
+
+/* Every slot. Only legal after a full dkQueueWaitIdle, where the GPU is done
+ * with all of them -- GX2DrawDone, GX2WaitForVsync and teardown. The
+ * per-frame path drains one slot, behind that slot's own fence. */
+static inline void arkchemy_gx2_drain_retired(void) {
+    uint32_t sl;
+    for (sl = 0; sl < ARKCHEMY_GX2_CMD_SLOTS; sl++) arkchemy_gx2_drain_slot(sl);
 }
 
 /* The surfaces the PRESENT path refuses, captured separately from the ones
@@ -1036,6 +1071,7 @@ static inline void arkchemy_gx2_debug_cb(void *userData, const char *context,
 
 #define ARKCHEMY_GX2_CMD_MEM_SIZE 0x10000u
 
+
 /* Same real host monotonic clock source/reasoning as
  * cafeos_coreinit_sync.h's ppc_coreinit_host_ticks -- a distinct,
  * gx2-scoped name since both headers are `static inline` and can be
@@ -1169,12 +1205,18 @@ static inline void ppc_import_gx2_GX2Init(PpcContext *ctx) { ark_gx2_note(39u);
     DkMemBlockMaker mem_maker;
     dkMemBlockMakerDefaults(&mem_maker, g_arkchemy_gx2.device, ARKCHEMY_GX2_CMD_MEM_SIZE);
     mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
-    g_arkchemy_gx2.cmd_mem_block = dkMemBlockCreate(&mem_maker);
+    { uint32_t sl;
+      for (sl = 0; sl < ARKCHEMY_GX2_CMD_SLOTS; sl++) {
+          g_arkchemy_gx2.cmd_mem_block[sl] = dkMemBlockCreate(&mem_maker);
+          g_arkchemy_gx2.cmd_fence_valid[sl] = false;
+          g_arkchemy_gx2.retire_n[sl] = 0;
+      } }
+    g_arkchemy_gx2.cmd_slot = 0;
 
     DkCmdBufMaker cmdbuf_maker;
     dkCmdBufMakerDefaults(&cmdbuf_maker, g_arkchemy_gx2.device);
     g_arkchemy_gx2.cmdbuf = dkCmdBufCreate(&cmdbuf_maker);
-    dkCmdBufAddMemory(g_arkchemy_gx2.cmdbuf, g_arkchemy_gx2.cmd_mem_block, 0, ARKCHEMY_GX2_CMD_MEM_SIZE);
+    dkCmdBufAddMemory(g_arkchemy_gx2.cmdbuf, g_arkchemy_gx2.cmd_mem_block[0], 0, ARKCHEMY_GX2_CMD_MEM_SIZE);
 
     DkQueueMaker queue_maker;
     dkQueueMakerDefaults(&queue_maker, g_arkchemy_gx2.device);
@@ -1296,7 +1338,9 @@ static inline void ppc_import_gx2_GX2Shutdown(PpcContext *ctx) { ark_gx2_note(40
     }
     dkQueueDestroy(g_arkchemy_gx2.queue);
     dkCmdBufDestroy(g_arkchemy_gx2.cmdbuf);
-    dkMemBlockDestroy(g_arkchemy_gx2.cmd_mem_block);
+    { uint32_t sl;
+      for (sl = 0; sl < ARKCHEMY_GX2_CMD_SLOTS; sl++)
+          dkMemBlockDestroy(g_arkchemy_gx2.cmd_mem_block[sl]); }
     dkDeviceDestroy(g_arkchemy_gx2.device);
     /* Real correctness fix: event_callback_func/userdata (see
      * GX2SetEventCallback) hold real *guest* addresses that only stay
@@ -2043,8 +2087,17 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
     dkQueueSubmitCommands(g_arkchemy_gx2.queue, dkCmdBufFinishList(g_arkchemy_gx2.cmdbuf));
     g_arkchemy_gx2.submitted_timestamp = arkchemy_gx2_host_ticks();
     dkQueuePresentImage(g_arkchemy_gx2.queue, g_arkchemy_gx2.swapchain, g_arkchemy_gx2.acquired_slot);
+
+    /* Mark this slot's work, then move to the next one and wait only on ITS
+     * fence -- the frame from a full rotation ago. If the GPU has kept up,
+     * that fence is long since signalled and this costs nothing. */
+    dkQueueSignalFence(g_arkchemy_gx2.queue, &g_arkchemy_gx2.cmd_fence[g_arkchemy_gx2.cmd_slot], true);
+    g_arkchemy_gx2.cmd_fence_valid[g_arkchemy_gx2.cmd_slot] = true;
+    g_arkchemy_gx2.cmd_ts[g_arkchemy_gx2.cmd_slot] = g_arkchemy_gx2.submitted_timestamp;
+    g_arkchemy_gx2.cmd_slot = (g_arkchemy_gx2.cmd_slot + 1u) % ARKCHEMY_GX2_CMD_SLOTS;
     { uint64_t tw = arkchemy_gx2_host_ticks();
-      dkQueueWaitIdle(g_arkchemy_gx2.queue);
+      if (g_arkchemy_gx2.cmd_fence_valid[g_arkchemy_gx2.cmd_slot])
+          dkFenceWait(&g_arkchemy_gx2.cmd_fence[g_arkchemy_gx2.cmd_slot], -1);
       g_ark_t_waitidle += arkchemy_gx2_host_ticks() - tw; }
     /* Wall clock between one present and the next: the game's own frame time,
      * which every other figure here is a share of. */
@@ -2052,10 +2105,18 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
       if (g_ark_t_frame_last) { g_ark_t_frame += now - g_ark_t_frame_last;
                                 g_ark_t_frames++; }
       g_ark_t_frame_last = now; }
-    /* The GPU has finished everything submitted above, so the blocks this
-     * frame replaced can finally go. This is the only point in the file where
-     * that is true; every destroy outside teardown routes here. */
-    arkchemy_gx2_drain_retired();
+    /* Past that fence the GPU is finished with everything this slot carried a
+     * rotation ago, so its held blocks go now. The blocks retired during the
+     * frame just submitted stay put, in their own slot's bucket, until this
+     * comes back around to them. */
+    arkchemy_gx2_drain_slot(g_arkchemy_gx2.cmd_slot);
+    /* Both readbacks below sit behind the fence wait deliberately. They read
+     * memory the GPU writes, and with the unconditional queue wait gone the
+     * only thing guaranteeing that write has landed is the fence for the slot
+     * a rotation ago. So the values now lag by up to ARKCHEMY_GX2_CMD_SLOTS
+     * frames. For "did any fragment run" and "does this surface hold more than
+     * one value" that is immaterial, but it is a lag and not an exact reading
+     * of the frame just submitted. */
     if (g_arkchemy_gx2.gpucnt_ready) {
         const uint64_t *rep = (const uint64_t *)dkMemBlockGetCpuAddr(g_arkchemy_gx2.gpucnt_mem_block);
         uint32_t ci;
@@ -2104,10 +2165,16 @@ static inline void ppc_import_gx2_GX2SwapScanBuffers(PpcContext *ctx) { ark_gx2_
         }
         g_arkchemy_gx2.peek_ready = false;
     }
-    g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.submitted_timestamp;
+    /* What has actually retired is the frame whose fence just passed, not the
+     * one submitted moments ago. Reporting the latter would have
+     * GX2GetRetiredTimeStamp claim work is done that the GPU has not started. */
+    g_arkchemy_gx2.retired_timestamp = g_arkchemy_gx2.cmd_ts[g_arkchemy_gx2.cmd_slot];
     g_arkchemy_gx2.swap_count++;
     g_arkchemy_gx2.flip_count++;
     dkCmdBufClear(g_arkchemy_gx2.cmdbuf);
+    dkCmdBufAddMemory(g_arkchemy_gx2.cmdbuf,
+                      g_arkchemy_gx2.cmd_mem_block[g_arkchemy_gx2.cmd_slot], 0,
+                      ARKCHEMY_GX2_CMD_MEM_SIZE);
     g_arkchemy_gx2.acquired_slot = -1;
 }
 
