@@ -35,16 +35,7 @@
  * are distinguishable without another run. */
 
 #include <stdint.h>
-#include <time.h>
-
-/* The probes' own clock. arkchemy_gx2_host_ticks lives in cafeos_gx2.h, which
- * the FS shim does not include and should not have to; this is the same two
- * lines and keeps the probe header free-standing. */
-static inline unsigned long long ark_now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec;
-}
+#include "ark_fstime.h"   /* ark_now_ns, and the SD read timings */
 
 #ifdef __GNUC__
 __attribute__((weak))
@@ -606,7 +597,9 @@ static inline void ark_sig_note(uint32_t self, uint32_t kind) {
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_tl[12][3]; /* task, blockA, blockB */
+volatile uint32_t g_ark_tl[256][3]; /* task, blockA, blockB -- all of them,
+                                    * so a stuck block can be traced back to
+                                    * whichever task last took it */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
@@ -616,9 +609,9 @@ static inline void ark_tl_note(uint32_t task, uint32_t ba, uint32_t bb) {
     uint32_t i;
     g_ark_tl_calls++;
     if (!task) g_ark_tl_nulltask++;
-    for (i = 0; i < g_ark_tl_n && i < 12u; i++)
+    for (i = 0; i < g_ark_tl_n && i < 256u; i++)
         if (g_ark_tl[i][0] == task && g_ark_tl[i][1] == ba) return;
-    if (i >= 12u) return;
+    if (i >= 256u) return;
     g_ark_tl[i][0] = task; g_ark_tl[i][1] = ba; g_ark_tl[i][2] = bb;
     g_ark_tl_n++;
 }
@@ -649,6 +642,13 @@ __attribute__((weak))
  * 65 reads, 60 tasks -- six runs, identical), so it can finally be used to
  * A/B this fix instead of guessing from single 120-second runs, which are
  * not reproducible and never were. */
+/* STAYS 0, AND IS NOW KNOWN TO BE REDUNDANT. The engine already frees both
+ * blockA and blockB, at 0x2167cb0, writing state 0 to each. RELGATE and
+ * RELFIX were built around 0x21682d0, which is a different path that only
+ * caches blockB as state 2. blockA was never being abandoned; it was being
+ * freed somewhere this probe was not looking. That is why the fix never
+ * helped, and the inconclusive A/B runs were reading noise on top of a
+ * change that did nothing. */
 volatile uint32_t g_ark_relfix_enabled = 0, g_ark_relfix_applied = 0;
 
 /* ITEMDONE: which work items reach the completion write, and which one waits.
@@ -740,7 +740,104 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_burst[256], g_ark_burst_n = 0;
 
-static inline void ark_burst_note(unsigned long long ticks_ns) {
+/* Conditions at the moment the burst starts.
+ *
+ * Reads per run land on 65, 81, 113 or 177 -- extras of 0, 16, 48 and 112,
+ * which is 16 x (2^n - 1). Rounds of 16, then 32, then 64: something doubles
+ * and a run gets a variable number of rounds before the pool locks.
+ *
+ * The cheapest hypothesis is that the starting position decides it. If the
+ * burst begins with six free blocks it may get further than one starting with
+ * three, and the earlier bootstrap and legal archives could plausibly still
+ * be holding some. Snapshotting the free count at the first block read costs
+ * six loads once a run, and putting it on the tally means a handful of runs
+ * gives a scatter of start condition against outcome.
+ *
+ * A clean correlation names the cause. No correlation rules out initial
+ * conditions entirely and points at something that happens during the burst,
+ * which is a more expensive thing to chase but worth knowing before chasing
+ * it. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_free_at_start = 0xffffffffu, g_ark_blocks_at_start = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_cyc[16][2], g_ark_cyc_n = 0;   /* read index, free blocks */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint8_t g_ark_freeseq[200];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_freeseq_n = 0;
+
+static inline void ark_burst_note(const PpcContext *ctx, unsigned long long ticks_ns) {
+    if (g_ark_burst_n == 0u && g_ark_blklist) {
+        uint32_t cnt = ppc_load_u32(ctx, g_ark_blklist + 0x08u);
+        uint32_t arr = ppc_load_u32(ctx, g_ark_blklist + 0x14u);
+        uint32_t i, free_n = 0;
+        for (i = 0; i < cnt && i < 16u && arr; i++) {
+            uint32_t b = ppc_load_u32(ctx, arr + i * 4u);
+            uint32_t st = b ? ppc_load_u32(ctx, b + 0x14u) : 1u;   /* _state */
+            if (st == 0u || st == 2u) free_n++;                    /* allocate takes either */
+        }
+        g_ark_free_at_start = free_n;
+        g_ark_blocks_at_start = cnt;
+    }
+    /* Free-block count at the start of each cycle.
+     *
+     * reads = 1 + 16 x gaps holds exactly on every run measured: 4 gaps gives
+     * 65 reads, 5 gives 81, 7 gives 113, 11 gives 177, and each gap is worth
+     * exactly 131,072 bytes. So the pipeline itself has no jitter -- fetch
+     * 128KB, consume it as 16 block reads, repeat -- and the only variable is
+     * how many cycles happen before the deadlock.
+     *
+     * Sampling the pool at the first read after each stall shows how the free
+     * count moves cycle to cycle. A count that declines and hits zero names
+     * exhaustion as the terminator and says how many cycles it survives; a
+     * count that stays healthy right up to the last cycle means something
+     * else ends it and the pool is a symptom. Eleven samples a run at most. */
+    /* Free count at EVERY read, not just cycle starts.
+     *
+     * CYCLES showed four free blocks at the start of the last cycle and no
+     * decline across the earlier ones -- 4,4,4,2,5,4,4 -- yet POOLEXIT finds
+     * zero at the end. So the pool does not drain gradually; it collapses
+     * inside the final cycle, and the empty pool is the result of whatever
+     * stops the run rather than its cause. Sampling per read makes the 4 to 0
+     * transition visible instead of inferred. Six loads per read, ~180 reads:
+     * affordable, and the burst timing it perturbs is not what is being
+     * measured here. */
+    if (g_ark_blklist && g_ark_freeseq_n < 200u) {
+        uint32_t cnt = ppc_load_u32(ctx, g_ark_blklist + 0x08u);
+        uint32_t arr = ppc_load_u32(ctx, g_ark_blklist + 0x14u);
+        uint32_t i, fr = 0;
+        for (i = 0; i < cnt && i < 16u && arr; i++) {
+            uint32_t b = ppc_load_u32(ctx, arr + i * 4u);
+            uint32_t st = b ? ppc_load_u32(ctx, b + 0x14u) : 1u;
+            if (st == 0u || st == 2u) fr++;
+        }
+        g_ark_freeseq[g_ark_freeseq_n++] = (uint8_t)fr;
+    }
+    if (g_ark_burst_n > 0u && g_ark_blklist && g_ark_cyc_n < 16u) {
+        uint32_t prev = g_ark_burst[g_ark_burst_n - 1u];
+        uint32_t now = (uint32_t)(ticks_ns / 1000ull);
+        if (now - prev > 20000u) {          /* a stall just ended */
+            uint32_t cnt = ppc_load_u32(ctx, g_ark_blklist + 0x08u);
+            uint32_t arr = ppc_load_u32(ctx, g_ark_blklist + 0x14u);
+            uint32_t i, fr = 0;
+            for (i = 0; i < cnt && i < 16u && arr; i++) {
+                uint32_t b = ppc_load_u32(ctx, arr + i * 4u);
+                uint32_t st = b ? ppc_load_u32(ctx, b + 0x14u) : 1u;
+                if (st == 0u || st == 2u) fr++;
+            }
+            g_ark_cyc[g_ark_cyc_n][0] = g_ark_burst_n;   /* read index */
+            g_ark_cyc[g_ark_cyc_n][1] = fr;              /* free blocks */
+            g_ark_cyc_n++;
+        }
+    }
     if (g_ark_burst_n >= 256u) return;
     g_ark_burst[g_ark_burst_n++] = (uint32_t)(ticks_ns / 1000ull);  /* us */
 }
@@ -776,35 +873,199 @@ static inline void ark_reltime_note(unsigned long long ticks_ns) {
     g_ark_reltime[g_ark_reltime_n++] = (uint32_t)(ticks_ns / 1000ull);  /* us */
 }
 
-/* FSTIME: when each SD read starts and finishes, on the reads' own clock.
+/* TAILFIX: let the final partial chunk start on one free block.
  *
- * BURST showed the load running in fast clusters of block reads separated by
- * stalls of 25, 86, 271 and 274ms. The first guess was that each stall ended
- * when a block was handed back, but RELTIME killed it: only two of four gaps
- * had a release near them and three releases landed mid-cluster.
+ * startNewTasks at 0x2168e2c refuses to begin anything unless
+ * getNumAvailableBlocks returned 2 or more. A read that spans a block
+ * boundary genuinely needs two, and the engine allocates two a few
+ * instructions later -- so the check is right for the general case.
  *
- * The durations themselves point somewhere far more ordinary. There are 7-8
- * FS async reads a run and 4-6 big gaps, and a quarter of a second is an
- * unremarkable time to pull 128KB off an SD card. If the gaps are simply the
- * card being read, then the clusters are "consume the buffer, wait for the
- * next one" -- normal behaviour, not a defect -- and the run-to-run variance
- * is just card latency deciding how many 128KB reads land before the pool
- * locks up.
+ * It is wrong for the last chunk. At 0x2168e00 the code has already worked
+ * out that this chunk runs past the end of the request and reduced its size
+ * to the remainder, total & 0x7FFF, which is by definition smaller than one
+ * 32KB block and cannot span a boundary. It still demands two.
  *
- * start and end are recorded separately so the read's duration is visible
- * rather than inferred. A gap that brackets a read exactly is the mundane
- * explanation confirmed; a gap with no read inside it is a real stall and
- * stays interesting. Sixteen entries a run. */
+ * Measured 2026-09-20: the stuck request is a single 686,100 byte read that
+ * transfers all but about two kilobytes of itself. Its five child tasks hold
+ * all six blocks, and they are only released once the request completes, so
+ * the tail needs a block that only the tail can free. One free block would
+ * be enough to break it; the check insists on two and there are none.
+ *
+ * So this relaxes exactly that case: a final partial chunk may start with a
+ * single block. Everything else keeps the original requirement.
+ *
+ * Honest about the risk. This edits the engine's own admission control, and
+ * the reason retail does not deadlock here is still unknown -- a larger pool
+ * would explain it, so would freeing blocks per chunk instead of per request.
+ * If either is true this is papering over the real difference. Behind a flag
+ * and counted, so a run says whether it fired and whether it helped.
+ *
+ * DEFAULT 0 SINCE 2026-09-20, AND IT MADE THINGS WORSE. It fired once and
+ * the run reached 291,436 bytes against a floor of 684,652 that had held
+ * across every previous run -- less than half, and well outside the spread
+ * of 684,652 to 1,208,940 seen otherwise.
+ *
+ * So the two-block requirement is load-bearing, not an oversight. Starting
+ * the tail on the last free block leaves nothing for the next chunk that
+ * genuinely can span a boundary, and the deadlock simply happens earlier.
+ * The engine was reserving capacity deliberately and this removed the
+ * reservation. The fix for the tail is to make blocks free up, not to relax
+ * admission control. */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_fst[16][2], g_ark_fst_n = 0;   /* start us, end us */
+volatile uint32_t g_ark_tailfix_enabled = 0, g_ark_tailfix_fired = 0,
+                  g_ark_tailfix_blocked = 0;
 
-static inline void ark_fst_begin(unsigned long long ns) {
-    if (g_ark_fst_n < 16u) g_ark_fst[g_ark_fst_n][0] = (uint32_t)(ns / 1000ull);
+/* avail: what getNumAvailableBlocks returned. size: this chunk's size, which
+ * the caller has already clamped to the remainder when it is the last one.
+ * Returns non-zero when the original bail-out should be skipped. */
+static inline uint32_t ark_tailfix_allow(uint32_t avail, uint32_t size) {
+    if (!g_ark_tailfix_enabled) return 0u;
+    if (size == 0u || size >= 32768u) return 0u;   /* not a tail chunk */
+    if (avail < 1u) { g_ark_tailfix_blocked++; return 0u; }
+    g_ark_tailfix_fired++;
+    return 1u;
 }
-static inline void ark_fst_end(unsigned long long ns) {
-    if (g_ark_fst_n < 16u) { g_ark_fst[g_ark_fst_n][1] = (uint32_t)(ns / 1000ull); g_ark_fst_n++; }
+
+/* POOLSIZE: how many archive blocks the engine is given.
+ *
+ * igArchive's setup calls igArchiveBlockManager::activate(count, 32768, 128)
+ * at 0x2167a50, and the count is a global at &.data+5276 doubled:
+ *
+ *   ctx->r[0] = ppc_load_u32(ctx, 13468);   // the global, reads 3
+ *   ctx->r[4] = ctx->r[0] << 1;             // count = 6
+ *
+ * Six 32KB blocks, and FREESEQ shows why that is the whole problem. The pool
+ * sits at zero for most of the run and refills once per 128KB fetch -- that
+ * is normal. It ends 4,3,2,1,0 and then never refills, because issuing the
+ * next fetch needs a free block while every block is held by a task waiting
+ * for the data that fetch would deliver. Earlier cycles escape only because
+ * some pending tasks happen to be served from the buffer already in memory.
+ *
+ * So the deadlock is a sizing problem, not a logic one, and the count is a
+ * configured number rather than a structural limit. Doubling the global from
+ * 3 to 8 gives 16 blocks for 512KB instead of 192KB.
+ *
+ * As an experiment this is clean: if more blocks removes the deadlock, the
+ * diagnosis is confirmed outright. As a fix it is provisional -- the honest
+ * question is why retail runs on six, and the likely answer is that it does
+ * not, because this global may be read from configuration this port never
+ * applies. Worth finding before this is called a fix rather than a probe.
+ *
+ * DEFAULT 0 SINCE 2026-09-20: TESTED, AND SIZING IS NOT THE CAUSE. With 16
+ * blocks the burst starts with 14 free instead of 4, and the run still lands
+ * inside the usual range. The tail says why. With six blocks it ends
+ * 4,3,2,1,0; with sixteen it ends 14,13,12,...,1,0 -- the same shape,
+ * fifteen consecutive reads each taking one block, not one release between
+ * them.
+ *
+ * The terminal phase is not short of blocks, it is releasing none at all,
+ * and more blocks buys proportionally more reads and nothing else. Both
+ * release paths need a work item whose status is not 1, and the two requests
+ * blocking the end are 8.97MB each with _bytesProcessed at zero -- they never
+ * begin. That is the thing to explain, not the pool. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_poolsize_override = 0u,   /* 0 = leave the game's value */
+                  g_ark_poolsize_orig = 0u, g_ark_poolsize_used = 0u;
+
+static inline uint32_t ark_poolsize(uint32_t orig) {
+    g_ark_poolsize_orig = orig;
+    g_ark_poolsize_used = g_ark_poolsize_override ? g_ark_poolsize_override : orig;
+    return g_ark_poolsize_used;
+}
+
+/* LOOKUP: what igArchive::getFileList is asked for, and what it hands back.
+ *
+ * With _path finally readable at +0x24, two of the first work items name real
+ * files and both come back with size zero:
+ *
+ *   /vol/content/permanent/bootstrap.bld/ENGLISH.pa   size 0
+ *   /vol/content/permanent/bootstrap.bld/level.bld    size 0
+ *
+ * A level file that resolves to nothing would stop a level loading, which is
+ * the symptom. But work items are pooled and reused, so a size read later
+ * describes whichever request now occupies the slot, not the one that was
+ * queued -- that confusion has already produced one wrong reading today.
+ *
+ * So this records the path and the resulting size at the lookup itself, in
+ * order, where the two cannot be mixed up. Sizes arriving non-zero for every
+ * named file means the lookup works and the zeros were slots caught mid-reuse.
+ * A named file resolving to zero means the archive's own table has no entry
+ * for it, and the question becomes whether it is absent from the archive or
+ * the table is being read wrongly -- which the offset in the entry would then
+ * settle. Sixteen entries, once each. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_lk_n = 0, g_ark_lk_sz[16], g_ark_lk_ret[16];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile char g_ark_lk_path[16][56];
+
+static inline void ark_lk_note(const PpcContext *ctx, uint32_t item) {
+    uint32_t i, pp, k;
+    if (g_ark_lk_n >= 16u || !item) return;
+    i = g_ark_lk_n++;
+    g_ark_lk_sz[i] = ppc_load_u32(ctx, item + 0x18u);   /* _size */
+    g_ark_lk_ret[i] = ppc_load_u32(ctx, item + 0x1cu);  /* _bytesProcessed */
+    g_ark_lk_path[i][0] = (char)0;
+    pp = ppc_load_u32(ctx, item + 0x24u);               /* _path */
+    if (!pp) return;
+    for (k = 0; k < 55u; k++) {
+        uint8_t c = ppc_load_u8(ctx, pp + k);
+        if (!c) break;
+        g_ark_lk_path[i][k] = (c >= 32 && c < 127) ? (char)c : '?';
+    }
+    g_ark_lk_path[i][k] = (char)0;
+}
+
+/* SUBMIT: the device call startBlockRead makes, and what it leaves behind.
+ *
+ * SSRING showed the run's last 24 status transitions are all one thing: six
+ * child read items reset to 0 from 0x2168774, over and over. So this is not a
+ * thread parked waiting, it is a retry loop -- startBlockRead reissues the
+ * same six reads endlessly and none of them ever reaches status 2, which is
+ * what 0x2167d44 needs before a chunk is processed and its block released.
+ *
+ * The tail of startBlockRead is:
+ *
+ *   bl setStatus(item, 0)          ; 0x2168770
+ *   r0 = device->vtable[0x164]     ; 0x216877c
+ *   bctrl                          ; 0x216878c -- the actual submission
+ *   blr
+ *
+ * Only about ten of a hundred-odd startBlockRead calls become FS reads; the
+ * rest should be served from the 128KB buffer already in memory. If that
+ * buffer-served path completes synchronously it should leave status 2 by the
+ * time the call returns.
+ *
+ * So: status after the call is the measurement. after2 counting most of the
+ * calls means the synchronous path works and the six stuck ones are a
+ * subset to identify. after0 dominating means the submission returns without
+ * completing anything and the completion never arrives -- the gap being on
+ * our side, in whatever slot 0x164 reaches. target names that function so it
+ * can be read rather than guessed at. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_sub_calls = 0, g_ark_sub_target = 0, g_ark_sub_ret = 0,
+                  g_ark_sub_after[8], g_ark_sub_before[8];
+
+static inline void ark_sub_before(uint32_t target, uint32_t item, const PpcContext *ctx) {
+    uint32_t st = item ? ppc_load_u8(ctx, item + 0x23u) : 0xffu;
+    g_ark_sub_calls++;
+    g_ark_sub_target = target;
+    if (st < 8u) g_ark_sub_before[st]++;
+}
+
+static inline void ark_sub_after(uint32_t item, uint32_t ret, const PpcContext *ctx) {
+    uint32_t st = item ? ppc_load_u8(ctx, item + 0x23u) : 0xffu;
+    g_ark_sub_ret = ret;
+    if (st < 8u) g_ark_sub_after[st]++;
 }
 
 #endif /* ARK_BLOCKPROBE_H */

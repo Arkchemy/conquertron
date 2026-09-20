@@ -1329,6 +1329,22 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_ss_n = 0, g_ark_ss_total = 0,
                   g_ark_ss_item[12], g_ark_ss_val[12], g_ark_ss_lr[12];
+/* An unfiltered ring alongside the filtered list above.
+ *
+ * That list keeps the first four transitions and then only val>2, on the
+ * reasoning that those are the errors. They are not. igCafeStorageDevice
+ * ::exists sets status 4 unconditionally on entry, before doing any work --
+ * `li r4, 4; bl setStatus` at 0x2155664 -- so 4 is a transient "being
+ * checked" marker and the filter throws away every routine transition.
+ *
+ * Those are exactly what is needed now: a task's _readWorkItem sits at status
+ * 0 and never reaches 2, and the question is what the status actually does in
+ * between. Twenty-four entries, most recent wins. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_ssr_item[24], g_ark_ssr_val[24], g_ark_ssr_lr[24],
+                  g_ark_ssr_n = 0;
 
 /* SSHIST: the full status history of each work item, in order.
  *
@@ -1365,6 +1381,9 @@ static inline void ark_setstatus(uint32_t item, uint32_t val, uint32_t lr)
 {
     uint32_t i;
     g_ark_ss_total++;
+    { uint32_t r = g_ark_ssr_n % 24u;
+      g_ark_ssr_item[r] = item; g_ark_ssr_val[r] = val; g_ark_ssr_lr[r] = lr;
+      g_ark_ssr_n++; }
     /* Keep the first few, then only the ones that are actually errors, so a
        flood of routine 1/2 transitions cannot push the interesting write out
        of a ring buffer -- the mistake HEAPSPAN made on 2026-09-05. */
@@ -3099,7 +3118,13 @@ static inline void ark_aw_note(const PpcContext *ctx, uint32_t fwi) {
     g_ark_aw[i][2] = ppc_load_u32(ctx, fwi + 0x18u);
     for (w = 0; w < 8u; w++)
         g_ark_aw_hdr[i][w] = ppc_load_u32(ctx, fwi + w * 4u);
-    pp = ppc_load_u32(ctx, fwi + 4u);
+    /* _path is at +0x24, not +0x04. SSA's own metaobjects.xml gives the
+     * layout: _file 0x08, _buffer 0x0c, _offset 0x10, _size 0x18,
+     * _bytesProcessed 0x1c, _type/_priority/_flags 0x20-0x22, _status
+     * 0x23, _path 0x24. Reading +0x04 is why every work item printed
+     * "<no path>" for two weeks -- it was a flags word, not a pointer,
+     * which AWHDR eventually showed as 0x01c00001 and no string. */
+    pp = ppc_load_u32(ctx, fwi + 0x24u);
     g_ark_aw_pp[i] = pp;
     if (!pp) return;
     for (k = 0; k < 47u; k++) {

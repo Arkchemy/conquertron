@@ -2,7 +2,7 @@
 #define ARKCHEMY_CAFEOS_COREINIT_FS_H
 
 #include <dirent.h>
-#include "ark_blockprobe.h"
+#include "ark_fstime.h"
 #include <stdio.h>
 #include <strings.h>
 #include <unistd.h>
