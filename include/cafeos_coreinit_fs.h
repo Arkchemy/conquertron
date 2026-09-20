@@ -2,6 +2,7 @@
 #define ARKCHEMY_CAFEOS_COREINIT_FS_H
 
 #include <dirent.h>
+#include "ark_blockprobe.h"
 #include <stdio.h>
 #include <strings.h>
 #include <unistd.h>
@@ -935,6 +936,7 @@ static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
     FILE *f = ppc_fs_get_handle(handle);
     int32_t result;
     g_arkchemy_fs_async_read_calls++;
+    ark_fst_begin(ark_now_ns());  /* see FSTIME */
     g_arkchemy_fs_async_read_bytes += size * count;
     g_arkchemy_fs_last_read_handle = handle;
     g_arkchemy_fs_last_read_pos = pos;
@@ -963,6 +965,7 @@ static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
         }
         result = (int32_t)elements_read;
     }
+    ark_fst_end(ark_now_ns());  /* see FSTIME: the read itself is done here */
     g_arkchemy_fs_last_result = result;
     for (int w = 0; w < 4; w++) g_arkchemy_fs_head[w] = ppc_load_u32(ctx, buffer_addr + w * 4);
     if (g_arkchemy_fs_pending_n < ARKCHEMY_FS_ASYNC_QUEUE) {

@@ -35,6 +35,16 @@
  * are distinguishable without another run. */
 
 #include <stdint.h>
+#include <time.h>
+
+/* The probes' own clock. arkchemy_gx2_host_ticks lives in cafeos_gx2.h, which
+ * the FS shim does not include and should not have to; this is the same two
+ * lines and keeps the probe header free-standing. */
+static inline unsigned long long ark_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec;
+}
 
 #ifdef __GNUC__
 __attribute__((weak))
@@ -63,7 +73,7 @@ __attribute__((weak))
 #endif
 /* list->_count as the walk itself read it, so a pool that is not 6 is visible
  * rather than assumed from arithmetic on two other counters. */
-volatile uint32_t g_ark_blkn = 0;
+volatile uint32_t g_ark_blkn = 0, g_ark_blklist = 0;
 
 /* Called once per block per walk, from inside the loop at 0x216e250. */
 /* HOTPROBE: the hooks that run often enough to change what they measure.
@@ -95,12 +105,26 @@ static inline void ark_avh_block(uint32_t idx, uint32_t addr, uint32_t state) {
 /* Called on every exit from the walk, including the early `bgelr` that
  * returns 0 without looping. `calls` is the walk's own call counter, passed in
  * rather than read here so this header does not depend on ppc_runtime.h. */
-static inline void ark_avh_ret(uint32_t ret, uint32_t n, uint32_t calls) {
+/* Runs once per availability walk, not once per block -- about 80,000 times a
+ * run against ark_avh_block's 484,000. Cheap enough to leave on: a histogram
+ * index, two compares and a couple of stores. It is deliberately NOT behind
+ * g_ark_hotprobe, because knowing whether the pool is empty at the stall is
+ * the whole question and this is the cheapest way to ask it.
+ *
+ * `list` is captured so the block array can be walked once at exit from
+ * main.c, instead of hooking the walk and paying per block. One store here
+ * buys the per-block detail BLKSTATE used to cost 484,000 calls for. */
+static inline void ark_avh_ret(uint32_t ret, uint32_t n, uint32_t calls, uint32_t list) {
+    /* Nothing runs here unless the histogram is wanted. The count POOLEXIT
+     * needs is read from the list at exit instead, so this path is a single
+     * compare when gated -- restoring the exact runtime shape of the build
+     * that reached 1,208,940, to find out whether that figure reproduces. */
     if (!g_ark_hotprobe) return;
+    g_ark_blkn = n;
     g_ark_avh[ret < 8u ? ret : 8u]++;
     if (ret) { g_ark_avh_lastnz = calls; if (ret > g_ark_avh_maxret) g_ark_avh_maxret = ret; }
     else g_ark_avh_zero++;
-    g_ark_blkn = n;
+    (void)list;
 }
 
 /* RELGATE: the one branch that decides whether a block goes back to the pool.
@@ -621,7 +645,11 @@ static inline void ark_tl_note(uint32_t task, uint32_t ba, uint32_t bb) {
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
-volatile uint32_t g_ark_relfix_enabled = 1, g_ark_relfix_applied = 0;
+/* OFF for one run: the 60-second baseline is deterministic (684,652 bytes,
+ * 65 reads, 60 tasks -- six runs, identical), so it can finally be used to
+ * A/B this fix instead of guessing from single 120-second runs, which are
+ * not reproducible and never were. */
+volatile uint32_t g_ark_relfix_enabled = 0, g_ark_relfix_applied = 0;
 
 /* ITEMDONE: which work items reach the completion write, and which one waits.
  *
@@ -685,6 +713,98 @@ static inline void ark_id_note(uint32_t item, uint32_t val) {
         if (g_ark_id[i][0] == item) { g_ark_id[i][1] = val; return; }
     if (i >= 16u) { g_ark_id_over++; return; }
     g_ark_id[i][0] = item; g_ark_id[i][1] = val; g_ark_id_n++;
+}
+
+/* BURST: microsecond timing of every block read.
+ *
+ * LOADCURVE showed all archive traffic landing inside one five-second window
+ * at t=40-45s, and the run-to-run variance is the size of that single burst,
+ * not a scatter of late events. The totals observed sit on a lattice -- 65
+ * reads always, then 81, 113 or 177, i.e. extra batches of 16, 32 and 64 --
+ * so something delivers work in doubling groups and stops after a variable
+ * number of them.
+ *
+ * Five second sampling cannot see inside a four second burst. This records
+ * the elapsed microseconds of each startBlockRead, which is ~177 stores a
+ * run at most: cheap enough not to be the thing it measures, unlike the
+ * per-block hook that cost 484,000 calls.
+ *
+ * What the shape will say. Evenly spaced reads that simply stop means the
+ * burst is cut off by something external and the cutoff time is the thing to
+ * explain. Reads in visible clusters with gaps between means the doubling
+ * batches are real events, and the gaps are where to look. A long tail of
+ * slowing reads means it is grinding to a halt rather than being stopped,
+ * which would point back at the block pool draining. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_burst[256], g_ark_burst_n = 0;
+
+static inline void ark_burst_note(unsigned long long ticks_ns) {
+    if (g_ark_burst_n >= 256u) return;
+    g_ark_burst[g_ark_burst_n++] = (uint32_t)(ticks_ns / 1000ull);  /* us */
+}
+
+/* RELTIME: when each block release happens, against when the reads stall.
+ *
+ * BURST showed the load is not one burst but clusters of reads separated by
+ * long stalls -- 24, 333, 196, 85, 25 and 78ms in the run measured. Six gaps
+ * over 20ms, and RELGATE reported released=6 in that same run. Across three
+ * runs, released=5 gave 684,652 bytes and released=6 gave 815,724 and
+ * 946,796.
+ *
+ * The reading that suggests: each stall ends when a block is handed back,
+ * and since the only working release is the blockB path -- which exists only
+ * on spanning reads, which are rare -- progress is quantised by how many of
+ * those happen to occur. When they run out, the load stops for good.
+ *
+ * That is a correlation on three points and one burst trace, so it gets
+ * tested rather than believed. Timestamping the releases puts them on the
+ * same clock as the reads: if each one lands at the end of a stall, the
+ * mechanism is confirmed and the fix is to make single-block tasks release
+ * too. If they land anywhere else, the gaps are caused by something else and
+ * this whole reading is wrong.
+ *
+ * Six entries a run. Free. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_reltime[16], g_ark_reltime_n = 0;
+
+static inline void ark_reltime_note(unsigned long long ticks_ns) {
+    if (g_ark_reltime_n >= 16u) return;
+    g_ark_reltime[g_ark_reltime_n++] = (uint32_t)(ticks_ns / 1000ull);  /* us */
+}
+
+/* FSTIME: when each SD read starts and finishes, on the reads' own clock.
+ *
+ * BURST showed the load running in fast clusters of block reads separated by
+ * stalls of 25, 86, 271 and 274ms. The first guess was that each stall ended
+ * when a block was handed back, but RELTIME killed it: only two of four gaps
+ * had a release near them and three releases landed mid-cluster.
+ *
+ * The durations themselves point somewhere far more ordinary. There are 7-8
+ * FS async reads a run and 4-6 big gaps, and a quarter of a second is an
+ * unremarkable time to pull 128KB off an SD card. If the gaps are simply the
+ * card being read, then the clusters are "consume the buffer, wait for the
+ * next one" -- normal behaviour, not a defect -- and the run-to-run variance
+ * is just card latency deciding how many 128KB reads land before the pool
+ * locks up.
+ *
+ * start and end are recorded separately so the read's duration is visible
+ * rather than inferred. A gap that brackets a read exactly is the mundane
+ * explanation confirmed; a gap with no read inside it is a real stall and
+ * stays interesting. Sixteen entries a run. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_fst[16][2], g_ark_fst_n = 0;   /* start us, end us */
+
+static inline void ark_fst_begin(unsigned long long ns) {
+    if (g_ark_fst_n < 16u) g_ark_fst[g_ark_fst_n][0] = (uint32_t)(ns / 1000ull);
+}
+static inline void ark_fst_end(unsigned long long ns) {
+    if (g_ark_fst_n < 16u) { g_ark_fst[g_ark_fst_n][1] = (uint32_t)(ns / 1000ull); g_ark_fst_n++; }
 }
 
 #endif /* ARK_BLOCKPROBE_H */
