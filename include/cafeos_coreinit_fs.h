@@ -868,6 +868,66 @@ static inline void arkchemy_fs_pump_completions(PpcContext *ctx) {
     g_arkchemy_fs_pumping = 0;
 }
 
+/* Drive the guest's archive system one step, from inside a cooperative wait.
+ *
+ * arkchemy_fs_pump_completions above delivers reads that have already been
+ * queued. That was enough for the deadlock found on 2026-09-12. It is not
+ * enough for the one measured on 2026-09-20, where the queue is empty:
+ *
+ *   igFileContext::blockUntilComplete takes the file context semaphore
+ *     (igCafeSignal-adjacent, count=1 -- confirmed by SEMINIT, so hardware
+ *      serialises it too) via an igScopeLock
+ *     -> igArchive::update(kBlocking)
+ *        -> igVirtualStorageDevice::update -> igPhysicalStorageDevice::update
+ *           -> igCafeSignal::wait() -> OSWaitEvent, parked
+ *
+ * The read that would satisfy that wait was never issued. Issuing it needs
+ * startNewTasks, reached only through igArchive::updateArchiveSystem, reached
+ * only through igFileContext::update -- which cannot run, because it gates on
+ * the very semaphore this thread is holding while it waits. Measured: the
+ * gate failed 15,328 consecutive times and the archive stopped at 684,652
+ * bytes of 16,879,655 for the remaining 855 seconds of a 900 second run.
+ *
+ * Real Cafe OS does not need this: its FS completions arrive on the OS I/O
+ * thread, so a parked game thread is woken from outside. Ours is cooperative,
+ * so a parked thread has to do the work itself -- the same reasoning that put
+ * the completion pump in OSWaitEvent, carried one step further to the call
+ * that creates the work rather than the one that finishes it.
+ *
+ * Calling updateArchiveSystem directly is what makes this safe rather than a
+ * second deadlock. It is a static and does not take the semaphore itself --
+ * its callers do -- and the thread driving it here is the one already holding
+ * that semaphore, so mutual exclusion is preserved exactly as before. The
+ * guard below stops the pump re-entering itself, and r3-r12 plus lr are saved
+ * for the same reason the completion pump saves them: an import that calls
+ * this must not have its own arguments eaten. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_arkchemy_archive_pumps = 0, g_arkchemy_archive_pumping = 0,
+                  g_arkchemy_archive_pump_enabled = 1;
+
+/* igArchive::updateArchiveSystem, 0x2169690. A literal guest address, like the
+ * probe hooks elsewhere in this tree: it is fixed for this binary and the
+ * recompiler emits no symbol the shim could link against. */
+#define ARKCHEMY_ARCHIVE_PUMP_ADDR 0x2169690u
+
+static inline void arkchemy_archive_pump(PpcContext *ctx) {
+    uint32_t saved_r[10];
+    uint32_t saved_lr;
+    int i;
+    if (!g_arkchemy_archive_pump_enabled) return;
+    if (g_arkchemy_archive_pumping) return;
+    g_arkchemy_archive_pumping = 1;
+    for (i = 0; i < 10; i++) saved_r[i] = ctx->r[3 + i];   /* r3..r12 */
+    saved_lr = ctx->lr;
+    g_arkchemy_archive_pumps++;
+    ppc_dispatch(ctx, ARKCHEMY_ARCHIVE_PUMP_ADDR);
+    for (i = 0; i < 10; i++) ctx->r[3 + i] = saved_r[i];
+    ctx->lr = saved_lr;
+    g_arkchemy_archive_pumping = 0;
+}
+
 static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
     uint32_t client = ctx->r[3], block = ctx->r[4];
     uint32_t buffer_addr = ctx->r[5], size = ctx->r[6], count = ctx->r[7], pos = ctx->r[8], handle = ctx->r[9];

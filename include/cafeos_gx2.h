@@ -721,6 +721,60 @@ volatile uint32_t g_ark_tex_from_rt = 0, g_ark_tex_from_guest = 0;
 __attribute__((weak))
 #endif
 volatile uint32_t g_ark_texup[6][9]; /* width, height, flat?, first, other, addr, pitch, mips, tile */
+
+/* COPYSRF: every GX2CopySurface call, src and dst side by side.
+ *
+ * This shim copies guest bytes and nothing else, which is correct for the one
+ * real case it ports (LinearSpecial, a plain CPU copy on hardware too) but is
+ * blind to the case that matters here: a source that is a live render target.
+ * Such a surface's pixels exist only in its deko3d image; its guest bytes were
+ * never written by anything, so the copy faithfully moves zeros into the
+ * destination and the destination is then sampled as a flat black texture.
+ *
+ * `src_rt` is the surface-cache slot the source resolves to, +1, or 0 for a
+ * miss -- nonzero is that exact bug, named. `src_flat` is whether every byte
+ * the copy actually moved matched the first, computed inside the copy loop so
+ * it costs nothing extra. A rejected call moves nothing, and the reject
+ * counters say which scope test turned it away rather than leaving a silent
+ * gap to guess at. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_cpsrf_calls = 0, g_ark_cpsrf_copied = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_cpsrf_rej_level = 0, g_ark_cpsrf_rej_dim = 0,
+                  g_ark_cpsrf_rej_tile = 0, g_ark_cpsrf_rej_fmt = 0,
+                  g_ark_cpsrf_rej_zero = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_cpsrf_n = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_cpsrf[8][12];
+/* 0 src_image, 1 src_w, 2 src_h, 3 src_pitch, 4 dst_image, 5 dst_w, 6 dst_h,
+ * 7 dst_pitch, 8 calls, 9 src_flat?, 10 src_rt slot+1, 11 dst_rt slot+1 */
+
+/* RSLV: GX2ResolveAAColorBuffer, which this file implements as a no-op on the
+ * documented grounds that no multisampled surface can exist to resolve. That
+ * reasoning holds for the AA part and says nothing about the copy part: if the
+ * engine uses this call to move a render target into a sampleable surface,
+ * the no-op leaves the destination holding whatever guest memory already had,
+ * which is zeros. Counting the calls and their addresses costs nothing and is
+ * the difference between COPYSRF returning "no copies happened" and knowing
+ * why. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_rslv_calls = 0, g_ark_rslv_n = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_rslv[4][7];
+/* 0 src_image, 1 src_w, 2 src_h, 3 dst_image, 4 dst_w, 5 dst_h, 6 calls */
 #ifdef __GNUC__
 __attribute__((weak))
 #endif
@@ -4614,8 +4668,11 @@ static inline void ppc_import_gx2_GX2CopySurface(PpcContext *ctx) { ark_gx2_note
     uint32_t src_dim, src_width, src_height, src_format, src_tile_mode, src_pitch, src_image;
     uint32_t dst_dim, dst_width, dst_height, dst_format, dst_tile_mode, dst_pitch, dst_image;
     uint32_t copy_width, copy_height, copy_bytes, row;
+    uint32_t cp_first = 0u, cp_flat = 1u, cp_seen = 0u, cp_i;
+    int cp_src_rt, cp_dst_rt;
 
-    if (src_level != 0u || dst_level != 0u) return; /* real scope: mip level 0 only */
+    g_ark_cpsrf_calls++;
+    if (src_level != 0u || dst_level != 0u) { g_ark_cpsrf_rej_level++; return; } /* real scope: mip level 0 only */
 
     src_dim = ppc_load_u32(ctx, src_addr + ARKCHEMY_GX2_SURFACE_DIM_OFFSET);
     src_width = ppc_load_u32(ctx, src_addr + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
@@ -4633,12 +4690,12 @@ static inline void ppc_import_gx2_GX2CopySurface(PpcContext *ctx) { ark_gx2_note
     dst_pitch = ppc_load_u32(ctx, dst_addr + ARKCHEMY_GX2_SURFACE_PITCH_OFFSET);
     dst_image = ppc_load_u32(ctx, dst_addr + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
 
-    if (src_dim != 1u || dst_dim != 1u) return;                                       /* real scope: DIM_2D only */
-    if (src_tile_mode != 1u && src_tile_mode != 16u) return;                          /* real scope: already-resolved-linear only */
-    if (dst_tile_mode != 1u && dst_tile_mode != 16u) return;
-    if (src_format != 0x1au || dst_format != 0x1au) return;                           /* real scope: same-format RGBA8_UNORM only */
-    if (src_width == 0u || src_height == 0u || src_pitch == 0u) return;
-    if (dst_width == 0u || dst_height == 0u || dst_pitch == 0u) return;
+    if (src_dim != 1u || dst_dim != 1u) { g_ark_cpsrf_rej_dim++; return; }            /* real scope: DIM_2D only */
+    if (src_tile_mode != 1u && src_tile_mode != 16u) { g_ark_cpsrf_rej_tile++; return; } /* real scope: already-resolved-linear only */
+    if (dst_tile_mode != 1u && dst_tile_mode != 16u) { g_ark_cpsrf_rej_tile++; return; }
+    if (src_format != 0x1au || dst_format != 0x1au) { g_ark_cpsrf_rej_fmt++; return; } /* real scope: same-format RGBA8_UNORM only */
+    if (src_width == 0u || src_height == 0u || src_pitch == 0u) { g_ark_cpsrf_rej_zero++; return; }
+    if (dst_width == 0u || dst_height == 0u || dst_pitch == 0u) { g_ark_cpsrf_rej_zero++; return; }
 
     copy_width = (src_width < dst_width) ? src_width : dst_width;
     copy_height = (src_height < dst_height) ? src_height : dst_height;
@@ -4649,8 +4706,42 @@ static inline void ppc_import_gx2_GX2CopySurface(PpcContext *ctx) { ark_gx2_note
         uint32_t dst_off = dst_image + row * dst_pitch * bytes_per_pixel;
         uint32_t i;
         for (i = 0; i < copy_bytes; i++) {
-            ppc_store_u8(ctx, dst_off + i, ppc_load_u8(ctx, src_off + i));
+            uint8_t b = ppc_load_u8(ctx, src_off + i);
+            if (!cp_seen) { cp_first = b; cp_seen = 1u; }
+            else if (b != cp_first) cp_flat = 0u;
+            ppc_store_u8(ctx, dst_off + i, b);
         }
+    }
+
+    /* COPYSRF: record what this copy actually moved, and whether either side
+     * is a live surface-cache entry -- a source that is one names this copy
+     * as reading guest bytes the GPU never wrote.
+     *
+     * flat is a running count, not a flag: "the last copy moved zeros" and
+     * "every copy moved zeros" are different findings and a flag cannot tell
+     * them apart. The RT slots are sticky for the same reason -- a pair that
+     * ever resolved to a live surface stays named. */
+    g_ark_cpsrf_copied++;
+    cp_src_rt = arkchemy_gx2_surface_find(src_image, src_width, src_height, src_pitch);
+    cp_dst_rt = arkchemy_gx2_surface_find(dst_image, dst_width, dst_height, dst_pitch);
+    for (cp_i = 0; cp_i < g_ark_cpsrf_n && cp_i < 8u; cp_i++) {
+        if (g_ark_cpsrf[cp_i][0] == src_image && g_ark_cpsrf[cp_i][4] == dst_image &&
+            g_ark_cpsrf[cp_i][1] == src_width && g_ark_cpsrf[cp_i][5] == dst_width) break;
+    }
+    if (cp_i < 8u) {
+        if (cp_i == g_ark_cpsrf_n) {
+            g_ark_cpsrf[cp_i][0] = src_image; g_ark_cpsrf[cp_i][1] = src_width;
+            g_ark_cpsrf[cp_i][2] = src_height; g_ark_cpsrf[cp_i][3] = src_pitch;
+            g_ark_cpsrf[cp_i][4] = dst_image; g_ark_cpsrf[cp_i][5] = dst_width;
+            g_ark_cpsrf[cp_i][6] = dst_height; g_ark_cpsrf[cp_i][7] = dst_pitch;
+            g_ark_cpsrf[cp_i][8] = 0u; g_ark_cpsrf[cp_i][9] = 0u;
+            g_ark_cpsrf[cp_i][10] = 0u; g_ark_cpsrf[cp_i][11] = 0u;
+            g_ark_cpsrf_n++;
+        }
+        g_ark_cpsrf[cp_i][8]++;
+        if (cp_flat) g_ark_cpsrf[cp_i][9]++;
+        if (cp_src_rt >= 0) g_ark_cpsrf[cp_i][10] = (uint32_t)cp_src_rt + 1u;
+        if (cp_dst_rt >= 0) g_ark_cpsrf[cp_i][11] = (uint32_t)cp_dst_rt + 1u;
     }
 }
 
@@ -4816,7 +4907,35 @@ static inline void ppc_import_gx2_GX2ResolveAAColorBuffer(PpcContext *ctx) { ark
      * real multisampled render target for a real caller to resolve in
      * the first place, there's no real, in-scope input this could ever
      * legitimately act on yet -- a real, honest no-op, not a partial
-     * port of unreachable logic. */
+     * port of unreachable logic.
+     *
+     * Still a no-op; the block below only records what it was handed, so a
+     * run can tell an engine that never calls this apart from one whose
+     * render-target-to-texture move lands here and silently does nothing. */
+    {
+        uint32_t rs_src = ctx->r[3], rs_dst = ctx->r[4], rs_i;
+        uint32_t rs_sw, rs_sh, rs_si, rs_dw, rs_dh, rs_di;
+        g_ark_rslv_calls++;
+        rs_sw = ppc_load_u32(ctx, rs_src + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
+        rs_sh = ppc_load_u32(ctx, rs_src + ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET);
+        rs_si = ppc_load_u32(ctx, rs_src + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
+        rs_dw = ppc_load_u32(ctx, rs_dst + ARKCHEMY_GX2_SURFACE_WIDTH_OFFSET);
+        rs_dh = ppc_load_u32(ctx, rs_dst + ARKCHEMY_GX2_SURFACE_HEIGHT_OFFSET);
+        rs_di = ppc_load_u32(ctx, rs_dst + ARKCHEMY_GX2_SURFACE_IMAGE_OFFSET);
+        for (rs_i = 0; rs_i < g_ark_rslv_n && rs_i < 4u; rs_i++) {
+            if (g_ark_rslv[rs_i][0] == rs_si && g_ark_rslv[rs_i][3] == rs_di) break;
+        }
+        if (rs_i < 4u) {
+            if (rs_i == g_ark_rslv_n) {
+                g_ark_rslv[rs_i][0] = rs_si; g_ark_rslv[rs_i][1] = rs_sw;
+                g_ark_rslv[rs_i][2] = rs_sh; g_ark_rslv[rs_i][3] = rs_di;
+                g_ark_rslv[rs_i][4] = rs_dw; g_ark_rslv[rs_i][5] = rs_dh;
+                g_ark_rslv[rs_i][6] = 0u;
+                g_ark_rslv_n++;
+            }
+            g_ark_rslv[rs_i][6]++;
+        }
+    }
     (void)ctx;
 }
 

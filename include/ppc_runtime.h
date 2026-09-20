@@ -157,6 +157,30 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_aw_n = 0, g_ark_aw[8][3];
 
+/* The path that goes with each of those calls, captured AT THE CALL.
+ *
+ * The block above snapshots offset and size when addWork runs but leaves
+ * _path to be chased at report time, four minutes and 531 calls later, from
+ * a work item the comment above already says is reused. Every slot came back
+ * "<no path>" on 2026-09-19, and that one label covers three different
+ * findings: _path was null, _path was a real pointer to an empty string, or
+ * _path is not at +0x04 at all and the probe has been reading some other
+ * field. Keeping the pointer and the item's first eight words alongside the
+ * bytes makes a wrong offset visible instead of silent -- the same reason
+ * SURFKEYS prints next to TEXUP rather than trusting a match. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_aw_pp[8];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_aw_hdr[8][8];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile char g_ark_aw_path[8][48];
+
 /* decompressBatch checks its decompressor's return against exactly 1 and
  * branches to the failure path otherwise, in which case the block task is
  * never marked complete and the work item's outstanding count never drains
@@ -3058,6 +3082,32 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
 
 static inline uint8_t ppc_load_u8(const PpcContext *ctx, uint32_t addr) {
     return ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
+}
+
+/* Record one igArchive::addWork call. See g_ark_aw_path above for why the
+ * string is taken here and not at report time. Defined after ppc_load_u8
+ * because it needs it. */
+static inline void ark_aw_note(const PpcContext *ctx, uint32_t fwi) {
+    uint32_t i, w, k, pp;
+    if (g_ark_aw_n >= 8u) return;
+    i = g_ark_aw_n++;
+    g_ark_aw[i][0] = fwi;
+    g_ark_aw[i][1] = 0u; g_ark_aw[i][2] = 0u; g_ark_aw_pp[i] = 0u;
+    g_ark_aw_path[i][0] = (char)0;
+    if (!fwi) return;
+    g_ark_aw[i][1] = ppc_load_u32(ctx, fwi + 0x14u);
+    g_ark_aw[i][2] = ppc_load_u32(ctx, fwi + 0x18u);
+    for (w = 0; w < 8u; w++)
+        g_ark_aw_hdr[i][w] = ppc_load_u32(ctx, fwi + w * 4u);
+    pp = ppc_load_u32(ctx, fwi + 4u);
+    g_ark_aw_pp[i] = pp;
+    if (!pp) return;
+    for (k = 0; k < 47u; k++) {
+        uint8_t c = ppc_load_u8(ctx, pp + k);
+        if (!c) break;
+        g_ark_aw_path[i][k] = (c >= 32 && c < 127) ? (char)c : '?';
+    }
+    g_ark_aw_path[i][k] = (char)0;
 }
 
 /* Copy a run of guest bytes out in one go.

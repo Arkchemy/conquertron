@@ -297,6 +297,53 @@ static inline void ppc_import_coreinit_OSResetEvent(PpcContext *ctx) {
  * against the 39 seconds per pump measured before this existed. */
 #define ARKCHEMY_EVENT_PUMP_SLICE_NS 1000000L
 
+/* EVWAKE: bounded spurious wakeup out of OSWaitEvent.
+ *
+ * Measured 2026-09-20 on the event at 0x452d054, which the game thread is
+ * parked on: signaled=0, waiting=1, epoch=1 after 9 OSSignalEvent calls, and
+ * 76,144 wait slices burned. epoch only advances when a signal lands while a
+ * waiter is counted, so epoch=1 says exactly one signal ever did -- and none
+ * at all since this thread parked. Meanwhile IDSITE shows the work item's
+ * status byte was set to 2 by readFromBuffer at 0x2175818, so the condition
+ * the thread wants has been true the whole time. Nothing raises the signal
+ * for that transition and the sleeper never learns.
+ *
+ * Returning spuriously is safe for this caller and that is why it is done
+ * here rather than by inventing a raise. igPhysicalStorageDevice::update
+ * re-reads the status immediately after the wait returns
+ * (0x21755e8: lbz r0, 0x23(r31); cmpwi r0, 1; beq back to the wait), so a
+ * wake with nothing to show for it costs one re-check and nothing else. That
+ * is the ordinary condition-variable contract and this guest code honours it.
+ *
+ * Bounded, not free-running: only after this many 1ms slices, so a waiter
+ * that genuinely has nothing to do still parks instead of spinning.
+ *
+ * The risk, stated plainly: real OSWaitEvent does not return spuriously, so a
+ * caller that does not re-check its predicate would see this as a wait that
+ * ended early. Every caller reached so far does re-check, but that is an
+ * observation about the paths this boot takes, not a guarantee about the
+ * engine. Hence the flag and the counter -- if something downstream starts
+ * behaving oddly, set the count to 0 and it reverts to the old behaviour.
+ *
+ * DEFAULT 0 SINCE 2026-09-20. It rested on a misreading. ITEMDONE reported
+ * seen=1 for the waited item and that was taken as meaning its status was
+ * already satisfied; seen only ever meant the item had been written at
+ * some point. The item had completed once and been reused for a fresh
+ * read, and SPINWAIT2 read status=1 throughout -- so the waiter was
+ * waiting correctly and there was no missed wakeup to rescue.
+ *
+ * Measured with it on: evwake fired 1189 times, parked went 2 -> 1191 and
+ * spin iterations 8 -> 1197, while bytes read, startBlockRead and the six
+ * held blocks did not move at all. Mechanically sound, no effect. Kept in
+ * the tree with its reasoning rather than deleted, because the argument
+ * would hold if a real missed wakeup ever turns up -- but off, because
+ * diverging from real OS semantics is not worth carrying without a
+ * benefit to point at. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_evwake_slices = 0u, g_ark_evwake_fired = 0;
+
 static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
     /* Deliver queued FS completions before parking, for the same liveness
      * reason as OSWaitEventWithTimeout below -- and here it is not a
@@ -361,6 +408,7 @@ static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
          * predicate, so a spurious wake or a missed signal cannot make this
          * return early -- it only costs a wakeup. */
         uint64_t my_epoch = e->epoch;
+        uint32_t my_slices = 0;
         e->waiting_count++;
         g_ark_wev_parked++;
         while (!e->signaled && e->epoch == my_epoch) {
@@ -380,7 +428,19 @@ static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
                  * latched -- either outcome is handled by the re-check. */
                 pthread_mutex_unlock(&e->lock);
                 arkchemy_fs_pump_completions(ctx);
+                /* Nothing queued means nothing will arrive on its own: the
+                 * read this thread is waiting for has not been issued, and
+                 * only the archive pump issues it. See arkchemy_archive_pump
+                 * for why driving it from here is safe. */
+                arkchemy_archive_pump(ctx);
                 pthread_mutex_lock(&e->lock);
+                /* See EVWAKE: the predicate can become true without anyone
+                 * signalling, so give the caller a chance to re-check. */
+                if (g_ark_evwake_slices
+                    && ++my_slices >= g_ark_evwake_slices) {
+                    g_ark_evwake_fired++;
+                    break;
+                }
             }
         }
         e->waiting_count--;
