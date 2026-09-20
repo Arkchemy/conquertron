@@ -66,7 +66,29 @@ __attribute__((weak))
 volatile uint32_t g_ark_blkn = 0;
 
 /* Called once per block per walk, from inside the loop at 0x216e250. */
+/* HOTPROBE: the hooks that run often enough to change what they measure.
+ *
+ * The byte count is deterministic per build and differs between builds --
+ * 684,652, then 1,077,868 with one probe set, then 815,724 with another.
+ * That is not run-to-run variance, it is the instrumentation perturbing a
+ * timing-sensitive race for a six-block pool.
+ *
+ * ark_avh_block is the worst offender by a wide margin: it runs once per
+ * block per availability walk, and the archive pump fix took that walk from
+ * 4,647 calls a run to 80,651 -- about 484,000 hook calls, where before the
+ * fix there were 28,000. The overhead scales up exactly when the fix starts
+ * working, which is the worst possible shape for measuring whether the fix
+ * helps.
+ *
+ * Set to 0 to run the fixes with the hot hooks quiet. The cold probes stay
+ * on; they fire tens of times a run, not hundreds of thousands. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ark_hotprobe = 0u;   /* OFF: measuring the fixes, not the probes */
+
 static inline void ark_avh_block(uint32_t idx, uint32_t addr, uint32_t state) {
+    if (!g_ark_hotprobe) return;
     if (idx < 8u) { g_ark_blkstate[idx] = state; g_ark_blkaddr[idx] = addr; }
 }
 
@@ -74,6 +96,7 @@ static inline void ark_avh_block(uint32_t idx, uint32_t addr, uint32_t state) {
  * returns 0 without looping. `calls` is the walk's own call counter, passed in
  * rather than read here so this header does not depend on ppc_runtime.h. */
 static inline void ark_avh_ret(uint32_t ret, uint32_t n, uint32_t calls) {
+    if (!g_ark_hotprobe) return;
     g_ark_avh[ret < 8u ? ret : 8u]++;
     if (ret) { g_ark_avh_lastnz = calls; if (ret > g_ark_avh_maxret) g_ark_avh_maxret = ret; }
     else g_ark_avh_zero++;
@@ -294,6 +317,7 @@ __attribute__((weak))
 volatile uint32_t g_ark_semsite_n = 0, g_ark_semsite_over = 0;
 
 static inline void ark_sem_note(uint32_t self, uint32_t is_release, uint32_t lr) {
+    if (!g_ark_hotprobe) return;
     uint32_t i;
     for (i = 0; i < g_ark_sem_n && i < 6u; i++)
         if (g_ark_sem[i][0] == self) break;
@@ -464,8 +488,8 @@ __attribute__((weak))
 #endif
 volatile uint32_t g_ark_pd_tgt0 = 0, g_ark_pd_tgt6 = 0;
 
-static inline void ark_pd_in(uint32_t i)  { if (i < 10u) g_ark_pdev[i][0]++; }
-static inline void ark_pd_out(uint32_t i) { if (i < 10u) g_ark_pdev[i][1]++; }
+static inline void ark_pd_in(uint32_t i)  { if (g_ark_hotprobe && i < 10u) g_ark_pdev[i][0]++; }
+static inline void ark_pd_out(uint32_t i) { if (g_ark_hotprobe && i < 10u) g_ark_pdev[i][1]++; }
 
 /* SPINWAIT2: the innermost loop, and what it polls.
  *
