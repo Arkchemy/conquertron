@@ -30,6 +30,13 @@ scrutiny than the translator because they are hand-written and look simple.
 
 - [x] guest thread stacks reserve an EABI linkage area — a missing 16 bytes
       corrupted a heap and stalled boot for four sessions
+- [x] OSEvent AUTO mode wakes exactly one waiter per signal, and a signal
+      landing mid-pump is kept rather than lost (2026-09-24, EVCREDIT;
+      pinned by seven sync_harness cases)
+- [x] the FS completion queue is locked and the pumps claim atomically; the
+      unlocked queue lost and duplicated completions under contention
+      (2026-09-24). Next hardware run should say whether this moves the
+      loading stall -- judge it on `served/back`, not bytes
 - [ ] **audit every shim against real Cafe OS semantics**, especially anything
       that sets up guest register state: thread creation, TLS, callbacks,
       anything that fabricates a stack frame
