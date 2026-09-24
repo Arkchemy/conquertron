@@ -156,6 +156,10 @@ jobs:
           ZIG: /home/runner/devtools/zig/zig
           QEMU_PPC: /usr/bin/qemu-ppc-static
           RECOMP: build/recomp
+          # the recompiled side is built with UBSan and any report is fatal:
+          # undefined behaviour can match the hardware by luck (neg. of
+          # INT_MIN did, until GCC folded it)
+          DIFFTEST_UBSAN: "1"
         run: |
           for seed in 1 2 3; do
             python3 hosttest/difftest/difftest.py --seed "$seed" --programs 60 --inputs 8

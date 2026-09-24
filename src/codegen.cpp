@@ -695,7 +695,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_NEG: {
                 int rD = reg_idx(ppc.operands[0].reg);
                 int rA = reg_idx(ppc.operands[1].reg);
-                out << "  " << reg(rD) << " = (uint32_t)(-(int32_t)" << reg(rA) << ");\n";
+                // Unsigned: -(int32_t)x is signed overflow for INT_MIN, and
+                // GCC used that to fold "neg. of 0x80000000" into CR0=GT --
+                // the hardware says LT. Found by hosttest/difftest.
+                out << "  " << reg(rD) << " = 0u - " << reg(rA) << ";\n";
                 // See PPC_INS_AND/OR/XOR's own comment on ppc.update_cr0.
                 if (ppc.update_cr0) {
                     out << "  ppc_cmpw(ctx, (int32_t)" << reg(rD) << ", 0);\n";

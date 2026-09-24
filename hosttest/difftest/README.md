@@ -26,7 +26,8 @@ cannot see silent bugs.
     RECOMP=build/recomp python3 hosttest/difftest/difftest.py --seed 7 --programs 100 --inputs 8
 
 Needs zig (`ZIG=`, default `~/devtools/zig/zig`) and `qemu-ppc-static`
-(`QEMU_PPC=`). A seed always generates the same programs and inputs, so a
+(`QEMU_PPC=`). Set `DIFFTEST_UBSAN=1` to build the recompiled side with
+UndefinedBehaviorSanitizer, which is how CI runs it. A seed always generates the same programs and inputs, so a
 failure is reproduced by its seed. CI runs seeds 1–3; other seeds are for
 exploring.
 
@@ -46,6 +47,7 @@ instruction, just a wrong value.
 | `fabs`, `fnabs` | `x < 0 ? -x : x` leaves `-0.0` negative and never touches a NaN's sign. Now sign-bit operations. |
 | `fctiwz` | A C `(int32_t)` cast, which is undefined out of range. PowerPC saturates, and NaN gives `0x80000000`; x86 and ARM64 each disagree with that differently. |
 | `stfs` (and `psq_st` of floats) | Rounded like a C `(float)` cast. The architecture truncates the mantissa. |
+| `neg.` | Emitted `-(int32_t)x`, which is signed overflow (undefined behaviour) for `INT_MIN`. GCC used that to fold the CR0 compare to GT where hardware sets LT. Found at seed 25; `DIFFTEST_UBSAN=1` now builds the recompiled side with UndefinedBehaviorSanitizer so undefined behaviour fails even when the value happens to match. CI runs with it on. |
 
 ## Deliberately not compared
 

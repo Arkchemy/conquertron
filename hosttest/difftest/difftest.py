@@ -413,11 +413,19 @@ int main(void) {
 }
 """ % (n, len(inputs), STATE_SIZE, STATE_SIZE))
     h_bin = os.path.join(work, "h")
-    cc = subprocess.run(["gcc", "-O1", "-w", "-I", INCLUDE, gen, h_c, "-o", h_bin, "-lm"],
+    # DIFFTEST_UBSAN=1: build the recompiled side with UndefinedBehaviorSanitizer
+    # and make any report fatal. Undefined behaviour in generated code can
+    # produce the right value by luck and the wrong one after the next
+    # compiler upgrade; `neg.` of INT_MIN was exactly that.
+    ubsan = ["-fsanitize=undefined", "-fno-sanitize-recover=undefined"] if os.environ.get("DIFFTEST_UBSAN") else []
+    cc = subprocess.run(["gcc", "-O1", "-w"] + ubsan + ["-I", INCLUDE, gen, h_c, "-o", h_bin, "-lm"],
                         capture_output=True, text=True)
     if cc.returncode != 0:
         raise RuntimeError("host build failed:\n" + cc.stderr[-3000:])
-    h_out = subprocess.run([h_bin], check=True, capture_output=True, text=True, timeout=300).stdout
+    hr = subprocess.run([h_bin], capture_output=True, text=True, timeout=300)
+    if hr.returncode != 0:
+        raise RuntimeError("recompiled program failed (exit %d):\n%s" % (hr.returncode, hr.stderr[-3000:]))
+    h_out = hr.stdout
     return gt_out.splitlines(), h_out.splitlines(), unhandled
 
 
