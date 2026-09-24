@@ -68,7 +68,14 @@ int main(int argc, char **argv) {
     recomp::find_import_trampolines(img);
     recomp::resolve_data_imports(img);
 
-    if (extern_globals && !img.global_section_base.empty()) {
+    // .text is in global_section_base too -- it keeps its real address
+    // there (see assign_global_addrs) -- but it is code, not data anyone has
+    // to initialize. Counting it made this check refuse every object since
+    // 2026-08-29, which is how verify.sh's multi-object case went red.
+    bool has_own_data = false;
+    for (const auto &kv : img.global_section_base)
+        if (kv.first != ".text") { has_own_data = true; break; }
+    if (extern_globals && has_own_data) {
         std::cerr << "error: --extern-globals was passed, but this object has its own "
                       "global/static data (would never get initialized -- see --help)\n";
         return 1;
