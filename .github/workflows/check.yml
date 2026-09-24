@@ -1,0 +1,149 @@
+# Host-side checks for conquertron: everything that can be proved without a
+# game dump or a Switch.
+#
+#   recompiler  builds recomp and its two verification tools against the
+#               pinned Capstone, with warnings shown
+#   shims       runs hosttest/sync_harness.c -- the real event, mutex,
+#               semaphore and FS-completion shims, not a model of them --
+#               normally and under ThreadSanitizer
+#   verify      blaster's verify.sh: C programs compiled for PowerPC,
+#               recompiled, then built for the host and for ARM64 (run under
+#               QEMU) and compared with a native build of the same source
+#
+# None of this touches the retail RPX, and nothing here is uploaded as an
+# artifact. The Switch build stays on the self-hosted runner in jouster.
+#
+# verify checks out Arkchemy/blaster. That works while blaster is public; if
+# it is made private, add a read-only token as the BLASTER_TOKEN secret.
+name: check
+
+on:
+  push:
+    paths-ignore: ['**.md', 'findings/**', 'docs/**']
+  pull_request:
+    paths-ignore: ['**.md', 'findings/**', 'docs/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CAPSTONE_VERSION: 5.0.3
+  ZIG_VERSION: 0.13.0
+
+jobs:
+  recompiler:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Capstone
+        id: capstone
+        uses: actions/cache@v4
+        with:
+          path: ~/devtools/capstone-install
+          key: capstone-${{ env.CAPSTONE_VERSION }}-ppc-${{ runner.os }}
+
+      - name: Build Capstone ${{ env.CAPSTONE_VERSION }} (PowerPC only)
+        if: steps.capstone.outputs.cache-hit != 'true'
+        run: |
+          git clone -q --depth 1 --branch "$CAPSTONE_VERSION" https://github.com/capstone-engine/capstone.git /tmp/capstone
+          cmake -S /tmp/capstone -B /tmp/capstone/build -DCMAKE_BUILD_TYPE=Release \
+            -DCAPSTONE_ARCHITECTURE_DEFAULT=OFF -DCAPSTONE_PPC_SUPPORT=ON \
+            -DCAPSTONE_BUILD_TESTS=OFF -DCAPSTONE_BUILD_CSTOOL=OFF \
+            -DCMAKE_INSTALL_PREFIX="$HOME/devtools/capstone-install"
+          cmake --build /tmp/capstone/build -j"$(nproc)"
+          cmake --install /tmp/capstone/build
+
+      - name: Build recomp
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCAPSTONE_PREFIX="$HOME/devtools/capstone-install"
+          cmake --build build -j"$(nproc)"
+
+  shims:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Headers compile clean
+        run: |
+          printf '#include "ppc_runtime.h"\n#include "cafeos_coreinit_fs.h"\n#include "cafeos_coreinit_sync.h"\nvoid ppc_dispatch(PpcContext *c, uint32_t a) { (void)c; (void)a; }\n' > /tmp/tu.c
+          for cc in gcc clang; do
+            $cc -std=gnu11 -fsyntax-only -Wall -Wextra -Werror \
+                -Wno-unused-function -Wno-unused-parameter -Wno-unused-variable \
+                -I include /tmp/tu.c
+          done
+
+      - name: sync_harness
+        run: |
+          gcc -O1 -g -w -I include hosttest/sync_harness.c include/cafeos_state.c \
+              -o /tmp/sync_harness -lpthread -lm
+          # several runs: the cases are about races, and one pass proves little
+          for i in 1 2 3 4 5; do timeout 120 /tmp/sync_harness; done
+
+      - name: sync_harness under ThreadSanitizer
+        run: |
+          gcc -O1 -g -w -fsanitize=thread -I include hosttest/sync_harness.c include/cafeos_state.c \
+              -o /tmp/sync_harness_tsan -lpthread -lm
+          # The diagnostic counters (g_ark_sev_*, g_ark_wev_*, g_arkchemy_event_*)
+          # are unlocked on purpose. Anything else racing fails the job.
+          TSAN_OPTIONS="halt_on_error=0 exitcode=0" setarch "$(uname -m)" -R timeout 600 \
+              /tmp/sync_harness_tsan 2> /tmp/tsan.txt
+          # Every report must be on one of those globals: count all reports,
+          # count the allowed ones, and fail on any difference -- a race on
+          # heap or struct memory has no "Location is global" line at all.
+          total=$(grep -c 'SUMMARY: ThreadSanitizer' /tmp/tsan.txt || true)
+          allowed=$(grep 'Location is global' /tmp/tsan.txt \
+                    | grep -cE "'(g_ark_sev_|g_ark_wev_|g_arkchemy_event_|g_case_done|limit)" || true)
+          echo "ThreadSanitizer: $total report(s), $allowed on diagnostic counters"
+          if [ "$total" != "$allowed" ]; then
+            echo "::error::ThreadSanitizer found a race outside the diagnostic counters"
+            cat /tmp/tsan.txt
+            exit 1
+          fi
+
+  verify:
+    runs-on: ubuntu-24.04
+    needs: recompiler
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: conquertron
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Arkchemy/blaster
+          path: blaster
+          token: ${{ secrets.BLASTER_TOKEN || github.token }}
+
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-user-static
+          mkdir -p "$HOME/devtools"
+          curl -sSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" | tar -xJ -C "$HOME/devtools"
+          mv "$HOME/devtools/zig-linux-x86_64-${ZIG_VERSION}" "$HOME/devtools/zig"
+
+      - name: Cache Capstone
+        id: capstone
+        uses: actions/cache@v4
+        with:
+          path: ~/devtools/capstone-install
+          key: capstone-${{ env.CAPSTONE_VERSION }}-ppc-${{ runner.os }}
+
+      - name: Build Capstone ${{ env.CAPSTONE_VERSION }} (PowerPC only)
+        if: steps.capstone.outputs.cache-hit != 'true'
+        run: |
+          git clone -q --depth 1 --branch "$CAPSTONE_VERSION" https://github.com/capstone-engine/capstone.git /tmp/capstone
+          cmake -S /tmp/capstone -B /tmp/capstone/build -DCMAKE_BUILD_TYPE=Release \
+            -DCAPSTONE_ARCHITECTURE_DEFAULT=OFF -DCAPSTONE_PPC_SUPPORT=ON \
+            -DCAPSTONE_BUILD_TESTS=OFF -DCAPSTONE_BUILD_CSTOOL=OFF \
+            -DCMAKE_INSTALL_PREFIX="$HOME/devtools/capstone-install"
+          cmake --build /tmp/capstone/build -j"$(nproc)"
+          cmake --install /tmp/capstone/build
+
+      - name: verify.sh
+        env:
+          CONQUERTRON: ${{ github.workspace }}/conquertron
+          QEMU_AARCH64: /usr/bin/qemu-aarch64-static
+        run: sh blaster/verify.sh
