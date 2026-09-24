@@ -13,8 +13,9 @@
 # None of this touches the retail RPX, and nothing here is uploaded as an
 # artifact. The Switch build stays on the self-hosted runner in jouster.
 #
-# verify checks out Arkchemy/blaster. That works while blaster is public; if
-# it is made private, add a read-only token as the BLASTER_TOKEN secret.
+# verify checks out Arkchemy/blaster -- its branch of the same name when one
+# exists, main otherwise. That works while blaster is public; if it is made
+# private, add a read-only token as the BLASTER_TOKEN secret.
 name: check
 
 on:
@@ -102,6 +103,64 @@ jobs:
             exit 1
           fi
 
+      - name: Floating-point runtime helpers
+        run: |
+          for opt in -O0 -O2; do
+            gcc $opt -w -I include hosttest/fp_runtime_test.c -o /tmp/fp_runtime_test -lm
+            /tmp/fp_runtime_test
+          done
+
+  difftest:
+    # Random PowerPC instruction sequences, run under qemu-ppc and through
+    # recomp, every register, CR bit, carry and scratch byte compared. Fixed
+    # seeds, so a failure here always reproduces with the same command
+    # locally; explore new seeds by hand (see hosttest/difftest/README.md).
+    runs-on: ubuntu-24.04
+    needs: recompiler
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-user-static
+          mkdir -p "$HOME/devtools"
+          curl -sSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" | tar -xJ -C "$HOME/devtools"
+          mv "$HOME/devtools/zig-linux-x86_64-${ZIG_VERSION}" "$HOME/devtools/zig"
+
+      - name: Cache Capstone
+        id: capstone
+        uses: actions/cache@v4
+        with:
+          path: ~/devtools/capstone-install
+          key: capstone-${{ env.CAPSTONE_VERSION }}-ppc-${{ runner.os }}
+
+      - name: Build Capstone ${{ env.CAPSTONE_VERSION }} (PowerPC only)
+        if: steps.capstone.outputs.cache-hit != 'true'
+        run: |
+          git clone -q --depth 1 --branch "$CAPSTONE_VERSION" https://github.com/capstone-engine/capstone.git /tmp/capstone
+          cmake -S /tmp/capstone -B /tmp/capstone/build -DCMAKE_BUILD_TYPE=Release \
+            -DCAPSTONE_ARCHITECTURE_DEFAULT=OFF -DCAPSTONE_PPC_SUPPORT=ON \
+            -DCAPSTONE_BUILD_TESTS=OFF -DCAPSTONE_BUILD_CSTOOL=OFF \
+            -DCMAKE_INSTALL_PREFIX="$HOME/devtools/capstone-install"
+          cmake --build /tmp/capstone/build -j"$(nproc)"
+          cmake --install /tmp/capstone/build
+
+      - name: Build recomp
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCAPSTONE_PREFIX="$HOME/devtools/capstone-install"
+          cmake --build build -j"$(nproc)"
+
+      - name: difftest
+        env:
+          ZIG: /home/runner/devtools/zig/zig
+          QEMU_PPC: /usr/bin/qemu-ppc-static
+          RECOMP: build/recomp
+        run: |
+          for seed in 1 2 3; do
+            python3 hosttest/difftest/difftest.py --seed "$seed" --programs 60 --inputs 8
+          done
+
   verify:
     runs-on: ubuntu-24.04
     needs: recompiler
@@ -110,11 +169,19 @@ jobs:
         with:
           path: conquertron
 
-      - uses: actions/checkout@v4
-        with:
-          repository: Arkchemy/blaster
-          path: blaster
-          token: ${{ secrets.BLASTER_TOKEN || github.token }}
+      # blaster's branch of the same name if there is one, else main: a change
+      # that needs both repos (a runtime fix and the test that pins it) is
+      # tested as a pair before either merges.
+      - name: Check out blaster
+        env:
+          TOKEN: ${{ secrets.BLASTER_TOKEN || github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          git clone -q "https://x-access-token:${TOKEN}@github.com/Arkchemy/blaster.git" blaster
+          if git -C blaster ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            git -C blaster checkout -q "$BRANCH"
+          fi
+          echo "blaster at $(git -C blaster rev-parse --abbrev-ref HEAD) $(git -C blaster rev-parse --short HEAD)"
 
       - name: Tools
         run: |

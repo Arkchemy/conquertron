@@ -313,6 +313,13 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
         out << "  /* " << std::hex << insn.address << std::dec << ": " << insn.mnemonic << " " << insn.op_str
             << " */\n";
 
+        // Each instruction is emitted into its own buffer first, so the
+        // record-form backstop below can see what its case produced. The
+        // local `out` deliberately shadows the function's: every case
+        // below writes to the buffer without being touched.
+        std::ostringstream insn_buf;
+        {
+        std::ostream &out = insn_buf;
         switch (insn.id) {
             case PPC_INS_STWU: {
                 // See the LWZU/LBZU/STBU comment above (this instruction
@@ -1146,9 +1153,17 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     case PPC_INS_BEQ: cond = eq; break;
                     case PPC_INS_BNE: cond = "!" + eq; break;
                     case PPC_INS_BLT: cond = lt; break;
-                    case PPC_INS_BLE: cond = "(" + lt + " || " + eq + ")"; break;
+                    // ble and bge are "branch if GT clear" and "branch if LT
+                    // clear" -- that is their encoding (BO=4 on the GT or LT
+                    // bit). They used to be built as LT||EQ and GT||EQ, which
+                    // agrees after an integer compare (exactly one bit set)
+                    // but not after fcmpu with a NaN, where LT, GT and EQ
+                    // are all clear: the hardware takes bge and ble, the old
+                    // expressions took neither. So `!(a < b)` on a NaN went
+                    // the other way. Found by hosttest/difftest, 2026-09-24.
+                    case PPC_INS_BLE: cond = "!" + gt; break;
                     case PPC_INS_BGT: cond = gt; break;
-                    case PPC_INS_BGE: cond = "(" + gt + " || " + eq + ")"; break;
+                    case PPC_INS_BGE: cond = "!" + lt; break;
                     default: break;
                 }
                 emit_conditional_branch(out, cond, target, img, func, insn, addr_to_name, unhandled);
@@ -1208,9 +1223,17 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     case PPC_INS_BEQLR: cond = eq; break;
                     case PPC_INS_BNELR: cond = "!" + eq; break;
                     case PPC_INS_BLTLR: cond = lt; break;
-                    case PPC_INS_BLELR: cond = "(" + lt + " || " + eq + ")"; break;
+                    // ble and bge are "branch if GT clear" and "branch if LT
+                    // clear" -- that is their encoding (BO=4 on the GT or LT
+                    // bit). They used to be built as LT||EQ and GT||EQ, which
+                    // agrees after an integer compare (exactly one bit set)
+                    // but not after fcmpu with a NaN, where LT, GT and EQ
+                    // are all clear: the hardware takes bge and ble, the old
+                    // expressions took neither. So `!(a < b)` on a NaN went
+                    // the other way. Found by hosttest/difftest, 2026-09-24.
+                    case PPC_INS_BLELR: cond = "!" + gt; break;
                     case PPC_INS_BGTLR: cond = gt; break;
-                    case PPC_INS_BGELR: cond = "(" + gt + " || " + eq + ")"; break;
+                    case PPC_INS_BGELR: cond = "!" + lt; break;
                     default: break;
                 }
                 out << "  if (" << cond << ") return;\n";
@@ -1487,9 +1510,11 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                char op = insn.id == PPC_INS_FMADD ? '+' : '-';
-                out << "  " << freg(fD) << " = " << freg(fA) << " * " << freg(fC) << " " << op << " " << freg(fB)
-                    << ";\n";
+                // Fused: one rounding, as the hardware does. a*c+b in C
+                // rounds twice (and whether the compiler contracts it
+                // into an FMA anyway depends on the host and the flags).
+                std::string b = insn.id == PPC_INS_FMADD ? freg(fB) : ("-" + freg(fB));
+                out << "  " << freg(fD) << " = fma(" << freg(fA) << ", " << freg(fC) << ", " << b << ");\n";
                 break;
             }
             case PPC_INS_STFS: {
@@ -1561,7 +1586,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                out << "  " << freg(fD) << " = ppc_frsp(" << freg(fA) << " * " << freg(fC) << " + " << freg(fB)
+                out << "  " << freg(fD) << " = ppc_fmadds(" << freg(fA) << ", " << freg(fC) << ", " << freg(fB)
                     << ");\n";
                 break;
             }
@@ -1571,7 +1596,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                out << "  " << freg(fD) << " = ppc_frsp(" << freg(fA) << " * " << freg(fC) << " - " << freg(fB)
+                out << "  " << freg(fD) << " = ppc_fmadds(" << freg(fA) << ", " << freg(fC) << ", -" << freg(fB)
                     << ");\n";
                 break;
             }
@@ -1844,7 +1869,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                out << "  " << freg(fD) << " = ppc_frsp(" << freg(fB) << " - " << freg(fA) << " * " << freg(fC)
+                out << "  " << freg(fD) << " = -ppc_fmadds(" << freg(fA) << ", " << freg(fC) << ", -" << freg(fB)
                     << ");\n";
                 break;
             }
@@ -1891,11 +1916,12 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             }
             case PPC_INS_CRSET: {
                 // Sets a single CR bit to 1 -- the set counterpart to
-                // crclr. Only CR0's LT/GT/EQ are tracked (see crclr).
-                unsigned int r = ppc.operands[0].reg;
-                if (r == PPC_REG_CR0LT) out << "  ctx->cr0_lt = 1;\n";
-                else if (r == PPC_REG_CR0GT) out << "  ctx->cr0_gt = 1;\n";
-                else if (r == PPC_REG_CR0EQ) out << "  ctx->cr0_eq = 1;\n";
+                // crclr, and like it covers LT/GT/EQ in all eight fields
+                // (cr_bit_expr). It used to handle CR0 only, so `crset 26`
+                // (CR6[EQ]) silently did nothing; hosttest/difftest caught
+                // it against qemu-ppc, 2026-09-24.
+                std::string bit = cr_bit_expr(ppc.operands[0].reg);
+                if (!bit.empty()) out << "  " << bit << " = 1;\n";
                 else out << "  /* crset on an untracked CR bit -- no-op */\n";
                 break;
             }
@@ -2076,13 +2102,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                out << "  " << freg(fD) << " = " << freg(fB) << " - " << freg(fA) << " * " << freg(fC) << ";\n";
+                // -(a*c - b), fused, negated last: b - a*c differs in the
+                // sign of an exact-zero result.
+                out << "  " << freg(fD) << " = -fma(" << freg(fA) << ", " << freg(fC) << ", -" << freg(fB) << ");\n";
                 break;
             }
             case PPC_INS_FNABS: {
                 int fD = freg_idx(ppc.operands[0].reg);
                 int fB = freg_idx(ppc.operands[1].reg);
-                out << "  " << freg(fD) << " = -ppc_fabs(" << freg(fB) << ");\n";
+                out << "  " << freg(fD) << " = ppc_fnabs(" << freg(fB) << ");\n";
                 break;
             }
             case PPC_INS_ORC: {
@@ -2383,6 +2411,27 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 unhandled.push_back(insn.mnemonic);
                 break;
             }
+        }
+        }
+
+        // Record-form backstop. An integer instruction with the Rc bit set
+        // ("add.", "mr.", "slwi.") must also compare its result with zero
+        // into CR0. Each case is meant to do that itself, and 28 do -- but
+        // ten did not (addc, subfc, subfze, mr, slwi, srwi, rotlw, rotlwi,
+        // mulhw, mulhwu), found 2026-09-24 by hosttest/difftest against
+        // qemu-ppc. and./or./xor. missing it is what once sent a real game
+        // function into an infinite loop (see PPC_INS_AND), so rather than
+        // trust every future case to remember, anything with update_cr0
+        // whose destination is a GPR and whose code never touched CR0 gets
+        // the compare here. FP record forms (fadd. and friends) set CR1
+        // from the FPSCR instead, and are not this.
+        std::string code = insn_buf.str();
+        out << code;
+        if (ppc.update_cr0 && ppc.op_count >= 1 && ppc.operands[0].type == PPC_OP_REG &&
+            ppc.operands[0].reg >= PPC_REG_R0 && ppc.operands[0].reg <= PPC_REG_R31 &&
+            code.find("ppc_cmp") == std::string::npos && code.find("cr0_") == std::string::npos &&
+            code.find("#error") == std::string::npos) {
+            out << "  ppc_cmpw(ctx, (int32_t)" << reg(reg_idx(ppc.operands[0].reg)) << ", 0);\n";
         }
     }
 

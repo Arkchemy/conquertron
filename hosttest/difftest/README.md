@@ -1,0 +1,66 @@
+# difftest
+
+Differential fuzzing of the recompiler against a real PowerPC.
+
+Random sequences of PowerPC instructions are assembled twice: into a PowerPC
+Linux program run under `qemu-ppc`, and into an object that goes through
+`recomp`, is compiled for the host and run natively. After each sequence,
+every piece of state it can touch is compared:
+
+- r4 to r11
+- the LT, GT and EQ bits of all eight CR fields
+- XER[CA]
+- f1 to f6
+- 64 bytes of scratch memory
+
+A mismatch is shrunk to the fewest instructions that still reproduce it and
+printed with its inputs.
+
+This is ROADMAP.md's "differential execution", at the instruction level. It
+exists because every recompiler bug found so far was silent, and coverage
+cannot see silent bugs.
+
+## Running
+
+    cmake --build build
+    RECOMP=build/recomp python3 hosttest/difftest/difftest.py --seed 7 --programs 100 --inputs 8
+
+Needs zig (`ZIG=`, default `~/devtools/zig/zig`) and `qemu-ppc-static`
+(`QEMU_PPC=`). A seed always generates the same programs and inputs, so a
+failure is reproduced by its seed. CI runs seeds 1–3; other seeds are for
+exploring.
+
+## What it found on its first day (2026-09-24)
+
+All fixed in the same change. Each one was silent: no crash, no unhandled
+instruction, just a wrong value.
+
+| Instruction | What was wrong |
+| --- | --- |
+| `ble`, `bge`, `blelr`, `bgelr` | Evaluated as LT‖EQ and GT‖EQ instead of "not GT" and "not LT". The two agree after an integer compare, but not after `fcmpu` with a NaN, where the hardware takes both branches. `!(a < b)` on a NaN went the other way. |
+| `mulhw.`, `mulhwu.`, `addc.`, `subfc.`, `subfze.`, `mr.`, `slwi.`, `srwi.`, `rotlw.`, `rotlwi.` | Record forms that never updated CR0: ten instructions. `or.` missing it once hung a real game function (see PPC_INS_AND in codegen.cpp). There is now a backstop after the per-instruction switch, so a future case cannot forget. |
+| `crset` | Only handled CR0. `crset 26` (CR6[EQ]) did nothing. |
+| `fmadd`, `fmsub`, `fnmsub` | Rounded twice, `a*c+b` in C, instead of fused. Off by an ulp. |
+| `fnmsub`, `fnmsubs` | `b - a*c` instead of `-(a*c - b)`, which gets the sign of an exact zero wrong. |
+| `fmadds`, `fmsubs`, `fnmsubs` | fma-then-frsp rounds twice and can break a single-precision tie the wrong way. Now exact for single-precision operands (see `ppc_fmadds`). |
+| `fabs`, `fnabs` | `x < 0 ? -x : x` leaves `-0.0` negative and never touches a NaN's sign. Now sign-bit operations. |
+| `fctiwz` | A C `(int32_t)` cast, which is undefined out of range. PowerPC saturates, and NaN gives `0x80000000`; x86 and ARM64 each disagree with that differently. |
+| `stfs` (and `psq_st` of floats) | Rounded like a C `(float)` cast. The architecture truncates the mantissa. |
+
+## Deliberately not compared
+
+Each of these is either undefined in the architecture or outside what the
+recompiler models, and each is written down where it is excluded:
+
+- **CR bit 3 of each field.** This is SO for integer compares and FU (unordered) for `fcmpu`. Nothing the recompiler supports can set XER[SO], and `bun`/`bnu`, the only branches that read FU, are not in its instruction set.
+- **The upper word of an FPR after `fctiwz`.** It is undefined; qemu sign-extends and the recompiler leaves 0. The stored integer is compared.
+- **NaN sign and payload.** An invalid operation's default NaN is positive on PowerPC and ARM64 (the Switch) and negative on x86, where this runs.
+- **Single-precision add, subtract, multiply and divide with double-precision operands.** They round twice. Compiled code feeds these instructions single-precision values, and for those the double intermediate is provably enough, so the fuzzer does the same.
+- **Division by zero and `INT_MIN / -1`.** Their results are undefined; divisors are forced odd, and positive for `divw`.
+
+## Not covered yet
+
+- **Paired singles.** qemu does not implement them. LLVM #211463 will let them be assembled; a reference would still be needed.
+- **`lmw`/`stmw`**, which touch r31.
+- **Anything reading or writing r3**, which holds the state pointer.
+- **Indirect branches.**

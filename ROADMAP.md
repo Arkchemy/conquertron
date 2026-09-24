@@ -16,9 +16,19 @@ testing and careful reading can.
       `srawi`'s carry (which `addze` consumes), `slw`/`srw`'s 6-bit shift rule
       where the result is 0 for 32–63, wrapping `rlwinm` masks where MB > ME,
       `lwzu`'s base-register update.
-- [ ] **Differential execution.** Run a recompiled unit on the host and compare
-      against the same code under an emulator, instruction for instruction, on
-      the same inputs.
+- [x] **Differential execution, instruction level** (2026-09-24).
+      `hosttest/difftest` runs random instruction sequences under qemu-ppc
+      and through recomp and compares all state. On its first day it found
+      and this change fixed: ble/bge evaluated wrongly after a NaN compare,
+      ten record forms that never set CR0, crset on any field but CR0, the
+      fused multiply-add family rounding twice, fabs/fnabs on -0.0 and NaN,
+      fctiwz out of range, and stfs rounding where it should truncate. CI
+      runs three fixed seeds. See hosttest/difftest/README.md for what is
+      deliberately not compared and what is not covered yet.
+- [ ] **Differential execution, whole functions.** Run a recompiled unit on
+      the host and compare against the same code under an emulator, on the
+      same inputs -- the instruction-level fuzzer does not reach calls,
+      indirect branches or the runtime's memory model.
 - [ ] **A regression corpus.** Captured input traces replayed on every change.
       `hosttest/tlsf_replay.c` is the model: 804 real allocator calls, replayed
       in under a second, catching any divergence.

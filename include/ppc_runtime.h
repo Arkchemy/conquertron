@@ -3541,11 +3541,39 @@ static inline float ppc_load_f32(const PpcContext *ctx, uint32_t addr) {
     return v;
 }
 
+/* stfs does NOT round. The architecture's store-single conversion
+ * (PowerPC Book I, "Floating-Point Store Instructions") takes bits straight
+ * out of the double: for anything in single range it is sign, the top
+ * exponent bit, and the next 30 bits -- the low mantissa bits are dropped,
+ * not rounded. Values below single's normal range are denormalized by
+ * shifting. The operand is normally the result of a single-precision op or
+ * frsp, where the two agree; they differ for a double that was never
+ * rounded, e.g. stfs straight after fmul. This used a C (float) cast, which
+ * rounds, until hosttest/difftest caught 2147483647.5 storing as 0x4f000000
+ * where hardware stores 0x4effffff (2026-09-24). */
+static inline uint32_t ppc_double_to_single_bits(double val) {
+    uint64_t d;
+    memcpy(&d, &val, sizeof d);
+    uint32_t exp = (uint32_t)(d >> 52) & 0x7ffu;
+    if (exp > 896u || (d & 0x7fffffffffffffffull) == 0) {
+        /* normal single range, infinities, NaNs, and zero: pure bit select */
+        return (uint32_t)(((d >> 32) & 0xc0000000u) | ((d >> 29) & 0x3fffffffu));
+    }
+    if (exp >= 874u) {
+        /* denormalized in single: shift the mantissa, implicit bit made explicit */
+        uint32_t sign = (uint32_t)(d >> 32) & 0x80000000u;
+        uint64_t frac = (d & 0x000fffffffffffffull) | 0x0010000000000000ull;
+        uint32_t shift = 897u - exp;                  /* 1..23 */
+        return sign | (uint32_t)((frac >> 29) >> shift);
+    }
+    /* too small even for a single denormal: the architecture leaves this
+     * undefined; zero with the sign kept is what the bit selection above
+     * would converge on */
+    return (uint32_t)(d >> 32) & 0x80000000u;
+}
+
 static inline void ppc_store_f32(PpcContext *ctx, uint32_t addr, double val) {
-    float v = (float)val; /* narrow: stfs always stores the single-precision rounding */
-    uint32_t bits;
-    memcpy(&bits, &v, sizeof(bits));
-    ppc_store_u32(ctx, addr, bits);
+    ppc_store_u32(ctx, addr, ppc_double_to_single_bits(val));
 }
 
 static inline double ppc_load_f64(const PpcContext *ctx, uint32_t addr) {
@@ -3572,8 +3600,20 @@ static inline void ppc_store_f64(PpcContext *ctx, uint32_t addr, double val) {
  * code reads.
  */
 static inline double ppc_fctiwz(double val) {
-    int32_t truncated = (int32_t)val;
-    uint64_t bits = (uint64_t)(uint32_t)truncated;
+    /* PowerPC saturates: at or above 2^31 gives 0x7fffffff, below -2^31
+     * (and NaN) gives 0x80000000. A C (int32_t) cast of an out-of-range
+     * value is undefined, and hosts disagree -- x86 returns 0x80000000 for
+     * everything out of range, ARM64 (the Switch) returns 0 for NaN -- so
+     * the range is checked first. Fixed 2026-09-24, found by
+     * hosttest/difftest. The upper word of the FPR is undefined in the
+     * architecture and is left 0, as before; game code reads the low word
+     * (stfiwx, or stfd then lwz of +4) and nothing else. */
+    int32_t r;
+    if (val != val) r = (int32_t)0x80000000u;
+    else if (val >= 2147483648.0) r = 0x7fffffff;
+    else if (val <= -2147483649.0) r = (int32_t)0x80000000u;
+    else r = (int32_t)val;                       /* truncates toward zero */
+    uint64_t bits = (uint64_t)(uint32_t)r;
     double result;
     memcpy(&result, &bits, sizeof(result));
     return result;
@@ -3612,7 +3652,15 @@ static inline void ppc_fcmpu_cr(PpcContext *ctx, int cr, double a, double b) {
 
 /* fabs fD, fB: absolute value, done branchlessly here to avoid pulling in
  * <math.h> for something this simple. */
-static inline double ppc_fabs(double val) { return val < 0.0 ? -val : val; }
+/* fabs/fnabs only touch the sign bit -- of zeros and NaNs too. The old
+ * `val < 0.0 ? -val : val` left -0.0 negative and never touched a NaN's
+ * sign; hosttest/difftest caught it, 2026-09-24. */
+static inline double ppc_fabs(double val) {
+    uint64_t b; memcpy(&b, &val, sizeof b); b &= 0x7fffffffffffffffull; memcpy(&val, &b, sizeof b); return val;
+}
+static inline double ppc_fnabs(double val) {
+    uint64_t b; memcpy(&b, &val, sizeof b); b |= 0x8000000000000000ull; memcpy(&val, &b, sizeof b); return val;
+}
 
 /* ---- Real GQR-quantized paired-single load/store -----------------------
  *
@@ -3862,6 +3910,39 @@ static inline double ppc_frsqrte(double val) { return 1.0 / sqrt(val); }
  * (fadds/fsubs/fmuls/fdivs/fmadds/...), which compute as double but store
  * a single-rounded result back into the (still 64-bit) FPR. */
 static inline double ppc_frsp(double val) { return (double)(float)val; }
+
+/* fmadds/fmsubs/fnmsubs: the exact a*c+b, rounded ONCE to single.
+ *
+ * fma() then frsp rounds twice -- to double, then to single -- and when the
+ * double lands exactly halfway between two singles the second rounding
+ * breaks the tie the wrong way. hosttest/difftest found it against qemu-ppc
+ * (2026-09-24): one single-precision ulp, in results the engine's physics
+ * and animation code produces constantly.
+ *
+ * When a, c and b are all single-precision values -- which is what compiled
+ * code feeds these instructions, from lfs and other single ops -- the
+ * product is exact in a double (24 x 24 bits < 53), and TwoSum gives the sum
+ * exactly as s + e. If s sits on a single-precision tie and e is not zero,
+ * nudging s one double ulp toward e makes the final rounding go the way the
+ * exact value does. The check is a mask compare, so the common path is one
+ * multiply, a few adds and a branch.
+ *
+ * Operands that are not single-precision values fall back to fma(), which
+ * is right except on that rare tie. */
+static inline double ppc_fmadds(double a, double c, double b) {
+    if (a == (double)(float)a && c == (double)(float)c && b == (double)(float)b) {
+        double p = a * c;                      /* exact */
+        double s = p + b;
+        double bv = s - p;
+        double e = (p - (s - bv)) + (b - bv);  /* TwoSum: p + b == s + e */
+        uint64_t bits;
+        memcpy(&bits, &s, sizeof bits);
+        if (e != 0.0 && (bits & 0x1fffffffull) == 0x10000000ull)
+            s = nextafter(s, e > 0.0 ? INFINITY : -INFINITY);
+        return (double)(float)s;
+    }
+    return (double)(float)fma(a, c, b);
+}
 
 /*
  * ppc_dispatch: recomp emits a real definition of this once per compiled
