@@ -716,8 +716,26 @@ static inline void ppc_import_coreinit_OSWaitSemaphore(PpcContext *ctx) {
     ArkchemySemEntry *s = arkchemy_sem_get(ctx->r[3], 0);
     int32_t prev;
     pthread_mutex_lock(&s->lock);
+    /* Waits in 1ms slices and pumps FS completions between them, for the
+     * reason OSWaitEvent does: pumping is cooperative here, so a thread that
+     * parks for good cannot deliver the completion that would release it,
+     * and nothing guarantees another thread will. Added 2026-09-24 with the
+     * sync_harness case that deadlocked without it. The contract is
+     * unchanged -- this returns only once it has taken a count. Only the
+     * completion pump, not the archive pump: that one is a workaround for a
+     * specific wait, and does not belong on every semaphore. */
     while (s->count <= 0) {
-        pthread_cond_wait(&s->cond, &s->lock);
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_nsec += ARKCHEMY_EVENT_PUMP_SLICE_NS;
+        if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec += 1; deadline.tv_nsec -= 1000000000L; }
+        if (pthread_cond_timedwait(&s->cond, &s->lock, &deadline) == ETIMEDOUT) {
+            /* the callback may signal this very semaphore; s->lock is not
+             * recursive, so it must not be held across the pump */
+            pthread_mutex_unlock(&s->lock);
+            arkchemy_fs_pump_completions(ctx);
+            pthread_mutex_lock(&s->lock);
+        }
     }
     prev = s->count;
     s->count = prev - 1;

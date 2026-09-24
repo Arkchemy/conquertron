@@ -611,6 +611,53 @@ static void case_queue_delivers_each_completion_once(void)
     pass();
 }
 
+/* ---- a semaphore waiter must pump too --------------------------------------
+ *
+ * OSWaitSemaphore used to pump once on entry and then park on the condvar
+ * for good. That is the same starvation OSWaitEvent was cured of on
+ * 2026-09-12: if the release it waits for comes from a completion queued
+ * AFTER it parked, and no other thread happens to pump, nothing delivers it.
+ * The loading path takes a count-1 semaphore (SEMINIT, 0x4503598), so this
+ * is not a hypothetical shape. */
+
+#define SEM_A 0x5000u
+
+static void completion_signals_semaphore(PpcContext *ctx, uint32_t addr)
+{
+    (void)addr;
+    uint32_t saved = ctx->r[3];
+    ctx->r[3] = SEM_A;
+    ppc_import_coreinit_OSSignalSemaphore(ctx);
+    ctx->r[3] = saved;
+}
+
+static void *late_semaphore_completion(void *arg)
+{
+    (void)arg;
+    sleep_ms(100);
+    g_on_dispatch = completion_signals_semaphore;
+    arkchemy_fs_enqueue(0x8000u, 0, 0, 1);
+    return NULL;
+}
+
+static void case_semaphore_waiter_pumps_its_own_rescue(void)
+{
+    begin("OSWaitSemaphore pumps the completion that releases it", 5.0);
+    PpcContext *c = make_ctx();
+    ppc_store_u32(c, 0x8000u + 0, 0xdead0000u);
+    c->r[3] = SEM_A; c->r[4] = 0;
+    ppc_import_coreinit_OSInitSemaphore(c);
+    pthread_t th;
+    pthread_create(&th, NULL, late_semaphore_completion, NULL);
+    c->r[3] = SEM_A;
+    ppc_import_coreinit_OSWaitSemaphore(c);
+    pthread_join(th, NULL);
+    expect(c->r[3] == 1, "OSWaitSemaphore did not return the previous count");
+    g_on_dispatch = NULL;
+    free(c);
+    pass();
+}
+
 int main(void)
 {
     printf("sync harness -- the real shims, no Switch\n\n");
@@ -630,6 +677,7 @@ int main(void)
     case_reset_forgets_a_latched_signal();
     case_reinit_releases_waiters();
     case_queue_delivers_each_completion_once();
+    case_semaphore_waiter_pumps_its_own_rescue();
     printf("\nOSSignalEvent enter=%u entry=%u lock=%u exit=%u\n",
            g_ark_sev_enter, g_ark_sev_got_entry, g_ark_sev_got_lock, g_ark_sev_exit);
     printf("OSWaitEvent   enter=%u entry=%u lock=%u parked=%u slices=%u exit=%u\n",
