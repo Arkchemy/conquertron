@@ -2119,6 +2119,121 @@ typedef struct PpcContext {
     uint8_t  reserve_valid;
 } PpcContext;
 
+/* --- setjmp/longjmp, done on the host ------------------------------------
+ *
+ * The game's setjmp and longjmp are ordinary PowerPC in the binary, and
+ * recompiling them does not work. A recompiled longjmp restores guest
+ * registers and then "returns" through whatever host C frames happen to be
+ * live -- it cannot unwind the host call stack the recompiled code runs on,
+ * so execution carries on in the function that called longjmp, with a stack
+ * pointer from somewhere else. (ROADMAP.md; XMLREAD's note in this file.)
+ *
+ * So codegen recognises calls to them (see setjmp_names/longjmp_names in
+ * codegen.cpp) and does both halves here, the approach XenonRecomp uses for
+ * the Xbox 360:
+ *
+ *   setjmp   the recompiled guest setjmp still runs, so the guest jmp_buf is
+ *            written exactly as before. Then the guest register file is
+ *            saved to a host-side slot keyed by the jmp_buf's guest address,
+ *            and the HOST setjmp is called -- inline, in the caller's own C
+ *            function, which is why this is a macro: a host setjmp inside a
+ *            helper would be dead the moment the helper returned.
+ *   longjmp  never runs the recompiled body. Looks up the slot, and host
+ *            longjmps to it; the setjmp site restores the guest registers
+ *            and hands back the value (0 becomes 1, as C requires).
+ *
+ * The register file is the leading part of PpcContext up to `tb`: GPRs,
+ * FPRs and their paired-single lanes, LR, CTR, CR, GQRs and XER[CA]. The
+ * time base is left alone, and any lwarx reservation is dropped, as a
+ * context switch would.
+ *
+ * Limits, stated: a longjmp to a buffer this never saw a setjmp for aborts
+ * loudly rather than guessing; setjmp reached by an indirect call (bctrl)
+ * is not intercepted; and as in C, longjmp to a frame that has already
+ * returned is undefined. Pinned by blaster's verify.sh setjmp pipeline. */
+#include <setjmp.h>
+#include <stddef.h>
+#include <stdio.h>
+
+#define PPC_JMP_SLOTS 64
+typedef struct {
+    uint32_t guest_buf;     /* 0 = free */
+    uint32_t val;           /* what setjmp returns after the longjmp */
+    jmp_buf host;
+    unsigned char regs[offsetof(PpcContext, tb)];
+} PpcJmpSlot;
+
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+PpcJmpSlot g_ppc_jmp_slots[PPC_JMP_SLOTS];
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile int g_ppc_jmp_lock = 0;
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+volatile uint32_t g_ppc_setjmps = 0, g_ppc_longjmps = 0, g_ppc_jmp_exhausted = 0;
+
+/* The slot for a guest jmp_buf; with `create`, claim one if there is none.
+ * A spinlock, not a pthread mutex: this header deliberately needs nothing
+ * beyond the C library, and the critical section is a 64-entry scan. */
+static inline PpcJmpSlot *ppc_jmp_slot(uint32_t guest_buf, int create) {
+    PpcJmpSlot *hit = NULL, *free_slot = NULL;
+    int i;
+    while (__atomic_exchange_n(&g_ppc_jmp_lock, 1, __ATOMIC_ACQUIRE)) { }
+    for (i = 0; i < PPC_JMP_SLOTS; i++) {
+        if (g_ppc_jmp_slots[i].guest_buf == guest_buf) { hit = &g_ppc_jmp_slots[i]; break; }
+        if (!free_slot && g_ppc_jmp_slots[i].guest_buf == 0) free_slot = &g_ppc_jmp_slots[i];
+    }
+    if (!hit && create && guest_buf) {
+        if (free_slot) { free_slot->guest_buf = guest_buf; hit = free_slot; }
+        else g_ppc_jmp_exhausted++;
+    }
+    __atomic_store_n(&g_ppc_jmp_lock, 0, __ATOMIC_RELEASE);
+    return hit;
+}
+
+static inline void ppc_jmp_save(const PpcContext *ctx, PpcJmpSlot *s) {
+    memcpy(s->regs, ctx, sizeof s->regs);
+}
+
+static inline void ppc_jmp_restore(PpcContext *ctx, PpcJmpSlot *s) {
+    memcpy(ctx, s->regs, sizeof s->regs);
+    ctx->reserve_valid = 0;
+    ctx->r[3] = s->val;
+}
+
+/* At a call to the guest's setjmp. `guest_call` is the ordinary call
+ * statement for the recompiled setjmp. The slot pointer is volatile so it
+ * is still valid when the host setjmp returns a second time. */
+#define PPC_HOST_SETJMP(ctx, guest_call) do {                                 \
+    PpcJmpSlot *volatile ppc_sj_slot_ = ppc_jmp_slot((ctx)->r[3], 1);        \
+    guest_call;                                                               \
+    if (ppc_sj_slot_) {                                                       \
+        g_ppc_setjmps++;                                                      \
+        ppc_jmp_save((ctx), ppc_sj_slot_);                                    \
+        if (setjmp(ppc_sj_slot_->host) != 0)                                  \
+            ppc_jmp_restore((ctx), ppc_sj_slot_);                             \
+        else                                                                  \
+            (ctx)->r[3] = 0;                                                  \
+    }                                                                         \
+} while (0)
+
+/* At a call to the guest's longjmp(jmp_buf env, int val). Does not return. */
+static inline void ppc_host_longjmp(PpcContext *ctx) {
+    PpcJmpSlot *s = ppc_jmp_slot(ctx->r[3], 0);
+    if (!s) {
+        fprintf(stderr, "ppc_host_longjmp: no setjmp was recorded for jmp_buf 0x%08x "
+                        "(lr=0x%08x) -- refusing to guess where to go\n", ctx->r[3], ctx->lr);
+        abort();
+    }
+    g_ppc_longjmps++;
+    s->val = ctx->r[4] ? ctx->r[4] : 1u;
+    longjmp(s->host, 1);
+}
+
 /* Real, found-the-hard-way sizing: the previous 4MB was "an arbitrary,
  * generous, documented placeholder, not a claim this matches real Wii U
  * game scale" -- turned out to be a real, severe bug once actually

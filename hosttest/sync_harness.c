@@ -24,6 +24,7 @@
  */
 
 #include <pthread.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -97,11 +98,12 @@ static void begin(const char *name, double limit_s)
     pthread_t th;
     pthread_create(&th, NULL, watchdog, &limit);
     pthread_detach(th);
-    printf("  %-52s", name);
+    printf("  %-60s", name);
     fflush(stdout);
 }
 
-static void pass(void) { g_case_done = 1; printf("ok\n"); }
+static int g_case_failed;
+static void pass(void) { g_case_done = 1; printf(g_case_failed ? "FAILED\n" : "ok\n"); g_case_failed = 0; }
 
 /* ---- the event under test --------------------------------------------- */
 
@@ -129,11 +131,7 @@ static void queue_one_completion(PpcContext *ctx, uint32_t event_addr)
     ppc_store_u32(ctx, ad + 0, 0xdead0000u);
     ppc_store_u32(ctx, ad + 4, 0u);
     ppc_store_u32(ctx, ad + 8, 0u);
-    if (g_arkchemy_fs_pending_n < ARKCHEMY_FS_ASYNC_QUEUE) {
-        ArkchemyFsPending *q = &g_arkchemy_fs_pending[g_arkchemy_fs_pending_n++];
-        q->async_data = ad; q->client = 0; q->block = 0; q->status = 1;
-        g_arkchemy_fs_queued++;
-    }
+    arkchemy_fs_enqueue(ad, 0, 0, 1);
 }
 
 /* ---- cases ------------------------------------------------------------- */
@@ -291,6 +289,375 @@ static void case_wait_with_timeout_keeps_its_timeout(void)
     free(ctx);
 }
 
+
+/* ---- AUTO / MANUAL semantics ---------------------------------------------
+ *
+ * What Cafe OS guarantees, and what the loading stall depends on:
+ *
+ *   AUTO    OSSignalEvent wakes exactly ONE queued waiter. With nobody
+ *           queued it latches, and the next waiter consumes the latch.
+ *           OSSignalEventAll wakes every queued waiter and latches nothing.
+ *   MANUAL  a signal releases everyone and stays set until OSResetEvent.
+ *
+ * Before 2026-09-24 the shim broke the AUTO rule twice over. A signal bumped
+ * one per-event epoch that every parked waiter was comparing against, so one
+ * signal released ALL of them. And a second signal arriving before the
+ * first woken waiter had run found waiting_count still non-zero, bumped the
+ * epoch again and latched nothing -- so it was lost.
+ *
+ * These cases fail on that code and pass on the credit scheme. Each uses its
+ * own event address so a failure cannot leak into the next case. */
+
+static int g_semantic_failures;
+
+static void expect(int ok, const char *what)
+{
+    if (!ok) { g_semantic_failures++; g_case_failed = 1; fprintf(stderr, "\n      * %s ", what); }
+}
+
+static void sleep_ms(long ms)
+{
+    struct timespec t = { ms / 1000, (ms % 1000) * 1000000L };
+    nanosleep(&t, NULL);
+}
+
+static int waiting_on(uint32_t addr)
+{
+    ArkchemyEventEntry *e = arkchemy_event_get(addr, 0, 1);
+    pthread_mutex_lock(&e->lock);
+    int n = e->waiting_count;
+    pthread_mutex_unlock(&e->lock);
+    return n;
+}
+
+static void wait_until_waiting(uint32_t addr, int n)
+{
+    for (int i = 0; i < 400 && waiting_on(addr) < n; i++) sleep_ms(5);
+}
+
+static void init_event(uint32_t addr, int value, int mode)
+{
+    PpcContext *c = make_ctx();
+    c->r[3] = addr; c->r[4] = (uint32_t)value; c->r[5] = (uint32_t)mode;
+    ppc_import_coreinit_OSInitEvent(c);
+    free(c);
+}
+
+static void signal_event(uint32_t addr)
+{
+    PpcContext *c = make_ctx();
+    c->r[3] = addr;
+    ppc_import_coreinit_OSSignalEvent(c);
+    free(c);
+}
+
+static void signal_event_all(uint32_t addr)
+{
+    PpcContext *c = make_ctx();
+    c->r[3] = addr;
+    ppc_import_coreinit_OSSignalEventAll(c);
+    free(c);
+}
+
+static void reset_event(uint32_t addr)
+{
+    PpcContext *c = make_ctx();
+    c->r[3] = addr;
+    ppc_import_coreinit_OSResetEvent(c);
+    free(c);
+}
+
+/* A timed wait from the calling thread; returns the shim's BOOL. Timeout in
+ * milliseconds, converted to the 62.15625 MHz timer the shim expects. */
+static int timed_wait(uint32_t addr, long ms)
+{
+    PpcContext *c = make_ctx();
+    int64_t ticks = (int64_t)ms * (ARKCHEMY_ESPRESSO_TIMER_CLOCK / 1000);
+    c->r[3] = addr;
+    c->r[5] = (uint32_t)((uint64_t)ticks >> 32);
+    c->r[6] = (uint32_t)ticks;
+    ppc_import_coreinit_OSWaitEventWithTimeout(c);
+    int r = (int)c->r[3];
+    free(c);
+    return r;
+}
+
+typedef struct { uint32_t addr; long timeout_ms; volatile int done; volatile int result; } Waiter;
+
+static void *untimed_waiter(void *arg)
+{
+    Waiter *w = arg;
+    PpcContext *c = make_ctx();
+    c->r[3] = w->addr;
+    ppc_import_coreinit_OSWaitEvent(c);
+    free(c);
+    w->result = 1;
+    __atomic_store_n(&w->done, 1, __ATOMIC_SEQ_CST);
+    return NULL;
+}
+
+static void *timed_waiter(void *arg)
+{
+    Waiter *w = arg;
+    w->result = timed_wait(w->addr, w->timeout_ms);
+    __atomic_store_n(&w->done, 1, __ATOMIC_SEQ_CST);
+    return NULL;
+}
+
+static int count_done(Waiter *w, int n)
+{
+    int k = 0;
+    for (int i = 0; i < n; i++) k += __atomic_load_n(&w[i].done, __ATOMIC_SEQ_CST);
+    return k;
+}
+
+#define EV_AUTO_ONE   0x3000u
+#define EV_AUTO_TWICE 0x3100u
+#define EV_AUTO_TIMED 0x3200u
+#define EV_MANUAL     0x3300u
+#define EV_AUTO_ALL   0x3400u
+#define EV_RESET      0x3500u
+#define EV_REINIT     0x3600u
+
+/* The stall's own shape: two threads parked on one AUTO event, one signal. */
+static void case_auto_signal_wakes_exactly_one(void)
+{
+    begin("AUTO: one signal wakes exactly one of two waiters", 10.0);
+    init_event(EV_AUTO_ONE, 0, 1);
+    Waiter w[2] = {{EV_AUTO_ONE}, {EV_AUTO_ONE}};
+    pthread_t th[2];
+    for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, untimed_waiter, &w[i]);
+    wait_until_waiting(EV_AUTO_ONE, 2);
+    signal_event(EV_AUTO_ONE);
+    sleep_ms(150);
+    expect(count_done(w, 2) == 1, "one signal released both waiters (or neither)");
+    signal_event(EV_AUTO_ONE);                /* releases the other */
+    for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
+    pass();
+}
+
+/* Two signals before the woken waiter has run: the first wakes it, the
+ * second must latch rather than vanish. */
+static void case_auto_second_signal_latches(void)
+{
+    begin("AUTO: a second signal while the first is in flight latches", 10.0);
+    init_event(EV_AUTO_TWICE, 0, 1);
+    Waiter w = {EV_AUTO_TWICE};
+    pthread_t th;
+    pthread_create(&th, NULL, untimed_waiter, &w);
+    wait_until_waiting(EV_AUTO_TWICE, 1);
+    signal_event(EV_AUTO_TWICE);
+    signal_event(EV_AUTO_TWICE);
+    pthread_join(th, NULL);
+    expect(timed_wait(EV_AUTO_TWICE, 50) == 1, "the second signal was lost");
+    expect(timed_wait(EV_AUTO_TWICE, 50) == 0, "the latch was consumed twice");
+    pass();
+}
+
+/* The timeout variant, which the job-queue workers park in: one signal must
+ * return TRUE to exactly one of them, and the other must time out FALSE. */
+static void case_auto_timed_waiters_one_true(void)
+{
+    begin("AUTO timed: one signal, one TRUE and one FALSE", 10.0);
+    init_event(EV_AUTO_TIMED, 0, 1);
+    Waiter w[2] = {{EV_AUTO_TIMED, 400}, {EV_AUTO_TIMED, 400}};
+    pthread_t th[2];
+    for (int i = 0; i < 2; i++) pthread_create(&th[i], NULL, timed_waiter, &w[i]);
+    wait_until_waiting(EV_AUTO_TIMED, 2);
+    signal_event(EV_AUTO_TIMED);
+    for (int i = 0; i < 2; i++) pthread_join(th[i], NULL);
+    expect(w[0].result + w[1].result == 1, "both or neither reported being signalled");
+    expect(waiting_on(EV_AUTO_TIMED) == 0, "a timed-out waiter was left counted");
+    pass();
+}
+
+static void case_manual_releases_all_and_stays_set(void)
+{
+    begin("MANUAL: releases every waiter and stays set", 10.0);
+    init_event(EV_MANUAL, 0, 0);
+    Waiter w[3] = {{EV_MANUAL}, {EV_MANUAL}, {EV_MANUAL}};
+    pthread_t th[3];
+    for (int i = 0; i < 3; i++) pthread_create(&th[i], NULL, untimed_waiter, &w[i]);
+    wait_until_waiting(EV_MANUAL, 3);
+    signal_event(EV_MANUAL);
+    for (int i = 0; i < 3; i++) pthread_join(th[i], NULL);
+    expect(timed_wait(EV_MANUAL, 50) == 1, "MANUAL did not stay set");
+    expect(timed_wait(EV_MANUAL, 50) == 1, "MANUAL was consumed like AUTO");
+    reset_event(EV_MANUAL);
+    expect(timed_wait(EV_MANUAL, 50) == 0, "OSResetEvent did not clear MANUAL");
+    pass();
+}
+
+static void case_auto_signal_all_wakes_all_latches_nothing(void)
+{
+    begin("AUTO: SignalEventAll wakes all, latches nothing", 10.0);
+    init_event(EV_AUTO_ALL, 0, 1);
+    Waiter w[3] = {{EV_AUTO_ALL}, {EV_AUTO_ALL}, {EV_AUTO_ALL}};
+    pthread_t th[3];
+    for (int i = 0; i < 3; i++) pthread_create(&th[i], NULL, untimed_waiter, &w[i]);
+    wait_until_waiting(EV_AUTO_ALL, 3);
+    signal_event_all(EV_AUTO_ALL);
+    for (int i = 0; i < 3; i++) pthread_join(th[i], NULL);
+    expect(timed_wait(EV_AUTO_ALL, 50) == 0, "SignalEventAll with waiters left a latch");
+    pass();
+}
+
+static void case_reset_forgets_a_latched_signal(void)
+{
+    begin("OSResetEvent forgets a latched AUTO signal", 10.0);
+    init_event(EV_RESET, 0, 1);
+    signal_event(EV_RESET);                   /* nobody waiting: latches */
+    reset_event(EV_RESET);
+    expect(timed_wait(EV_RESET, 50) == 0, "a reset latch still woke a waiter");
+    pass();
+}
+
+/* Re-initialising an event with a waiter parked on it is undefined on real
+ * hardware, but must not wedge the shim: the waiter is released, and the
+ * event behaves as freshly initialised afterwards. */
+static void case_reinit_releases_waiters(void)
+{
+    begin("OSInitEvent on a live event releases its waiters", 10.0);
+    init_event(EV_REINIT, 0, 1);
+    Waiter w = {EV_REINIT};
+    pthread_t th;
+    pthread_create(&th, NULL, untimed_waiter, &w);
+    wait_until_waiting(EV_REINIT, 1);
+    init_event(EV_REINIT, 0, 1);
+    pthread_join(th, NULL);
+    expect(waiting_on(EV_REINIT) == 0, "re-init left a waiter counted");
+    expect(timed_wait(EV_REINIT, 50) == 0, "re-init left the event signalled");
+    pass();
+}
+
+/* ---- the completion queue under contention ---------------------------------
+ *
+ * The FS completion queue is written by the thread that issues a read and
+ * drained by whichever thread next pumps -- the game thread, a job-queue
+ * worker in OSWaitEventWithTimeout, an FMOD thread in OSLockMutex. Until
+ * 2026-09-24 it had no lock, and the pump's re-entrancy flag was a plain int
+ * two threads could both see clear. A completion taken twice, or shifted out
+ * from under a concurrent enqueue, is a read whose callback never runs: its
+ * work item never reaches status 2 and its block is never released.
+ *
+ * This hammers the queue from several producers and several pumpers and
+ * counts every delivery by id. Each completion must arrive exactly once. */
+
+#define STRESS_PRODUCERS 4
+#define STRESS_PER_PRODUCER 4000
+#define STRESS_PUMPERS 4
+#define STRESS_TOTAL (STRESS_PRODUCERS * STRESS_PER_PRODUCER)
+
+static volatile uint32_t g_stress_seen[STRESS_TOTAL];
+static volatile int g_stress_stop;
+
+/* The id rides in `client`; the callback records it. */
+static void count_delivery(PpcContext *ctx, uint32_t addr)
+{
+    (void)addr;
+    uint32_t id = ctx->r[3];
+    if (id < STRESS_TOTAL) __atomic_add_fetch(&g_stress_seen[id], 1, __ATOMIC_SEQ_CST);
+}
+
+static void *stress_producer(void *arg)
+{
+    uint32_t base = (uint32_t)(uintptr_t)arg * STRESS_PER_PRODUCER;
+    for (uint32_t i = 0; i < STRESS_PER_PRODUCER; i++) {
+        /* a full queue is back-pressure, not loss: retry until it takes */
+        while (!arkchemy_fs_enqueue(0x8000u, base + i, 0, 1)) sched_yield();
+    }
+    return NULL;
+}
+
+static void *stress_pumper(void *arg)
+{
+    PpcContext *c = make_ctx();
+    (void)arg;
+    while (!__atomic_load_n(&g_stress_stop, __ATOMIC_SEQ_CST)) arkchemy_fs_pump_completions(c);
+    arkchemy_fs_pump_completions(c);
+    free(c);
+    return NULL;
+}
+
+static void case_queue_delivers_each_completion_once(void)
+{
+    begin("FS queue: every completion delivered exactly once", 30.0);
+    PpcContext *c = make_ctx();
+    ppc_store_u32(c, 0x8000u + 0, 0xdead0000u);   /* non-zero callback */
+    ppc_store_u32(c, 0x8000u + 4, 0u);
+    free(c);
+    g_on_dispatch = count_delivery;
+    g_stress_stop = 0;
+    pthread_t prod[STRESS_PRODUCERS], pump[STRESS_PUMPERS];
+    for (int i = 0; i < STRESS_PUMPERS; i++) pthread_create(&pump[i], NULL, stress_pumper, NULL);
+    for (int i = 0; i < STRESS_PRODUCERS; i++) pthread_create(&prod[i], NULL, stress_producer, (void *)(uintptr_t)i);
+    for (int i = 0; i < STRESS_PRODUCERS; i++) pthread_join(prod[i], NULL);
+    __atomic_store_n(&g_stress_stop, 1, __ATOMIC_SEQ_CST);
+    for (int i = 0; i < STRESS_PUMPERS; i++) pthread_join(pump[i], NULL);
+    PpcContext *d = make_ctx();
+    arkchemy_fs_pump_completions(d);             /* anything left behind */
+    free(d);
+    int lost = 0, doubled = 0;
+    for (int i = 0; i < STRESS_TOTAL; i++) {
+        if (g_stress_seen[i] == 0) lost++;
+        if (g_stress_seen[i] > 1) doubled++;
+    }
+    if (lost || doubled) {
+        char msg[128];
+        snprintf(msg, sizeof msg, "%d of %d lost, %d delivered more than once", lost, STRESS_TOTAL, doubled);
+        expect(0, msg);
+    }
+    g_on_dispatch = NULL;
+    pass();
+}
+
+/* ---- a semaphore waiter must pump too --------------------------------------
+ *
+ * OSWaitSemaphore used to pump once on entry and then park on the condvar
+ * for good. That is the same starvation OSWaitEvent was cured of on
+ * 2026-09-12: if the release it waits for comes from a completion queued
+ * AFTER it parked, and no other thread happens to pump, nothing delivers it.
+ * The loading path takes a count-1 semaphore (SEMINIT, 0x4503598), so this
+ * is not a hypothetical shape. */
+
+#define SEM_A 0x5000u
+
+static void completion_signals_semaphore(PpcContext *ctx, uint32_t addr)
+{
+    (void)addr;
+    uint32_t saved = ctx->r[3];
+    ctx->r[3] = SEM_A;
+    ppc_import_coreinit_OSSignalSemaphore(ctx);
+    ctx->r[3] = saved;
+}
+
+static void *late_semaphore_completion(void *arg)
+{
+    (void)arg;
+    sleep_ms(100);
+    g_on_dispatch = completion_signals_semaphore;
+    arkchemy_fs_enqueue(0x8000u, 0, 0, 1);
+    return NULL;
+}
+
+static void case_semaphore_waiter_pumps_its_own_rescue(void)
+{
+    begin("OSWaitSemaphore pumps the completion that releases it", 5.0);
+    PpcContext *c = make_ctx();
+    ppc_store_u32(c, 0x8000u + 0, 0xdead0000u);
+    c->r[3] = SEM_A; c->r[4] = 0;
+    ppc_import_coreinit_OSInitSemaphore(c);
+    pthread_t th;
+    pthread_create(&th, NULL, late_semaphore_completion, NULL);
+    c->r[3] = SEM_A;
+    ppc_import_coreinit_OSWaitSemaphore(c);
+    pthread_join(th, NULL);
+    expect(c->r[3] == 1, "OSWaitSemaphore did not return the previous count");
+    g_on_dispatch = NULL;
+    free(c);
+    pass();
+}
+
 int main(void)
 {
     printf("sync harness -- the real shims, no Switch\n\n");
@@ -301,6 +668,16 @@ int main(void)
     case_wait_for_already_queued_completion();
     case_signal_from_another_thread_wakes_waiter();
     case_waiter_pumps_its_own_rescue();
+    printf("\n");
+    case_auto_signal_wakes_exactly_one();
+    case_auto_second_signal_latches();
+    case_auto_timed_waiters_one_true();
+    case_manual_releases_all_and_stays_set();
+    case_auto_signal_all_wakes_all_latches_nothing();
+    case_reset_forgets_a_latched_signal();
+    case_reinit_releases_waiters();
+    case_queue_delivers_each_completion_once();
+    case_semaphore_waiter_pumps_its_own_rescue();
     printf("\nOSSignalEvent enter=%u entry=%u lock=%u exit=%u\n",
            g_ark_sev_enter, g_ark_sev_got_entry, g_ark_sev_got_lock, g_ark_sev_exit);
     printf("OSWaitEvent   enter=%u entry=%u lock=%u parked=%u slices=%u exit=%u\n",
@@ -308,6 +685,10 @@ int main(void)
            g_ark_wev_parked, g_ark_wev_slices, g_ark_wev_exit);
     printf("fs pump       queued=%u delivered=%u pending=%u\n",
            g_arkchemy_fs_queued, g_arkchemy_fs_delivered, g_arkchemy_fs_pending_n);
+    if (g_semantic_failures) {
+        printf("\n%d semantic check(s) FAILED\n", g_semantic_failures);
+        return 1;
+    }
     printf("\nall cases completed\n");
     return 0;
 }

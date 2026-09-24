@@ -106,7 +106,7 @@ pthread_mutex_t g_arkchemy_sem_table_lock = PTHREAD_MUTEX_INITIALIZER;
  * on purpose, and counted so the wrongness is visible -- see
  * arkchemy_mutex_get in cafeos_coreinit_sync.h. */
 pthread_mutex_t g_arkchemy_mutex_fallback = PTHREAD_MUTEX_INITIALIZER;
-ArkchemyEventEntry g_arkchemy_event_fallback = { 0, 1, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0, 1, 0, 0 };
+ArkchemyEventEntry g_arkchemy_event_fallback = { 0, 1, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0, 1, 0, 0, 0, 0 };
 ArkchemySemEntry g_arkchemy_sem_fallback = { 0, 1, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0 };
 
 unsigned g_arkchemy_sync_used[3];

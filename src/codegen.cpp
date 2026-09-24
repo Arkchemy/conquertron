@@ -143,6 +143,25 @@ bool is_synthetic_addr_lo_reloc(const ElfImage &img, uint32_t addr) {
 // target lands outside the current function. Returns "" if the target
 // can't be resolved through any of call_relocs/addr_to_name/
 // import_trampolines.
+// See add_setjmp_name in codegen.h.
+std::set<std::string> &setjmp_names() {
+    static std::set<std::string> names = {"setjmp", "_setjmp", "__setjmp"};
+    return names;
+}
+std::set<std::string> &longjmp_names() {
+    static std::set<std::string> names = {"longjmp", "_longjmp", "__longjmp"};
+    return names;
+}
+
+// A direct call to the named function, unless it is the guest's setjmp or
+// longjmp, which are done on the host instead.
+std::string direct_call_stmt(const std::string &name) {
+    std::string call = "ppc_" + name + "(ctx)";
+    if (setjmp_names().count(name)) return "PPC_HOST_SETJMP(ctx, " + call + ");";
+    if (longjmp_names().count(name)) return "ppc_host_longjmp(ctx);";
+    return call + ";";
+}
+
 std::string resolve_call_stmt(const ElfImage &img, const std::map<uint32_t, std::string> &addr_to_name,
                                uint32_t insn_addr, uint32_t target) {
     // A real linked .rpx/.rpl calls into other system libraries either via
@@ -162,13 +181,13 @@ std::string resolve_call_stmt(const ElfImage &img, const std::map<uint32_t, std:
     }
     auto it = img.call_relocs.find(insn_addr);
     if (it != img.call_relocs.end()) {
-        return "ppc_" + it->second + "(ctx);";
+        return direct_call_stmt(it->second);
     }
     // No relocation (already-linked binary): the raw immediate is a real
     // target address.
     auto it2 = addr_to_name.find(target);
     if (it2 != addr_to_name.end()) {
-        return "ppc_" + it2->second + "(ctx);";
+        return direct_call_stmt(it2->second);
     }
     // Trampoline-stub case: target is the trampoline's own resolved
     // address (see ImportTrampoline).
@@ -207,6 +226,9 @@ void emit_conditional_branch(std::ostream &out, const std::string &cond, uint32_
 }
 
 }  // namespace
+
+void add_setjmp_name(const std::string &name) { setjmp_names().insert(name); }
+void add_longjmp_name(const std::string &name) { longjmp_names().insert(name); }
 
 std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunction &func, const DisasmResult &insns,
                                               const std::map<uint32_t, std::string> &addr_to_name, std::ostream &out) {

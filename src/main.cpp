@@ -25,12 +25,17 @@ int main(int argc, char **argv) {
             output_path = args[++i];
         } else if (args[i] == "--entry-alias" && i + 1 < args.size()) {
             entry_alias = args[++i];
+        } else if (args[i] == "--setjmp-name" && i + 1 < args.size()) {
+            recomp::add_setjmp_name(args[++i]);
+        } else if (args[i] == "--longjmp-name" && i + 1 < args.size()) {
+            recomp::add_longjmp_name(args[++i]);
         } else if (input_path.empty()) {
             input_path = args[i];
         }
     }
     if (input_path.empty() || output_path.empty()) {
-        std::cerr << "usage: recomp [--stripped] [--entry-alias NAME] [--extern-globals] <input.elf> -o <output.c>\n";
+        std::cerr << "usage: recomp [--stripped] [--entry-alias NAME] [--extern-globals]\n"
+                     "              [--setjmp-name NAME] [--longjmp-name NAME] <input.elf> -o <output.c>\n";
         std::cerr << "  --stripped:          ignore any symbol table and recover function\n";
         std::cerr << "                       boundaries via control-flow analysis instead\n";
         std::cerr << "                       (see func_recovery.h)\n";
@@ -55,6 +60,10 @@ int main(int argc, char **argv) {
         std::cerr << "                       way, since dispatch tables aren't merged across\n";
         std::cerr << "                       objects. Direct calls (bl) across objects work fine\n";
         std::cerr << "                       regardless.\n";
+        std::cerr << "  --setjmp-name NAME,  treat calls to NAME as the guest's setjmp or\n";
+        std::cerr << "  --longjmp-name NAME  longjmp, done on the host (see PPC_HOST_SETJMP in\n";
+        std::cerr << "                       ppc_runtime.h). setjmp/_setjmp/__setjmp and the\n";
+        std::cerr << "                       matching longjmp names are always recognised.\n";
         return 1;
     }
 
@@ -68,7 +77,14 @@ int main(int argc, char **argv) {
     recomp::find_import_trampolines(img);
     recomp::resolve_data_imports(img);
 
-    if (extern_globals && !img.global_section_base.empty()) {
+    // .text is in global_section_base too -- it keeps its real address
+    // there (see assign_global_addrs) -- but it is code, not data anyone has
+    // to initialize. Counting it made this check refuse every object since
+    // 2026-08-29, which is how verify.sh's multi-object case went red.
+    bool has_own_data = false;
+    for (const auto &kv : img.global_section_base)
+        if (kv.first != ".text") { has_own_data = true; break; }
+    if (extern_globals && has_own_data) {
         std::cerr << "error: --extern-globals was passed, but this object has its own "
                       "global/static data (would never get initialized -- see --help)\n";
         return 1;

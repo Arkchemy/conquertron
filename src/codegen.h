@@ -10,6 +10,12 @@
 #include "elf_loader.h"
 
 namespace recomp {
+// Names of the guest's setjmp and longjmp. Calls to these are not emitted as
+// ordinary calls: see PPC_HOST_SETJMP in include/ppc_runtime.h for why a
+// recompiled longjmp cannot work. Defaults cover the usual spellings; main
+// adds any given with --setjmp-name / --longjmp-name.
+void add_setjmp_name(const std::string &name);
+void add_longjmp_name(const std::string &name);
 
 // Emits one C function (named "ppc_<symbol>") that reproduces `func`'s
 // behaviour against a PpcContext*. Any instruction outside the milestone's

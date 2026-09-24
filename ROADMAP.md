@@ -30,16 +30,28 @@ scrutiny than the translator because they are hand-written and look simple.
 
 - [x] guest thread stacks reserve an EABI linkage area — a missing 16 bytes
       corrupted a heap and stalled boot for four sessions
+- [x] OSEvent AUTO mode wakes exactly one waiter per signal, and a signal
+      landing mid-pump is kept rather than lost (2026-09-24, EVCREDIT;
+      pinned by seven sync_harness cases)
+- [x] the FS completion queue is locked and the pumps claim atomically; the
+      unlocked queue lost and duplicated completions under contention
+      (2026-09-24). Next hardware run should say whether this moves the
+      loading stall -- judge it on `served/back`, not bytes
 - [ ] **audit every shim against real Cafe OS semantics**, especially anything
       that sets up guest register state: thread creation, TLS, callbacks,
       anything that fabricates a stack frame
 - [ ] `memset`/`memcpy` bypass `ppc_store_u32`, so they are invisible to the
       store watch. Either route them through it under a debug flag, or make
       that limitation impossible to forget.
-- [ ] `setjmp`/`longjmp` are recompiled PowerPC. A `longjmp` restoring guest
-      registers cannot unwind the **host** call stack the recompiled code runs
-      on. Not yet implicated in a real bug, but it cannot work as written and
-      will matter to any code using it for error handling.
+- [x] `setjmp`/`longjmp` are done on the host (2026-09-24). A recompiled
+      `longjmp` restored guest registers but could not unwind the host call
+      stack. Calls to them are now recognised by name and replaced -- the
+      host `setjmp` runs inline in the caller's own C function, and `longjmp`
+      jumps back to it with the guest register file restored. XenonRecomp's
+      approach, adapted to C. Pinned by blaster's verify.sh at guest -O0 and
+      -O1. **Unconfirmed against the retail binary:** the default names are
+      `setjmp`/`_setjmp`/`__setjmp` and their `longjmp` twins; if GHS's
+      libc spells them differently, pass `--setjmp-name`/`--longjmp-name`
 - [x] GX2 is no longer "shims that mostly record and discard". As of
       2026-09-16 the path is real end to end: surfaces are sized and
       allocated, each one keeps its own deko3d image across re-binds, draws

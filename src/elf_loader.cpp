@@ -526,6 +526,8 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         if (si != out.section_sizes.end() && si->second > text_size_for_bounds)
             text_size_for_bounds = si->second;
     }
+    std::map<std::string, uint32_t> skipped_nonalloc;
+    auto rela_sh_size_entries = [](uint32_t size, uint32_t entsize) { return entsize ? size / entsize : 0u; };
     for (int rela_idx : rela_other_indices) {
         const uint8_t *rela_sh = shdr(rela_idx);
         uint32_t rela_entsize = rd_be32(rela_sh + 36);
@@ -534,6 +536,23 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
         if (target_idx >= (uint32_t)e_shnum) continue;
         std::string target_name = secname(rd_be32(shdr(target_idx) + 0));
         if (target_name.empty()) continue;
+        // Only sections the loader actually puts in memory. Relocations
+        // against .debug_info, .debug_frame and friends were being read too,
+        // which gave those sections synthetic bases in guest memory and
+        // wrote relocated pointers into them -- harmless to the program,
+        // but it is guest memory spent on nothing, and it made every object
+        // look as if it carried data of its own (see --extern-globals in
+        // main.cpp). Found 2026-09-24 when verify.sh's multi-object case
+        // failed on an object with no globals at all.
+        //
+        // Counted and printed by section, because this cannot be checked
+        // against the retail RPX from where it was written: if a regenerate
+        // ever lists anything here other than debug sections, a loaded
+        // section is flagged in a way this did not expect.
+        if (!(rd_be32(shdr(target_idx) + 8) & 0x2u /* SHF_ALLOC */)) {
+            skipped_nonalloc[target_name] += rela_sh_size_entries(rd_be32(rela_sh + 20), rela_entsize);
+            continue;
+        }
         uint32_t target_real_base = rd_be32(shdr(target_idx) + 12);  // sh_addr
 
         const std::vector<uint8_t> &rela_bytes = section_data[rela_idx];
@@ -607,6 +626,9 @@ bool load_elf(const std::string &path, ElfImage &out, std::string &error) {
             out.section_relocs.push_back(sr);
         }
     }
+    for (const auto &kv : skipped_nonalloc)
+        std::fprintf(stderr, "note: skipped %u relocation(s) into %s (not loaded: no SHF_ALLOC)\n",
+                     kv.second, kv.first.c_str());
     if (bad_text_relocs) {
         std::fprintf(stderr, "warning: %zu .text data relocations resolved outside .text and were skipped\n",
                      bad_text_relocs);

@@ -63,18 +63,11 @@ enum {
  * matches this exactly with no extra bookkeeping needed.
  *
  * OSEvent's manual/auto-reset semantics (confirmed against wut's docs
- * and Cemu's real branching logic) are implemented with the standard,
- * race-free mutex+condvar+flag+epoch pattern: `signaled` is a sticky
- * flag for "signaled with nobody currently waiting" (persists for the
- * next waiter), `epoch` is bumped on every broadcast-style wake so
- * every *currently* blocked waiter reliably wakes exactly once without
- * a shared single-use flag racing between them (needed because real
- * hardware's explicit per-thread wake queue doesn't have a direct
- * analog in POSIX condvars, which always require a recheck loop).
- * `waiting_count` tracks whether anyone is currently blocked, to
- * replicate the real "empty queue -> stays signaled" vs. "non-empty
- * queue -> wakes waiters, doesn't persist" branch Cemu's source shows
- * for both OSSignalEvent and OSSignalEventAll in AUTO mode.
+ * and Cemu's real branching logic) are implemented with a mutex, a
+ * condvar, a sticky `signaled` latch and a count of wake credits granted
+ * to parked waiters -- see "EVCREDIT" above ppc_import_coreinit_OSInitEvent
+ * for why a credit count and not an epoch, which is what this used until
+ * 2026-09-24 and which released every AUTO waiter on a single signal.
  */
 
 /* Was 64. An engine of this size uses far more than 64 OSMutexes --
@@ -182,8 +175,12 @@ typedef struct {
     pthread_cond_t cond;
     int signaled;
     int mode; /* 0 = OS_EVENT_MODE_MANUAL, 1 = OS_EVENT_MODE_AUTO */
-    uint64_t epoch;
+    uint64_t epoch;       /* diagnostic only: signals that reached a parked waiter */
     int waiting_count;
+    /* Added at the end so the positional initializer of the fallback entry
+     * in cafeos_state.c stays valid. See "EVCREDIT" below. */
+    int wake_credits;     /* wakes granted to parked waiters, not yet taken */
+    uint64_t init_epoch;  /* moves only in OSInitEvent */
 } ArkchemyEventEntry;
 /* Real definitions in cafeos_state.c -- see its own file comment. */
 extern ArkchemyEventEntry g_arkchemy_events[ARKCHEMY_SYNC_TABLE_SIZE];
@@ -212,6 +209,8 @@ static inline ArkchemyEventEntry *arkchemy_event_get(uint32_t addr, int create_w
         e->mode = create_with_mode;
         e->epoch = 0;
         e->waiting_count = 0;
+        e->wake_credits = 0;
+        e->init_epoch = 0;
         result = e;
     }
     if (result == NULL) {                    /* see arkchemy_mutex_get */
@@ -222,6 +221,100 @@ static inline ArkchemyEventEntry *arkchemy_event_get(uint32_t addr, int create_w
     return result;
 }
 
+/* EVCREDIT -- how a signal reaches a waiter. Rewritten 2026-09-24.
+ *
+ * What Cafe OS does, from wut's event.h and Cemu's coreinit_Synchronization:
+ *
+ *   AUTO    OSSignalEvent wakes exactly one queued waiter. With nobody
+ *           queued the event latches, and the next waiter consumes the latch.
+ *           OSSignalEventAll wakes every queued waiter and latches nothing.
+ *   MANUAL  a signal releases every waiter and stays set until OSResetEvent.
+ *
+ * What this shim did before: every parked waiter remembered one per-event
+ * epoch, every signal bumped it, and the wait loop ran while
+ * `epoch == my_epoch`. So on an AUTO event
+ *
+ *   - one signal released EVERY parked waiter, not one of them. EVSTATE
+ *     measured two waiters parked on the loading event, so this was live;
+ *   - a second signal arriving before the first woken waiter had run still
+ *     saw waiting_count > 0, bumped the epoch again and latched nothing, so
+ *     it was lost. The window is wide here, because a waiter drops the lock
+ *     to run the pumps while staying counted -- deliberately, since the pump
+ *     runs guest code that signals this very event.
+ *
+ * Both are ours, not the engine's, which is why this is a fix rather than a
+ * workaround behind a flag. sync_harness.c pins all of it: three of its
+ * AUTO cases fail on the old code.
+ *
+ * The scheme. `wake_credits` counts wakes granted to parked waiters and not
+ * yet taken, and never exceeds `waiting_count`. An AUTO signal grants one
+ * more credit if some waiter has not been granted one, and otherwise latches
+ * `signaled` -- which is exactly "wake one queued waiter, or latch if the
+ * queue is empty", with "queue" meaning waiters not already on their way
+ * out. The credit lives in the struct, so a signal that lands while its
+ * waiter is off running the pump is still there when it gets back. A waiter
+ * leaves by taking a credit first, then the latch. Broadcast, not
+ * pthread_cond_signal: the waiter a condvar signal would pick may be the one
+ * outside the wait, running the pump, and the signal would be spent on
+ * nobody. The others re-check, find no credit, and sleep again.
+ *
+ * One divergence, stated: real Cafe OS wakes the highest-priority queued
+ * thread, and a thread that starts waiting after a signal can never take
+ * that signal. Here any parked waiter can take any credit, including one
+ * that arrived after the grant. The count is always right -- one signal, one
+ * wake -- but not which thread gets it.
+ *
+ * `epoch` used to be both the release mechanism and what EVSTATE printed. It
+ * is now only the second: signals that reached a parked waiter. OSInitEvent
+ * has its own `init_epoch`, the one thing the wait predicate still compares,
+ * so re-initialising a live event releases its waiters without any signal
+ * doing so. */
+
+/* An AUTO signal: grant a wake if a parked waiter has none, else latch.
+ * Caller holds e->lock. */
+static inline void arkchemy_event_signal_auto_locked(ArkchemyEventEntry *e) {
+    if (e->wake_credits < e->waiting_count) {
+        e->wake_credits++;
+        e->epoch++;
+        pthread_cond_broadcast(&e->cond);
+    } else {
+        e->signaled = 1;
+    }
+}
+
+/* Is there anything for a waiter that started under `my_init` to leave on? */
+static inline int arkchemy_event_ready_locked(const ArkchemyEventEntry *e, uint64_t my_init) {
+    return e->wake_credits > 0 || e->signaled || e->init_epoch != my_init;
+}
+
+/* A waiter leaving. Takes what it is leaving on, in order: a re-init takes
+ * nothing, then a credit, then the latch (which AUTO consumes and MANUAL
+ * keeps). Returns 1 if it was signalled, 0 if it left for any other reason
+ * -- a timeout, EVWAKE, or a re-init. Caller holds e->lock.
+ *
+ * The clamp at the end keeps wake_credits <= waiting_count. It can only
+ * trip when a waiter leaves without a credit while credits are outstanding,
+ * which is the re-init path; the excess are signals meant for a queue that
+ * no longer has anyone in it, and on AUTO that is a latch. */
+static inline int arkchemy_event_leave_locked(ArkchemyEventEntry *e, uint64_t my_init) {
+    int signalled = 0;
+    if (e->init_epoch == my_init) {
+        if (e->wake_credits > 0) {
+            e->wake_credits--;
+            signalled = 1;
+        } else if (e->signaled) {
+            if (e->mode == 1 /* AUTO */) e->signaled = 0;
+            signalled = 1;
+        }
+    }
+    e->waiting_count--;
+    if (e->wake_credits > e->waiting_count) {
+        e->wake_credits = e->waiting_count;
+        if (e->mode == 1) e->signaled = 1;
+    }
+    return signalled;
+}
+
 static inline void ppc_import_coreinit_OSInitEvent(PpcContext *ctx) {
     /* void OSInitEvent(OSEvent *event, BOOL value, OSEventMode mode) */
     uint32_t addr = ctx->r[3];
@@ -230,11 +323,14 @@ static inline void ppc_import_coreinit_OSInitEvent(PpcContext *ctx) {
     ArkchemyEventEntry *e = arkchemy_event_get(addr, value, mode);
     /* Re-initializing an address already in this table (a real Init
      * called twice) resets its state -- matches real hardware, which
-     * always fully re-initializes the struct. */
+     * always fully re-initializes the struct. Anyone parked on the old
+     * incarnation is released: init_epoch moving is what they wait for. */
     pthread_mutex_lock(&e->lock);
     e->signaled = value;
     e->mode = mode;
-    e->epoch++;
+    e->wake_credits = 0;
+    e->init_epoch++;
+    pthread_cond_broadcast(&e->cond);
     pthread_mutex_unlock(&e->lock);
 }
 
@@ -245,19 +341,12 @@ static inline void ppc_import_coreinit_OSSignalEvent(PpcContext *ctx) {
     g_arkchemy_event_signals++; g_arkchemy_event_last_signal = ctx->r[3];
     pthread_mutex_lock(&e->lock);
     g_ark_sev_got_lock++;
-    if (!e->signaled) {
-        if (e->mode == 1 /* AUTO */) {
-            if (e->waiting_count == 0) {
-                e->signaled = 1;
-            } else {
-                e->epoch++;
-                pthread_cond_signal(&e->cond); /* wake exactly one */
-            }
-        } else { /* MANUAL */
-            e->signaled = 1;
-            e->epoch++;
-            pthread_cond_broadcast(&e->cond);
-        }
+    if (e->mode == 1 /* AUTO */) {
+        arkchemy_event_signal_auto_locked(e);
+    } else if (!e->signaled) { /* MANUAL */
+        e->signaled = 1;
+        if (e->waiting_count) e->epoch++;
+        pthread_cond_broadcast(&e->cond);
     }
     pthread_mutex_unlock(&e->lock);
     g_ark_sev_exit++;
@@ -267,24 +356,27 @@ static inline void ppc_import_coreinit_OSSignalEventAll(PpcContext *ctx) {
     g_arkchemy_event_signals++; g_arkchemy_event_last_signal = ctx->r[3];
     ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
     pthread_mutex_lock(&e->lock);
-    if (!e->signaled) {
-        if (e->mode == 1 /* AUTO */) {
-            if (e->waiting_count == 0) {
-                e->signaled = 1;
-            } else {
-                e->epoch++;
-                pthread_cond_broadcast(&e->cond); /* wake everyone currently waiting; doesn't persist */
-            }
-        } else { /* MANUAL */
+    if (e->mode == 1 /* AUTO */) {
+        if (e->waiting_count == 0) {
             e->signaled = 1;
+        } else {
+            /* everyone currently parked gets a wake; nothing persists */
+            e->wake_credits = e->waiting_count;
             e->epoch++;
             pthread_cond_broadcast(&e->cond);
         }
+    } else if (!e->signaled) { /* MANUAL */
+        e->signaled = 1;
+        if (e->waiting_count) e->epoch++;
+        pthread_cond_broadcast(&e->cond);
     }
     pthread_mutex_unlock(&e->lock);
 }
 
 static inline void ppc_import_coreinit_OSResetEvent(PpcContext *ctx) {
+    /* Clears the latch only. Credits already granted are wakes that have
+     * happened -- on Cafe OS those threads are off the queue and running --
+     * so a reset does not take them back. */
     ArkchemyEventEntry *e = arkchemy_event_get(ctx->r[3], 0, 1);
     pthread_mutex_lock(&e->lock);
     e->signaled = 0;
@@ -407,11 +499,11 @@ static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
          * The slice is deliberately short and the loop re-checks the same
          * predicate, so a spurious wake or a missed signal cannot make this
          * return early -- it only costs a wakeup. */
-        uint64_t my_epoch = e->epoch;
+        uint64_t my_init = e->init_epoch;
         uint32_t my_slices = 0;
         e->waiting_count++;
         g_ark_wev_parked++;
-        while (!e->signaled && e->epoch == my_epoch) {
+        while (!arkchemy_event_ready_locked(e, my_init)) {
             struct timespec deadline;
             g_ark_wev_slices++;
             clock_gettime(CLOCK_REALTIME, &deadline);
@@ -424,8 +516,8 @@ static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
                 /* Drop the lock before pumping: a completion callback runs
                  * guest code that can signal this very event, and e->lock is
                  * not recursive. Leave the waiter counted across the gap so
-                 * an AUTO signal arriving meanwhile wakes rather than being
-                 * latched -- either outcome is handled by the re-check. */
+                 * an AUTO signal arriving meanwhile is granted to it as a
+                 * credit, which waits in the struct until it is back. */
                 pthread_mutex_unlock(&e->lock);
                 arkchemy_fs_pump_completions(ctx);
                 /* Nothing queued means nothing will arrive on its own: the
@@ -443,8 +535,7 @@ static inline void ppc_import_coreinit_OSWaitEvent(PpcContext *ctx) {
                 }
             }
         }
-        e->waiting_count--;
-        if (e->signaled && e->mode == 1 /* AUTO */) e->signaled = 0;
+        arkchemy_event_leave_locked(e, my_init);
     }
     pthread_mutex_unlock(&e->lock);
     g_ark_wev_exit++;
@@ -502,17 +593,18 @@ static inline void ppc_import_coreinit_OSWaitEventWithTimeout(PpcContext *ctx) {
         deadline.tv_sec += (time_t)secs;
         deadline.tv_nsec += ns;
         if (deadline.tv_nsec >= 1000000000L) { deadline.tv_nsec -= 1000000000L; deadline.tv_sec += 1; }
-        uint64_t my_epoch = e->epoch;
+        uint64_t my_init = e->init_epoch;
         e->waiting_count++;
-        while (!e->signaled && e->epoch == my_epoch) {
+        while (!arkchemy_event_ready_locked(e, my_init)) {
             if (pthread_cond_timedwait(&e->cond, &e->lock, &deadline) != 0) break; /* real timeout */
         }
-        e->waiting_count--;
-        if (e->signaled) {
-            if (e->mode == 1) e->signaled = 0;
-        } else if (e->epoch == my_epoch) {
-            woke_signaled = 0; /* timed out, never woken */
-        }
+        /* TRUE only for a credit or the latch. The old test here was
+         * `else if (epoch == my_epoch) FALSE`, which reported TRUE to a
+         * waiter whose epoch had moved because some OTHER waiter was
+         * signalled -- a timed-out worker told it had work. A credit is
+         * checked before the timeout is believed, so a grant that lands at
+         * the same instant as the deadline is still delivered. */
+        woke_signaled = arkchemy_event_leave_locked(e, my_init);
     }
     pthread_mutex_unlock(&e->lock);
     if (woke_signaled) g_arkchemy_event_wakes++; else g_arkchemy_event_timeouts++;
@@ -624,8 +716,26 @@ static inline void ppc_import_coreinit_OSWaitSemaphore(PpcContext *ctx) {
     ArkchemySemEntry *s = arkchemy_sem_get(ctx->r[3], 0);
     int32_t prev;
     pthread_mutex_lock(&s->lock);
+    /* Waits in 1ms slices and pumps FS completions between them, for the
+     * reason OSWaitEvent does: pumping is cooperative here, so a thread that
+     * parks for good cannot deliver the completion that would release it,
+     * and nothing guarantees another thread will. Added 2026-09-24 with the
+     * sync_harness case that deadlocked without it. The contract is
+     * unchanged -- this returns only once it has taken a count. Only the
+     * completion pump, not the archive pump: that one is a workaround for a
+     * specific wait, and does not belong on every semaphore. */
     while (s->count <= 0) {
-        pthread_cond_wait(&s->cond, &s->lock);
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_nsec += ARKCHEMY_EVENT_PUMP_SLICE_NS;
+        if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec += 1; deadline.tv_nsec -= 1000000000L; }
+        if (pthread_cond_timedwait(&s->cond, &s->lock, &deadline) == ETIMEDOUT) {
+            /* the callback may signal this very semaphore; s->lock is not
+             * recursive, so it must not be held across the pump */
+            pthread_mutex_unlock(&s->lock);
+            arkchemy_fs_pump_completions(ctx);
+            pthread_mutex_lock(&s->lock);
+        }
     }
     prev = s->count;
     s->count = prev - 1;

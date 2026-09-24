@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 
 #include "ppc_runtime.h"
+#include <pthread.h>
 
 /*
  * Phase 1d CafeOS runtime shim -- coreinit's high-level filesystem API
@@ -469,6 +470,53 @@ volatile uint32_t g_arkchemy_fs_dropped = 0;
 __attribute__((weak))
 #endif
 volatile int g_arkchemy_fs_pumping = 0;
+/* Guards g_arkchemy_fs_pending and g_arkchemy_fs_pending_n. Added
+ * 2026-09-24: the queue is written by whichever thread issues a read and
+ * drained by whichever thread next pumps, and had no lock at all. Under
+ * contention in sync_harness.c the unlocked version delivered a completion
+ * twice and then wrapped the count to 4294967295, after which the queue
+ * read as permanently full and every later completion would have been
+ * dropped. Held only to push or pop one entry -- never across a callback,
+ * which runs guest code that can issue another read. */
+#ifdef __GNUC__
+__attribute__((weak))
+#endif
+pthread_mutex_t g_arkchemy_fs_queue_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Queue one completion. Returns 0 if the queue is full; the caller counts
+ * that as a drop, loudly. */
+static inline int arkchemy_fs_enqueue(uint32_t async_data, uint32_t client, uint32_t block, int32_t status) {
+    int ok = 0;
+    pthread_mutex_lock(&g_arkchemy_fs_queue_lock);
+    if (g_arkchemy_fs_pending_n < ARKCHEMY_FS_ASYNC_QUEUE) {
+        ArkchemyFsPending *q = &g_arkchemy_fs_pending[g_arkchemy_fs_pending_n];
+        q->async_data = async_data; q->client = client; q->block = block; q->status = status;
+        /* atomic only so the pump's lock-free "anything queued?" peek is
+         * well defined; the lock is what orders the queue itself */
+        __atomic_store_n(&g_arkchemy_fs_pending_n, g_arkchemy_fs_pending_n + 1, __ATOMIC_RELEASE);
+        g_arkchemy_fs_queued++;
+        ok = 1;
+    }
+    pthread_mutex_unlock(&g_arkchemy_fs_queue_lock);
+    return ok;
+}
+
+/* Take the oldest completion, if any. FIFO, as before: the loader's state
+ * machine expects its reads to complete in the order it issued them. */
+static inline int arkchemy_fs_dequeue(ArkchemyFsPending *out) {
+    int ok = 0;
+    pthread_mutex_lock(&g_arkchemy_fs_queue_lock);
+    if (g_arkchemy_fs_pending_n > 0) {
+        *out = g_arkchemy_fs_pending[0];
+        for (uint32_t k = 1; k < g_arkchemy_fs_pending_n; k++)
+            g_arkchemy_fs_pending[k-1] = g_arkchemy_fs_pending[k];
+        __atomic_store_n(&g_arkchemy_fs_pending_n, g_arkchemy_fs_pending_n - 1, __ATOMIC_RELEASE);
+        g_arkchemy_fs_delivered++;
+        ok = 1;
+    }
+    pthread_mutex_unlock(&g_arkchemy_fs_queue_lock);
+    return ok;
+}
 
 static inline void ppc_import_coreinit_FSOpenFile(PpcContext *ctx) {
     char guest_path[512], real_path[512], mode[8];
@@ -830,10 +878,18 @@ static inline void ppc_fs_invoke_async_callback(PpcContext *ctx, uint32_t async_
 /* Deliver any queued FS completions. Safe to call from any import site: it is
  * between guest instructions, and the function that issued the read has
  * already returned. Re-entrancy guarded, because a completion callback may
- * itself call into a shim that pumps. */
+ * itself call into a shim that pumps.
+ *
+ * One pumper at a time, across all threads, so completions are delivered in
+ * the order they were queued. The guard used to be a plain test-then-set
+ * that two threads could both pass; it is now an atomic claim. A thread
+ * that loses the claim returns at once -- whoever holds it will deliver
+ * what is queued, and every waiter here loops on a 1ms slice anyway. */
 static inline void arkchemy_fs_pump_completions(PpcContext *ctx) {
-    if (g_arkchemy_fs_pending_n == 0 || g_arkchemy_fs_pumping) return;
-    g_arkchemy_fs_pumping = 1;
+    int unclaimed = 0;
+    if (__atomic_load_n(&g_arkchemy_fs_pending_n, __ATOMIC_ACQUIRE) == 0) return;
+    if (!__atomic_compare_exchange_n(&g_arkchemy_fs_pumping, &unclaimed, 1, 0,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
     /* The pump borrows the caller's context to run a guest callback, and
      * ppc_fs_invoke_async_callback sets r3-r6 to that callback's arguments.
      * Unless they are put back, the pump silently eats the argument of
@@ -856,17 +912,12 @@ static inline void arkchemy_fs_pump_completions(PpcContext *ctx) {
     uint32_t saved_r[10];
     for (int i = 0; i < 10; i++) saved_r[i] = ctx->r[3 + i];   /* r3..r12 */
     uint32_t saved_lr = ctx->lr;
-    while (g_arkchemy_fs_pending_n > 0) {
-        ArkchemyFsPending p = g_arkchemy_fs_pending[0];
-        for (uint32_t k = 1; k < g_arkchemy_fs_pending_n; k++)
-            g_arkchemy_fs_pending[k-1] = g_arkchemy_fs_pending[k];
-        g_arkchemy_fs_pending_n--;
-        g_arkchemy_fs_delivered++;
+    ArkchemyFsPending p;
+    while (arkchemy_fs_dequeue(&p))
         ppc_fs_invoke_async_callback(ctx, p.async_data, p.client, p.block, p.status);
-    }
     for (int i = 0; i < 10; i++) ctx->r[3 + i] = saved_r[i];
     ctx->lr = saved_lr;
-    g_arkchemy_fs_pumping = 0;
+    __atomic_store_n(&g_arkchemy_fs_pumping, 0, __ATOMIC_RELEASE);
 }
 
 /* Drive the guest's archive system one step, from inside a cooperative wait.
@@ -918,15 +969,21 @@ static inline void arkchemy_archive_pump(PpcContext *ctx) {
     uint32_t saved_lr;
     int i;
     if (!g_arkchemy_archive_pump_enabled) return;
-    if (g_arkchemy_archive_pumping) return;
-    g_arkchemy_archive_pumping = 1;
+    {
+        /* An atomic claim, for the same reason as the completion pump: this
+         * runs guest code (updateArchiveSystem), and two threads that both
+         * saw the old plain flag clear would have run it at once. */
+        uint32_t unclaimed = 0;
+        if (!__atomic_compare_exchange_n(&g_arkchemy_archive_pumping, &unclaimed, 1u, 0,
+                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+    }
     for (i = 0; i < 10; i++) saved_r[i] = ctx->r[3 + i];   /* r3..r12 */
     saved_lr = ctx->lr;
     g_arkchemy_archive_pumps++;
     ppc_dispatch(ctx, ARKCHEMY_ARCHIVE_PUMP_ADDR);
     for (i = 0; i < 10; i++) ctx->r[3 + i] = saved_r[i];
     ctx->lr = saved_lr;
-    g_arkchemy_archive_pumping = 0;
+    __atomic_store_n(&g_arkchemy_archive_pumping, 0u, __ATOMIC_RELEASE);
 }
 
 static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
@@ -968,13 +1025,8 @@ static inline void ppc_import_coreinit_FSReadFileWithPosAsync(PpcContext *ctx) {
     ark_fst_end(ark_now_ns());  /* see FSTIME: the read itself is done here */
     g_arkchemy_fs_last_result = result;
     for (int w = 0; w < 4; w++) g_arkchemy_fs_head[w] = ppc_load_u32(ctx, buffer_addr + w * 4);
-    if (g_arkchemy_fs_pending_n < ARKCHEMY_FS_ASYNC_QUEUE) {
-        ArkchemyFsPending *q = &g_arkchemy_fs_pending[g_arkchemy_fs_pending_n++];
-        q->async_data = async_data_addr; q->client = client; q->block = block; q->status = result;
-        g_arkchemy_fs_queued++;
-    } else {
+    if (!arkchemy_fs_enqueue(async_data_addr, client, block, result))
         g_arkchemy_fs_dropped++;   /* never silently: reported every frame */
-    }
     ctx->r[3] = (uint32_t)ARKCHEMY_FS_STATUS_OK;
 }
 
