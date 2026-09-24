@@ -25,12 +25,17 @@ int main(int argc, char **argv) {
             output_path = args[++i];
         } else if (args[i] == "--entry-alias" && i + 1 < args.size()) {
             entry_alias = args[++i];
+        } else if (args[i] == "--setjmp-name" && i + 1 < args.size()) {
+            recomp::add_setjmp_name(args[++i]);
+        } else if (args[i] == "--longjmp-name" && i + 1 < args.size()) {
+            recomp::add_longjmp_name(args[++i]);
         } else if (input_path.empty()) {
             input_path = args[i];
         }
     }
     if (input_path.empty() || output_path.empty()) {
-        std::cerr << "usage: recomp [--stripped] [--entry-alias NAME] [--extern-globals] <input.elf> -o <output.c>\n";
+        std::cerr << "usage: recomp [--stripped] [--entry-alias NAME] [--extern-globals]\n"
+                     "              [--setjmp-name NAME] [--longjmp-name NAME] <input.elf> -o <output.c>\n";
         std::cerr << "  --stripped:          ignore any symbol table and recover function\n";
         std::cerr << "                       boundaries via control-flow analysis instead\n";
         std::cerr << "                       (see func_recovery.h)\n";
@@ -55,6 +60,10 @@ int main(int argc, char **argv) {
         std::cerr << "                       way, since dispatch tables aren't merged across\n";
         std::cerr << "                       objects. Direct calls (bl) across objects work fine\n";
         std::cerr << "                       regardless.\n";
+        std::cerr << "  --setjmp-name NAME,  treat calls to NAME as the guest's setjmp or\n";
+        std::cerr << "  --longjmp-name NAME  longjmp, done on the host (see PPC_HOST_SETJMP in\n";
+        std::cerr << "                       ppc_runtime.h). setjmp/_setjmp/__setjmp and the\n";
+        std::cerr << "                       matching longjmp names are always recognised.\n";
         return 1;
     }
 
