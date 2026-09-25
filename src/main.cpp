@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <iterator>
 #include <set>
 #include <sstream>
 #include <vector>
@@ -103,6 +104,39 @@ int main(int argc, char **argv) {
     if (!entry_alias.empty()) {
         for (auto &fn : img.functions) {
             if (fn.addr == img.entry) fn.name = entry_alias;
+        }
+    }
+
+    // A guest function called `dispatch` would be emitted as a second
+    // ppc_dispatch; one called `load_u32` would shadow the runtime's. Found
+    // 2026-09-26: blaster's switch_table test named its switch function
+    // `dispatch` and the generated C did not compile. Such functions are
+    // renamed, everywhere a name is looked up, and the rename is reported
+    // so a harness that calls one by name knows what it is now called.
+    {
+        static const char *const kReserved[] = {
+#include "reserved_names.inc"
+        };
+        const std::set<std::string> reserved(std::begin(kReserved), std::end(kReserved));
+        std::set<std::string> taken;
+        for (const auto &fn : img.functions) taken.insert(fn.name);
+        std::map<std::string, std::string> renamed;
+        for (auto &fn : img.functions) {
+            if (!reserved.count(fn.name)) continue;
+            auto done = renamed.find(fn.name);
+            if (done == renamed.end()) {
+                std::string to = fn.name + "_guest";
+                while (reserved.count(to) || taken.count(to)) to += "_";
+                taken.insert(to);
+                done = renamed.emplace(fn.name, to).first;
+                std::cerr << "note: guest function '" << fn.name << "' renamed to '" << to << "': ppc_" << fn.name
+                          << " is a runtime name\n";
+            }
+            fn.name = done->second;
+        }
+        for (auto &kv : img.call_relocs) {
+            auto it = renamed.find(kv.second);
+            if (it != renamed.end()) kv.second = it->second;
         }
     }
 

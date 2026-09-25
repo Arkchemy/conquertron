@@ -92,6 +92,29 @@ int main(void)
         check_bits("fmadds 1.5*2+0.25", ppc_fmadds(1.5, 2.0, 0.25), dbits(3.25));
     }
 
+    /* ppc_single_to_double: lfs moves a NaN's bits, signaling bit included */
+    {
+        const uint32_t snan = 0x7fb40eb5u, qnan = 0xffc00001u;
+        float fs, fq;
+        memcpy(&fs, &snan, 4);
+        memcpy(&fq, &qnan, 4);
+        check_bits("lfs keeps a signaling NaN signaling", ppc_single_to_double(fs), 0x7ff681d6a0000000ull);
+        check_u32("lfs;stfs round-trips a signaling NaN", ppc_double_to_single_bits(ppc_single_to_double(fs)), snan);
+        check_u32("lfs;stfs round-trips a negative quiet NaN", ppc_double_to_single_bits(ppc_single_to_double(fq)), qnan);
+        check_bits("lfs of 1.5 is exact", ppc_single_to_double(1.5f), dbits(1.5));
+        check_bits("lfs of a single denormal is exact", ppc_single_to_double(ldexpf(1.0f, -140)), dbits(ldexp(1.0, -140)));
+    }
+
+    /* ppc_fneg_result: fnmadd/fnmsub negate everything but a NaN */
+    {
+        double pnan;
+        uint64_t pn = 0x7ff8000000000001ull;
+        memcpy(&pnan, &pn, 8);
+        check_bits("fnm* leaves a NaN's sign", ppc_fneg_result(pnan), pn);
+        check_bits("fnm* negates 2.0", ppc_fneg_result(2.0), dbits(-2.0));
+        check_bits("fnm* negates +0.0", ppc_fneg_result(0.0), dbits(-0.0));
+    }
+
     if (failures) { printf("%d failure(s)\n", failures); return 1; }
     printf("fp runtime: all checks passed\n");
     return 0;

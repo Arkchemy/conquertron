@@ -227,6 +227,47 @@ void emit_conditional_branch(std::ostream &out, const std::string &cond, uint32_
 
 }  // namespace
 
+namespace {
+
+// Addresses inside a function whose address is taken: stored in a data
+// section (a relocation in .rodata/.data pointing into .text) or built in
+// code with a lis/addi pair. Strictly inside -- not at a function's entry --
+// they are the case labels of a switch compiled to a table of addresses,
+// which `bctr` jumps through. The loader has already seen one in retail: a
+// .text address next to __gh_vsprintf that ppc_dispatch was asked to call
+// 278,093 times (see the .text case in elf_loader.cpp).
+//
+// Built once per image, then queried by range per function; the retail RPX
+// has 18,000 data relocations and 19,000 functions.
+const std::set<uint32_t> &address_taken_text(const ElfImage &img) {
+    static const ElfImage *cached_for = nullptr;
+    static std::set<uint32_t> taken;
+    if (cached_for == &img) return taken;
+    cached_for = &img;
+    taken.clear();
+    // The loader resolves a relocation against .text -- by symbol or by
+    // section plus addend -- to a real text address in func_addr (see the
+    // .text case in elf_loader.cpp). Which of those are case labels rather
+    // than functions is decided per function below: an address strictly
+    // inside a function's range.
+    for (const auto &sr : img.section_relocs)
+        if (sr.is_function) taken.insert(sr.func_addr);
+    for (const auto &kv : img.data_relocs)
+        if (kv.second.is_function) taken.insert(kv.second.func_addr);
+    return taken;
+}
+
+std::vector<uint32_t> address_taken_in(const ElfImage &img, const ElfFunction &func) {
+    const auto &all = address_taken_text(img);
+    std::vector<uint32_t> out;
+    // the entry itself is a function pointer, reached through ppc_dispatch
+    for (auto it = all.upper_bound(func.addr); it != all.end() && *it < func.addr + func.size; ++it)
+        if ((*it & 3u) == 0) out.push_back(*it);
+    return out;
+}
+
+}  // namespace
+
 void add_setjmp_name(const std::string &name) { setjmp_names().insert(name); }
 void add_longjmp_name(const std::string &name) { longjmp_names().insert(name); }
 
@@ -271,10 +312,20 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             // there's nothing else. Using the wrong index here previously
             // recorded the CR register's own encoded value as a bogus
             // "target" address instead of the real one.
+            // A `b` carrying a call relocation is a tail call to another
+            // function (see PPC_INS_B), not a jump within this one.
+            if (insn.id == PPC_INS_B && (img.call_relocs.count((uint32_t)insn.address) ||
+                                         img.import_trampolines.count((uint32_t)insn.address)))
+                continue;
             int target_op = (insn.detail->ppc.op_count >= 2) ? 1 : 0;
             targets.insert((uint32_t)insn.detail->ppc.operands[target_op].imm);
         }
     }
+
+    // Address-taken labels are jumped to through CTR (see PPC_INS_BCTR), so
+    // each needs a label to goto.
+    const std::vector<uint32_t> taken_labels = address_taken_in(img, func);
+    targets.insert(taken_labels.begin(), taken_labels.end());
 
     out << "void ppc_" << func.name << "(PpcContext *ctx) {\n";
     // Real, cheap "current PC" tracker (see ppc_runtime.h's own comment on
@@ -1112,8 +1163,17 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // outside is resolved as a call, same as bl, followed by
                 // an immediate return (nothing else in this function runs
                 // after a tail call).
+                //
+                // A relocation on the instruction decides it before the raw
+                // target does. In an object that has not been linked, the
+                // displacement of a `b` to another function is 0, so its
+                // raw target is the `b` itself -- inside this function --
+                // and it used to become `goto` itself: an infinite loop.
+                // Found 2026-09-26 by difftest's tail-call helpers.
                 uint32_t target = (uint32_t)ppc.operands[0].imm;
-                if (target >= func.addr && target < func.addr + func.size) {
+                bool relocated = img.call_relocs.count((uint32_t)insn.address) ||
+                                 img.import_trampolines.count((uint32_t)insn.address);
+                if (!relocated && target >= func.addr && target < func.addr + func.size) {
                     out << "  goto L_" << std::hex << target << std::dec << ";\n";
                     break;
                 }
@@ -1454,7 +1514,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 std::string addr_expr = is_synthetic_addr_lo_reloc(img, insn.address)
                                              ? base_expr(m.base)
                                              : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
-                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << addr_expr << ");\n";
+                out << "  " << freg(fD) << " = ppc_load_f32_as_f64(ctx, " << addr_expr << ");\n";
                 break;
             }
             case PPC_INS_LFD: {
@@ -1763,7 +1823,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fD = freg_idx(ppc.operands[0].reg);
                 int rA = base_reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
-                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << base_expr(rA) << " + " << reg(rB)
+                out << "  " << freg(fD) << " = ppc_load_f32_as_f64(ctx, " << base_expr(rA) << " + " << reg(rB)
                     << ");\n";
                 break;
             }
@@ -1780,7 +1840,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 bool folded = is_synthetic_addr_lo_reloc(img, insn.address);
                 std::string addr_expr = folded ? base_expr(m.base)
                                               : (base_expr(m.base) + " + (int32_t)" + std::to_string(m.disp));
-                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << addr_expr << ");\n";
+                out << "  " << freg(fD) << " = ppc_load_f32_as_f64(ctx, " << addr_expr << ");\n";
                 if (!folded) out << "  " << reg(m.base) << " = " << reg(m.base) << " + (int32_t)" << m.disp << ";\n";
                 break;
             }
@@ -1799,7 +1859,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rA = reg_idx(ppc.operands[1].reg);
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  " << reg(rA) << " = " << reg(rA) << " + " << reg(rB) << ";\n";
-                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << reg(rA) << ");\n";
+                out << "  " << freg(fD) << " = ppc_load_f32_as_f64(ctx, " << reg(rA) << ");\n";
                 break;
             }
             case PPC_INS_LHZU: {
@@ -1853,7 +1913,20 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     }
                     // Two or more, so an ordinary tail call that happens to be
                     // followed by one stray branch is not mistaken for a table.
-                    if (table.size() >= 2) {
+                    if (table.size() < 2) table.clear();
+                    // The other shape of switch: a table of case addresses in
+                    // .rodata, loaded with lwzx. Each case label's address is
+                    // taken by a data relocation, so every address-taken label
+                    // in this function is a place CTR can legitimately point.
+                    // Without these the jump fell through to ppc_dispatch,
+                    // which only knows function entries, missed, and returned
+                    // from the function halfway through -- silently. Found
+                    // 2026-09-26 by difftest's switch generator.
+                    std::set<uint32_t> seen;
+                    for (const auto &e : table) seen.insert(e.first);
+                    for (uint32_t a : taken_labels)
+                        if (!seen.count(a)) table.emplace_back(a, a), seen.insert(a);
+                    if (!table.empty()) {
                         out << "  switch (ctx->ctr) {\n";
                         for (const auto &e : table) {
                             out << "    case " << e.first << "u: goto L_" << std::hex << e.second << std::dec
@@ -1890,8 +1963,20 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                out << "  " << freg(fD) << " = -ppc_fmadds(" << freg(fA) << ", " << freg(fC) << ", -" << freg(fB)
-                    << ");\n";
+                out << "  " << freg(fD) << " = ppc_fneg_result(ppc_fmadds(" << freg(fA) << ", " << freg(fC)
+                    << ", -" << freg(fB) << "));\n";
+                break;
+            }
+            case PPC_INS_FNMADDS: {
+                // fnmadds fD, fA, fC, fB: fD = -(fA*fC + fB), single-precision
+                // rounded, the sign of a NaN result left alone. Was not
+                // handled at all until 2026-09-26.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                out << "  " << freg(fD) << " = ppc_fneg_result(ppc_fmadds(" << freg(fA) << ", " << freg(fC)
+                    << ", " << freg(fB) << "));\n";
                 break;
             }
             case PPC_INS_FRSQRTE: {
@@ -2124,8 +2209,21 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
                 // -(a*c - b), fused, negated last: b - a*c differs in the
-                // sign of an exact-zero result.
-                out << "  " << freg(fD) << " = -fma(" << freg(fA) << ", " << freg(fC) << ", -" << freg(fB) << ");\n";
+                // sign of an exact-zero result. A NaN result keeps its sign.
+                out << "  " << freg(fD) << " = ppc_fneg_result(fma(" << freg(fA) << ", " << freg(fC) << ", -"
+                    << freg(fB) << "));\n";
+                break;
+            }
+            case PPC_INS_FNMADD: {
+                // fnmadd fD, fA, fC, fB: fD = -(fA*fC + fB), fused, double
+                // precision, the sign of a NaN result left alone. Was not
+                // handled at all until 2026-09-26.
+                int fD = freg_idx(ppc.operands[0].reg);
+                int fA = freg_idx(ppc.operands[1].reg);
+                int fC = freg_idx(ppc.operands[2].reg);
+                int fB = freg_idx(ppc.operands[3].reg);
+                out << "  " << freg(fD) << " = ppc_fneg_result(fma(" << freg(fA) << ", " << freg(fC) << ", "
+                    << freg(fB) << "));\n";
                 break;
             }
             case PPC_INS_FNABS: {
@@ -2358,7 +2456,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     }
                     break;
                 }
-                out << "  " << freg(fD) << " = (double)ppc_load_f32(ctx, " << addr_expr << ");\n";
+                out << "  " << freg(fD) << " = ppc_load_f32_as_f64(ctx, " << addr_expr << ");\n";
                 if (w == 0) {
                     out << "  ctx->ps1[" << fD << "] = ppc_load_f32(ctx, " << addr_expr << " + 4);\n";
                 } else {

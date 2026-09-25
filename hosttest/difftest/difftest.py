@@ -187,7 +187,7 @@ def g_fp3(rng):
 
 
 def g_fp4(rng):
-    op = rng.choice(["fmadd", "fmsub", "fnmsub", "fmadds", "fmsubs", "fnmsubs", "fsel"])
+    op = rng.choice(["fmadd", "fmsub", "fnmadd", "fnmsub", "fmadds", "fmsubs", "fnmadds", "fnmsubs", "fsel"])
     fd, fa, fc, fb = f(rng), f(rng), f(rng), f(rng)
     pre = single_sources([fa, fc, fb]) if op.endswith("s") and op != "fsel" else []
     return pre + ["%s %d, %d, %d, %d" % (op, fd, fa, fc, fb)]
@@ -306,26 +306,107 @@ def g_spr(rng):
     return ["mflr 14", "mtlr %d" % rs, "mflr %d" % rt, "mtlr 14"]
 
 
+# --- calls, indirect branches, switches --------------------------------------
+#
+# Each program has helper functions of its own (see gen_program). "@H0" and
+# "@H1" in a line stand for them and are replaced with the program's real
+# helper names when the assembly is written, so a program keeps working when
+# it is shrunk or moved to another position in a batch. Function addresses
+# differ between the two sides (qemu's linked binary against recomp's
+# object), so no address is ever left where it would be compared: only CTR
+# and LR ever hold one.
+
+def g_call(rng):
+    return ["bl @H%d" % rng.randrange(2)]
+
+
+def g_icall(rng):
+    # through a function pointer: the address is built with @ha/@l, as
+    # compiled code does, and called with bctrl -- recomp's ppc_dispatch
+    h = rng.randrange(2)
+    return ["lis 12, @H%d@ha" % h, "addi 12, 12, @H%d@l" % h, "mtctr 12", "bctrl"]
+
+
+def _cases(rng, n):
+    labs = [label() for _ in range(n)]
+    end = label()
+    body = []
+    for lab in labs:
+        body.append(lab + ":")
+        body += rng.choice([g_arith3, g_imm, g_logimm, g_rot])(rng)
+        body.append("b " + end)
+    return labs, body + [end + ":"]
+
+
+def g_switch(rng):
+    # A four-way switch on the low bits of a register, in the two shapes
+    # compilers emit: a table of branches straight after the bctr, or a
+    # table of addresses in .rodata loaded with lwzx. Either way the index
+    # is (rX & 3) * 4, so every case is reachable and none is out of range.
+    tab = label()
+    labs, cases = _cases(rng, 4)
+    idx = ["rlwinm 0, %d, 2, 28, 29" % r(rng), "lis 12, %s@ha" % tab, "addi 12, 12, %s@l" % tab]
+    if rng.random() < 0.5:
+        return idx + ["add 12, 12, 0", "mtctr 12", "bctr", tab + ":"] + ["b " + l for l in labs] + cases
+    data = [".section .rodata", ".p2align 2", tab + ":"] + [".long " + l for l in labs] + [".text"]
+    return data + idx + ["lwzx 12, 12, 0", "mtctr 12", "bctr"] + cases
+
+
 GENERATORS = [
     (g_arith3, 12), (g_arith2, 5), (g_imm, 6), (g_logimm, 4), (g_rot, 6),
     (g_srawi, 2), (g_div, 2), (g_cmp, 4), (g_cr, 3), (g_mem, 4), (g_memx, 2),
     (g_fp3, 4), (g_fp4, 3), (g_fp2, 2), (g_fcmp, 2), (g_fctiwz, 1), (g_fmem, 2),
     (g_branch, 4), (g_loop, 2), (g_memu, 2), (g_memux, 2), (g_multiple, 1), (g_spr, 1),
+    (g_call, 2), (g_icall, 1), (g_switch, 2),
 ]
 _WEIGHTED = [g for g, w in GENERATORS for _ in range(w)]
+# a helper's own body: anything but calls, which would recurse
+_LEAF = [g for g in _WEIGHTED if g not in (g_call, g_icall)]
 
 
-def gen_body(rng, length):
+def gen_body(rng, length, pool=_WEIGHTED):
     body = []
     while len(body) < length:
-        body.append(rng.choice(_WEIGHTED)(rng))
+        body.append(rng.choice(pool)(rng))
     return body   # list of groups; a group is kept or dropped as a unit
 
 
-# The frame saves r14..r31 (lmw/stmw need them), zeroes them so both sides
-# start identical, and restores them before returning.
-FRAME_IN = ["stwu 1, -96(1)", "stmw 14, 8(1)"] + ["li %d, 0" % x for x in range(14, 32)]
-FRAME_OUT = ["lmw 14, 8(1)", "addi 1, 1, 96"]
+class Program:
+    """A test function's body, and the helper functions it may call.
+
+    Helper 0 is always a leaf. Helper 1 is another leaf, a non-leaf with a
+    stack frame of its own that calls helper 0, or a tail call (a plain `b`)
+    into helper 0. Shrinking drops groups from the body only."""
+
+    def __init__(self, body, helpers):
+        self.body, self.helpers = body, helpers
+
+    def with_body(self, body):
+        return Program(body, self.helpers)
+
+
+def gen_program(rng, length):
+    leaf = [l for g in gen_body(rng, rng.randrange(3, 7), _LEAF) for l in g] + ["blr"]
+    kind = rng.choice(["leaf", "nonleaf", "tail"])
+    mid = [l for g in gen_body(rng, rng.randrange(2, 5), _LEAF) for l in g]
+    if kind == "leaf":
+        h1 = mid + ["blr"]
+    elif kind == "tail":
+        h1 = mid + ["b @H0"]
+    else:
+        more = [l for g in gen_body(rng, rng.randrange(1, 4), _LEAF) for l in g]
+        h1 = (["stwu 1, -32(1)", "mflr 0", "stw 0, 36(1)"] + mid + ["bl @H0"] + more +
+              ["lwz 0, 36(1)", "mtlr 0", "addi 1, 1, 32", "blr"])
+    return Program(gen_body(rng, length), [leaf, h1])
+
+
+# The frame saves LR and r14..r31 (lmw/stmw need them), zeroes r14..r31 so
+# both sides start identical, and restores it all before returning.
+# LR is saved in the caller's LR slot, as the EABI does, because the body
+# may call.
+FRAME_IN = (["stwu 1, -96(1)", "mflr 0", "stw 0, 100(1)", "stmw 14, 8(1)"] +
+            ["li %d, 0" % x for x in range(14, 32)])
+FRAME_OUT = ["lmw 14, 8(1)", "lwz 0, 100(1)", "mtlr 0", "addi 1, 1, 96"]
 PROLOGUE = FRAME_IN + (["lwz %d, %d(3)" % (g, 4 * i) for i, g in enumerate(GPR)] +
             ["lwz 0, 32(3)", "mtcrf 255, 0", "lwz 0, 36(3)", "addic 0, 0, -1"] +
             ["lfd %d, %d(3)" % (fr, 40 + 8 * i) for i, fr in enumerate(FPR)])
@@ -337,17 +418,20 @@ EPILOGUE = (["stw %d, %d(3)" % (g, 88 + 4 * i) for i, g in enumerate(GPR)] +
 
 def asm_for(programs):
     out = ["\t.text"]
-    for i, body in enumerate(programs):
-        name = "t%d" % i
-        out += ["\t.globl %s" % name, "\t.type %s,@function" % name, "\t.p2align 2", "%s:" % name]
-        for line in PROLOGUE:
-            out.append("\t" + line)
-        for group in body:
-            for line in group:
-                out.append("\t" + line)
-        for line in EPILOGUE:
+
+    def func(name, lines, sub):
+        out.extend(["\t.globl %s" % name, "\t.type %s,@function" % name, "\t.p2align 2", "%s:" % name])
+        for line in lines:
+            for k, v in sub:
+                line = line.replace(k, v)
             out.append("\t" + line)
         out.append("\t.size %s, .-%s" % (name, name))
+
+    for i, prog in enumerate(programs):
+        sub = [("@H%d" % k, "t%dh%d" % (i, k)) for k in range(len(prog.helpers))]
+        for k, lines in enumerate(prog.helpers):
+            func("t%dh%d" % (i, k), lines, sub)
+        func("t%d" % i, PROLOGUE + [l for g in prog.body for l in g] + EPILOGUE, sub)
     return "\n".join(out) + "\n"
 
 
@@ -456,11 +540,21 @@ int main(void) {
     # produce the right value by luck and the wrong one after the next
     # compiler upgrade; `neg.` of INT_MIN was exactly that.
     ubsan = ["-fsanitize=undefined", "-fno-sanitize-recover=undefined"] if os.environ.get("DIFFTEST_UBSAN") else []
-    cc = subprocess.run(["gcc", "-O1", "-w"] + ubsan + ["-I", INCLUDE, gen, h_c, "-o", h_bin, "-lm"],
-                        capture_output=True, text=True)
+    if ARM64:
+        # The Switch's own architecture, under qemu-aarch64. UBSan in trap
+        # mode: no runtime library to find for a cross target, and a trap
+        # still fails the run.
+        ub = ["-fsanitize=undefined", "-fsanitize-trap=undefined"] if ubsan else []
+        cc = subprocess.run([tools["zig"], "cc", "-target", "aarch64-linux-musl", "-static", "-O1", "-w"] + ub +
+                            ["-I", INCLUDE, gen, h_c, "-o", h_bin, "-lm"], capture_output=True, text=True)
+        run = [tools["qemu_arm64"], h_bin]
+    else:
+        cc = subprocess.run(["gcc", "-O1", "-w"] + ubsan + ["-I", INCLUDE, gen, h_c, "-o", h_bin, "-lm"],
+                            capture_output=True, text=True)
+        run = [h_bin]
     if cc.returncode != 0:
         raise RuntimeError("host build failed:\n" + cc.stderr[-3000:])
-    hr = subprocess.run([h_bin], capture_output=True, text=True, timeout=300)
+    hr = subprocess.run(run, capture_output=True, text=True, timeout=300)
     if hr.returncode != 0:
         raise RuntimeError("recompiled program failed (exit %d):\n%s" % (hr.returncode, hr.stderr[-3000:]))
     h_out = hr.stdout
@@ -469,7 +563,16 @@ int main(void) {
 
 # --- comparing ---------------------------------------------------------------
 
+# DIFFTEST_TARGET=arm64 runs the recompiled side on ARM64 under qemu-aarch64
+# instead of natively on x86. ARM64 is what the Switch runs, and its default
+# NaN is PowerPC's (positive, quiet, no payload), so in this mode NaNs are
+# compared exactly, sign and payload, and nothing below is masked.
+ARM64 = os.environ.get("DIFFTEST_TARGET") == "arm64"
+
+
 def nan_unsigned(w):
+    if ARM64:
+        return w
     # A word with a NaN's bit pattern (a stored single, or the high word of
     # a stored double) is compared without its sign. The default NaN an
     # invalid operation produces is positive on PowerPC and ARM64 -- the
@@ -490,7 +593,7 @@ def fields(hexstate):
     for i, fr in enumerate(FPR):
         bits = struct.unpack_from(">Q", b, 40 + 8 * i)[0]
         v = struct.unpack_from(">d", b, 40 + 8 * i)[0]
-        out["f%d" % fr] = "nan" if math.isnan(v) else "%016x" % bits
+        out["f%d" % fr] = "nan" if math.isnan(v) and not ARM64 else "%016x" % bits
     for k in range(0, 64, 4):
         out["mem+%d" % k] = nan_unsigned(struct.unpack_from(">I", b, 88 + k)[0])
     return out
@@ -520,20 +623,20 @@ def run_batch(programs, inputs, tools):
     return fails, unhandled
 
 
-def shrink(body, inp, tools):
+def shrink(prog, inp, tools):
     """Drop instruction groups one at a time while the mismatch survives."""
-    cur = list(body)
+    cur = list(prog.body)
     changed = True
     while changed:
         changed = False
         for k in range(len(cur)):
             trial = cur[:k] + cur[k + 1:]
-            fails, _ = run_batch([trial], [inp], tools)
+            fails, _ = run_batch([prog.with_body(trial)], [inp], tools)
             if fails:
                 cur = trial
                 changed = True
                 break
-    return cur
+    return prog.with_body(cur)
 
 
 def main():
@@ -546,9 +649,10 @@ def main():
     args = ap.parse_args()
     tools = {"zig": os.environ.get("ZIG", os.path.expanduser("~/devtools/zig/zig")),
              "qemu": os.environ.get("QEMU_PPC", "qemu-ppc-static"),
-             "recomp": os.environ.get("RECOMP", "build/recomp")}
+             "recomp": os.environ.get("RECOMP", "build/recomp"),
+             "qemu_arm64": os.environ.get("QEMU_AARCH64", "qemu-aarch64-static")}
     rng = random.Random(args.seed)
-    programs = [gen_body(rng, args.length) for _ in range(args.programs)]
+    programs = [gen_program(rng, args.length) for _ in range(args.programs)]
     inputs = [gen_input(rng) for _ in range(args.inputs)]
     fails, unhandled = run_batch(programs, inputs, tools)
     if unhandled:
@@ -559,12 +663,17 @@ def main():
     print("seed %d: %d programs x %d inputs = %d runs, %d program(s) differ"
           % (args.seed, args.programs, args.inputs, total, len(fails)))
     for t, (i, d) in sorted(fails.items())[:10]:
-        body = programs[t] if args.no_shrink else shrink(programs[t], inputs[i], tools)
+        prog = programs[t] if args.no_shrink else shrink(programs[t], inputs[i], tools)
         print("\n--- program %d, input %d%s" % (t, i, "" if args.no_shrink else " (shrunk)"))
-        for group in body:
+        for group in prog.body:
             for line in group:
                 print("    " + line)
-        _, d2 = next(iter(run_batch([body], [inputs[i]], tools)[0].values()), (None, d))
+        if any("@H" in l for g in prog.body for l in g) or any("@H" in l for l in prog.helpers[1]):
+            for k, lines in enumerate(prog.helpers):
+                print("  @H%d:" % k)
+                for line in lines:
+                    print("    " + line)
+        _, d2 = next(iter(run_batch([prog], [inputs[i]], tools)[0].values()), (None, d))
         blob = inputs[i]
         print("  inputs: " + " ".join("r%d=0x%08x" % (g, struct.unpack_from(">I", blob, 4 * k)[0])
                                       for k, g in enumerate(GPR)))

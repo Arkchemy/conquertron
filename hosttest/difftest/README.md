@@ -44,7 +44,9 @@ reproduced by its seed. CI runs seeds 1–3; other seeds are for exploring.
 - **`lmw`/`stmw`.**
 - **CTR and LR moves.**
 - **Branches:** forward conditional branches on any condition and field, including `bso`/`bns`/`bun`/`bnu`, and counted `bdnz` loops.
-- **Floating point:** double and single arithmetic, fused multiply-add, `fsel`, `fabs`/`fnabs`/`fneg`/`fmr`, `frsp`, `fctiwz` with `stfiwx`, and `lfs`/`lfd`/`stfs`/`stfd`.
+- **Calls:** `bl`, calls through function pointers (`bctrl`), tail calls, non-leaf callees with frames of their own.
+- **Switches:** jump tables of branches after the `bctr`, and of addresses in `.rodata`.
+- **Floating point:** double and single arithmetic, the whole fused multiply-add family, `fsel`, `fabs`/`fnabs`/`fneg`/`fmr`, `frsp`, `fctiwz` with `stfiwx`, and `lfs`/`lfd`/`stfs`/`stfd`.
 
 The test frame saves r14–r31 and zeroes them, so `lmw`/`stmw` see identical
 registers on both sides, and it restores them on the way out.
@@ -114,6 +116,44 @@ FP record forms (`fadd.` and friends) set CR1 from the FPSCR, which is not
 modelled. recomp now prints a warning for each one instead of saying
 nothing.
 
+## Fourth round (2026-09-26): across function boundaries
+
+The fuzzer used to stay inside one function. Now each program has two
+helper functions of its own. The first is a leaf. The second is one of:
+
+- another leaf;
+- a non-leaf with its own stack frame that calls the leaf;
+- a tail call: a plain `b` into the leaf.
+
+Bodies call them with `bl`, and through function pointers with
+`mtctr`/`bctrl`. Bodies also run four-way switches in both shapes compilers
+emit: a table of branches straight after the `bctr`, and a table of case
+addresses in `.rodata` loaded with `lwzx`. The frame saves LR so the body
+may call.
+
+| What | What was wrong |
+| --- | --- |
+| Tail calls (`b` to another function) | In an unlinked object, a `b`'s displacement is 0 until the relocation is applied, so its raw target is the `b` itself. That is inside the function, so recomp emitted `goto` itself: an infinite loop. The relocation now decides before the raw target does. |
+| Switches through a table of addresses | recomp only understood a table of branches after the `bctr`. A jump through a table of addresses in `.rodata` went to `ppc_dispatch`, which knows only function entries. The lookup missed, and the function returned halfway through without running the case. Every address-taken label inside a function is now a `bctr` target. The loader's own notes had already recorded this shape in retail: an address next to `__gh_vsprintf` that `ppc_dispatch` was asked to call 278,093 times. |
+| `fnmadd`, `fnmadds` | Not supported at all. |
+| `fnmsub`, `fnmsubs` (and the new `fnmadd`s) | Negated a NaN result. PowerPC leaves a NaN's sign alone in these instructions. |
+| `lfs` (and every single-precision load) | Widened with a C `(double)` cast. That is an arithmetic conversion, and it quiets a signaling NaN. A load is data movement, and PowerPC moves the bits as they are. Compilers copy float fields, structs and unions through FPRs, so any 32-bit value shaped like a signaling NaN came back changed: `lfs; stfs` turned `0x7fb40eb5` into `0x7ff40eb5`. |
+
+Found while adding a compiled-C test of the jump table to blaster:
+
+- **A guest function named like a runtime function did not compile.** A
+  function called `dispatch` became a second `ppc_dispatch`.
+- **The fix.** `tools/gen_reserved_names.py` collects every `ppc_*`
+  identifier in `include/` at build time. recomp renames any colliding
+  guest function to `<name>_guest` and says so.
+- **Pinned in blaster.** `switch_table` and `name_collision` fail on the old
+  code and pass now.
+
+`DIFFTEST_TARGET=arm64` runs the recompiled side on ARM64 under
+qemu-aarch64 instead of natively on x86. ARM64 is what the Switch runs, and
+its default NaN is PowerPC's, so in that mode NaNs are compared exactly,
+sign and payload included, and nothing is masked.
+
 ## Deliberately not compared
 
 Each of these is either undefined in the architecture or outside what the
@@ -129,4 +169,4 @@ recompiler models, and each is written down where it is excluded:
 
 - **Paired singles.** qemu does not implement them. LLVM #211463 will let them be assembled; a reference would still be needed.
 - **Anything reading or writing r3**, which holds the state pointer.
-- **Indirect branches.**
+- **Calls into imported functions (the Cafe OS shims)**, and recursion.

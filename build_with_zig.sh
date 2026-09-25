@@ -48,7 +48,9 @@ if [ ! -f "$DEVTOOLS/capstone/libcapstone.a" ]; then
         echo "error: capstone build produced no libcapstone.a" >&2; exit 1; }
 fi
 
-mkdir -p build
+mkdir -p build/generated
+# recomp's list of runtime names no guest function may take (see the script)
+python3 tools/gen_reserved_names.py include build/generated/reserved_names.inc
 for tool in recomp verify_vtable find_synth_addr; do
     case "$tool" in
         recomp) main=src/main.cpp ;;
@@ -56,7 +58,7 @@ for tool in recomp verify_vtable find_synth_addr; do
     esac
     echo "building $tool..."
     "$DEVTOOLS/bin/zcxx" -std=c++17 -O2 -DNDEBUG \
-        -Iinclude -I"$DEVTOOLS/capstone/include" -I"$DEVTOOLS/zinstall/include" \
+        -Iinclude -Ibuild/generated -I"$DEVTOOLS/capstone/include" -I"$DEVTOOLS/zinstall/include" \
         "$main" src/elf_loader.cpp src/disassembler.cpp src/func_recovery.cpp \
         $( [ "$tool" = recomp ] && echo src/codegen.cpp ) \
         "$DEVTOOLS/capstone/libcapstone.a" "$DEVTOOLS/zinstall/lib/libz.a" \

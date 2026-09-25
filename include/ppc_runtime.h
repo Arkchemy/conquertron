@@ -3556,6 +3556,31 @@ static inline float ppc_load_f32(const PpcContext *ctx, uint32_t addr) {
     return v;
 }
 
+/* lfs and friends: a single widened to a double, bit-exactly.
+ *
+ * A load is data movement, and PowerPC's load-single conversion (Book I,
+ * "Floating-Point Load Instructions") moves a NaN's bits across as they are,
+ * signaling bit included. A C float-to-double promotion is an arithmetic
+ * conversion instead, and it quiets a signaling NaN on x86 and ARM64 alike.
+ * Compilers copy float fields -- and structs and unions holding them --
+ * through FPRs with lfs/stfs, so any 32-bit value shaped like a signaling
+ * NaN came back with its quiet bit set. Found 2026-09-26 by
+ * hosttest/difftest: `lfs; stfs` turned 0x7fb40eb5 into 0x7ff40eb5.
+ * Everything that is not a NaN is widened exactly by the C cast. */
+static inline double ppc_single_to_double(float f) {
+    uint32_t b;
+    memcpy(&b, &f, sizeof b);
+    if ((b & 0x7f800000u) != 0x7f800000u || (b & 0x007fffffu) == 0) return (double)f;
+    uint64_t d = ((uint64_t)(b & 0x80000000u) << 32) | 0x7ff0000000000000ull | ((uint64_t)(b & 0x007fffffu) << 29);
+    double v;
+    memcpy(&v, &d, sizeof v);
+    return v;
+}
+
+static inline double ppc_load_f32_as_f64(const PpcContext *ctx, uint32_t addr) {
+    return ppc_single_to_double(ppc_load_f32(ctx, addr));
+}
+
 /* stfs does NOT round. The architecture's store-single conversion
  * (PowerPC Book I, "Floating-Point Store Instructions") takes bits straight
  * out of the double: for anything in single range it is sign, the top
@@ -3791,8 +3816,8 @@ static inline void ppc_psq_load_quantized(const PpcContext *ctx, uint32_t addr, 
             if (!single) *out_ps1 = (double)((float)(int16_t)ppc_load_u16(ctx, addr + 2) * factor);
             break;
         default: /* FLOAT (0) or a real reserved/invalid type (1-3) -- honest fallback, no quantization */
-            *out_ps0 = (double)ppc_load_f32(ctx, addr);
-            if (!single) *out_ps1 = (double)ppc_load_f32(ctx, addr + 4);
+            *out_ps0 = ppc_load_f32_as_f64(ctx, addr);
+            if (!single) *out_ps1 = ppc_load_f32_as_f64(ctx, addr + 4);
             break;
     }
 }
@@ -3957,6 +3982,16 @@ static inline double ppc_fmadds(double a, double c, double b) {
         return (double)(float)s;
     }
     return (double)(float)fma(a, c, b);
+}
+
+/* The negating fused ops (fnmadd, fnmsub and their single forms) negate the
+ * result -- unless it is a NaN, which PowerPC passes through with its sign
+ * untouched. A plain C negation flips a NaN's sign too. Found 2026-09-26 by
+ * hosttest/difftest: fnmsub of a +NaN gave +NaN under qemu and -NaN here,
+ * and the difference reached a register through a halfword load of the
+ * stored double. */
+static inline double ppc_fneg_result(double x) {
+    return x != x ? x : -x;
 }
 
 /*

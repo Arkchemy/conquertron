@@ -31,10 +31,18 @@ testing and careful reading can.
       used to end disassembly of any function containing it, is decoded by
       conquertron itself. ps_cmp* into fields other than CR0 no longer
       no-ops. XER[SO] and the "o" instruction forms remain unmodelled.
+- [x] **Calls, tail calls, indirect calls and switch tables in the fuzzer**
+      (2026-09-26). It found a tail call that recompiled to an infinite
+      loop, switches through .rodata address tables that fell out of the
+      function, fnmadd missing and the fnm* family flipping a NaN's sign,
+      and single-precision loads quieting signaling NaNs. Blaster found
+      guest functions named like runtime functions breaking the build.
+      `DIFFTEST_TARGET=arm64` fuzzes against the Switch's own architecture,
+      with NaNs compared exactly.
 - [ ] **Differential execution, whole functions.** Run a recompiled unit on
       the host and compare against the same code under an emulator, on the
-      same inputs -- the instruction-level fuzzer does not reach calls,
-      indirect branches or the runtime's memory model.
+      same inputs -- the fuzzer now crosses calls, but not the Cafe OS
+      shims or the runtime's memory model.
 - [ ] **A regression corpus.** Captured input traces replayed on every change.
       `hosttest/tlsf_replay.c` is the model: 804 real allocator calls, replayed
       in under a second, catching any divergence.

@@ -1,1 +1,3 @@
+# Python bytecode (hosttest/difftest is run as a module by some scripts)
+__pycache__/
 build/

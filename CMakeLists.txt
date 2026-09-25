@@ -23,14 +23,28 @@ endif()
 # eventually runs on Switch.
 find_package(ZLIB REQUIRED)
 
+# The runtime's own ppc_* identifiers, which no guest function may become
+# (see tools/gen_reserved_names.py). Regenerated whenever a header changes.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+file(GLOB RUNTIME_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/include/*.h" "${CMAKE_SOURCE_DIR}/include/*.c")
+set(RESERVED_NAMES_INC "${CMAKE_BINARY_DIR}/generated/reserved_names.inc")
+add_custom_command(
+    OUTPUT "${RESERVED_NAMES_INC}"
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/gen_reserved_names.py"
+            "${CMAKE_SOURCE_DIR}/include" "${RESERVED_NAMES_INC}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/tools/gen_reserved_names.py" ${RUNTIME_SOURCES}
+    COMMENT "Collecting the runtime's reserved names"
+)
+
 add_executable(recomp
     src/main.cpp
     src/elf_loader.cpp
     src/disassembler.cpp
     src/codegen.cpp
     src/func_recovery.cpp
+    "${RESERVED_NAMES_INC}"
 )
-target_include_directories(recomp PRIVATE include "${CAPSTONE_INCLUDE_DIR}")
+target_include_directories(recomp PRIVATE include "${CAPSTONE_INCLUDE_DIR}" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(recomp PRIVATE "${CAPSTONE_LIBRARY}" ZLIB::ZLIB)
 
 # Ground-truth verification tools. These answer "what does the REAL retail
