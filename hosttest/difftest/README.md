@@ -121,7 +121,7 @@ recompiler models, and each is written down where it is excluded:
 
 - **XER[SO], and so the overflow (`o`) instruction forms.** Nothing the recompiler supports sets XER[SO], so integer compares copy a 0 into CR bit 3. The bit itself is modelled and compared; see the second round below.
 - **The upper word of an FPR after `fctiwz`.** It is undefined; qemu sign-extends and the recompiler leaves 0. The stored integer is compared.
-- **NaN sign and payload.** An invalid operation's default NaN is positive on PowerPC and ARM64 (the Switch) and negative on x86, where this runs.
+- **NaN sign and payload.** An invalid operation's default NaN is positive on PowerPC and ARM64 (the Switch) and negative on x86, where this runs. This applies to FPRs, and to NaN bit patterns in memory and in GPRs (a stored NaN can be loaded back into one), which are compared without their sign.
 - **Single-precision add, subtract, multiply and divide with double-precision operands.** They round twice. Compiled code feeds these instructions single-precision values, and for those the double intermediate is provably enough, so the fuzzer does the same.
 - **Division by zero and `INT_MIN / -1`.** Their results are undefined; divisors are forced odd, and positive for `divw`.
 

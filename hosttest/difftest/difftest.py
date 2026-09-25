@@ -469,11 +469,22 @@ int main(void) {
 
 # --- comparing ---------------------------------------------------------------
 
+def nan_unsigned(w):
+    # A word with a NaN's bit pattern (a stored single, or the high word of
+    # a stored double) is compared without its sign. The default NaN an
+    # invalid operation produces is positive on PowerPC and ARM64 -- the
+    # Switch -- but negative on x86, where this runs. That applies in a GPR
+    # too, once it has been stored and loaded back (seed 17: stfs, lwz).
+    if (w & 0x7f800000) == 0x7f800000 and (w & 0x007fffff):
+        return w & 0x7fffffff
+    return w
+
+
 def fields(hexstate):
     b = bytes.fromhex(hexstate)
     out = {}
     for i, g in enumerate(GPR):
-        out["r%d" % g] = struct.unpack_from(">I", b, 4 * i)[0]
+        out["r%d" % g] = nan_unsigned(struct.unpack_from(">I", b, 4 * i)[0])
     out["cr"] = struct.unpack_from(">I", b, 32)[0]
     out["ca"] = struct.unpack_from(">I", b, 36)[0]
     for i, fr in enumerate(FPR):
@@ -481,14 +492,7 @@ def fields(hexstate):
         v = struct.unpack_from(">d", b, 40 + 8 * i)[0]
         out["f%d" % fr] = "nan" if math.isnan(v) else "%016x" % bits
     for k in range(0, 64, 4):
-        w = struct.unpack_from(">I", b, 88 + k)[0]
-        # A word with a NaN's bit pattern (a stored single, or the high word
-        # of a stored double) is compared without its sign. The default NaN
-        # an invalid operation produces is positive on PowerPC and ARM64 --
-        # the Switch -- but negative on x86, where this runs.
-        if (w & 0x7f800000) == 0x7f800000 and (w & 0x007fffff):
-            w &= 0x7fffffff
-        out["mem+%d" % k] = w
+        out["mem+%d" % k] = nan_unsigned(struct.unpack_from(">I", b, 88 + k)[0])
     return out
 
 
