@@ -416,7 +416,12 @@ int main(void) {
     subprocess.run([tools["zig"], "cc", "-target", "powerpc-freestanding-eabihf", "-c", asm, "-o", obj],
                    check=True, capture_output=True)
     gen = os.path.join(work, "gen.c")
-    rc = subprocess.run([tools["recomp"], obj, "-o", gen], capture_output=True, text=True)
+    # DIFFTEST_VALGRIND=1: run recomp itself under valgrind, and fail on any
+    # error. recomp's output once depended on uninitialised heap memory
+    # (Capstone's update_cr0; see is_record_form in disassembler.cpp), which
+    # made failures come and go with the batch around them.
+    vg = ["valgrind", "-q", "--error-exitcode=99"] if os.environ.get("DIFFTEST_VALGRIND") else []
+    rc = subprocess.run(vg + [tools["recomp"], obj, "-o", gen], capture_output=True, text=True)
     if rc.returncode != 0:
         raise RuntimeError("recomp failed:\n" + rc.stderr[-2000:])
     unhandled = [l for l in rc.stderr.splitlines() if "unhandled" in l and ", 0 unhandled" not in l]

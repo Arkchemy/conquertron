@@ -123,7 +123,7 @@ jobs:
       - name: Tools
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q qemu-user-static
+          sudo apt-get install -y -q qemu-user-static valgrind
           mkdir -p "$HOME/devtools"
           curl -sSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" | tar -xJ -C "$HOME/devtools"
           mv "$HOME/devtools/zig-linux-x86_64-${ZIG_VERSION}" "$HOME/devtools/zig"
@@ -160,6 +160,9 @@ jobs:
           # undefined behaviour can match the hardware by luck (neg. of
           # INT_MIN did, until GCC folded it)
           DIFFTEST_UBSAN: "1"
+          # recomp itself under valgrind: its output must not depend on
+          # uninitialised memory (it did, through Capstone's update_cr0)
+          DIFFTEST_VALGRIND: "1"
         run: |
           for seed in 1 2 3; do
             python3 hosttest/difftest/difftest.py --seed "$seed" --programs 60 --inputs 8

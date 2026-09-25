@@ -27,7 +27,8 @@ cannot see silent bugs.
 
 Needs zig (`ZIG=`, default `~/devtools/zig/zig`) and `qemu-ppc-static`
 (`QEMU_PPC=`). Set `DIFFTEST_UBSAN=1` to build the recompiled side with
-UndefinedBehaviorSanitizer, which is how CI runs it.
+UndefinedBehaviorSanitizer, and `DIFFTEST_VALGRIND=1` to run recomp itself
+under valgrind. CI runs with both.
 
 A seed always generates the same programs and inputs, so a failure is
 reproduced by its seed. CI runs seeds 1–3; other seeds are for exploring.
@@ -85,6 +86,33 @@ Found along the way:
 | --- | --- |
 | `fcmpo` | Capstone 5.0.3 has no id for it and fails to decode the word, which ends disassembly of the whole function at that point. It is now decoded by conquertron's own fallback decoder, as `fcmpu` with its own mnemonic: the CR result is the same, and the two differ only in FPSCR exception bits. |
 | `ps_cmpu0/1`, `ps_cmpo0/1` | Any CR field other than CR0 was a silent no-op. qemu has no paired singles, so this was found by reading the code, not by the fuzzer. |
+
+## Third round (2026-09-25): recomp was not deterministic
+
+Seeds 43, 47 and 48 failed in a batch run of seeds 40–49 and passed when run
+alone. The generated C had `mr r8, r30` followed by a CR0 compare, which is
+an `mr.`.
+
+The cause was in Capstone 5.0.3. `PPC_post_printer` sets `update_cr0` by
+looking for a `.` in `insn->mnemonic`, but it runs before the mnemonic is
+written. It was reading whatever the heap held, so any instruction could
+become its own record form, depending on what an earlier allocation left
+behind. Every CR0 update recomp emitted rested on that flag. The record-form
+backstop from the first round only made it easier to see.
+
+conquertron now:
+
+- takes Rc from the instruction word (`is_record_form` in `disassembler.cpp`);
+- clears the mnemonic before each Capstone call, which also makes Capstone's
+  branch-hint field deterministic;
+- zeroes the detail before its own paired-single decoder.
+
+`DIFFTEST_VALGRIND=1` runs recomp under valgrind and fails on any error. It
+fails on the old code and passes on the new, and CI runs with it on.
+
+FP record forms (`fadd.` and friends) set CR1 from the FPSCR, which is not
+modelled. recomp now prints a warning for each one instead of saying
+nothing.
 
 ## Deliberately not compared
 

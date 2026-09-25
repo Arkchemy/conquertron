@@ -2448,6 +2448,15 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             code.find("#error") == std::string::npos) {
             out << "  ppc_cmpw(ctx, (int32_t)" << reg(reg_idx(ppc.operands[0].reg)) << ", 0);\n";
         }
+        // FP record forms copy FPSCR[FX,FEX,VX,OX] into CR1. The FPSCR is not
+        // modelled, so CR1 is left alone -- say so rather than stay silent.
+        // Compilers do not emit these for ordinary C; hand-written code might.
+        if (ppc.update_cr0 && ppc.op_count >= 1 && ppc.operands[0].type == PPC_OP_REG &&
+            ppc.operands[0].reg >= PPC_REG_F0 && ppc.operands[0].reg <= PPC_REG_F31) {
+            out << "  /* " << insn.mnemonic << ": CR1 (from the FPSCR) not updated */\n";
+            fprintf(stderr, "warning: %s at 0x%08x in %s: FP record form, CR1 not updated\n", insn.mnemonic,
+                    (unsigned)insn.address, func.name.c_str());
+        }
     }
 
     out << "}\n";

@@ -21,6 +21,25 @@ void set_mem_op(cs_ppc_op &op, unsigned int base_reg, int32_t disp) {
     op.mem.disp = disp;
 }
 
+// Whether a word is a record form (Rc=1, or always-record like andi.),
+// from the word itself. Capstone 5.0.3's detail->ppc.update_cr0 cannot be
+// used: PPC_post_printer sets it by looking for a '.' in insn->mnemonic
+// before that has been written, so it reads whatever the heap held -- a
+// freshly cs_malloc'd buffer that once had "extsh." in it makes the next
+// "mr" a "mr.". Recompiled output then depended on heap layout. Found
+// 2026-09-25 by difftest (seeds 43/47/48 failed only in a batch run) and
+// confirmed under valgrind. Bit 31 is LK, not Rc, for primary 16/18/19.
+bool is_record_form(uint32_t word) {
+    switch (word >> 26) {
+        case 13: case 28: case 29:  // addic., andi., andis.
+            return true;
+        case 4: case 20: case 21: case 23: case 31: case 59: case 63:
+            return (word & 1) != 0;
+        default:
+            return false;
+    }
+}
+
 void set_imm_op(cs_ppc_op &op, int64_t imm) {
     op.type = PPC_OP_IMM;
     op.imm = imm;
@@ -250,7 +269,11 @@ bool disassemble_range(const uint8_t *code, size_t size, uint32_t addr, DisasmRe
         // also used psq_st/ps_merge.
         if (remaining >= 4) {
             uint32_t word = rd_be32(cursor);
+            // the hand decoder sets only the fields it uses; Capstone
+            // clears the rest itself if this falls through to it
+            memset(&insn->detail->ppc, 0, sizeof insn->detail->ppc);
             if (try_decode_paired_single(word, address, insn)) {
+                insn->detail->ppc.update_cr0 = is_record_form(word);
                 insn->address = address;
                 insn->size = 4;
                 memcpy(insn->bytes, cursor, 4);
@@ -263,7 +286,10 @@ bool disassemble_range(const uint8_t *code, size_t size, uint32_t addr, DisasmRe
             }
         }
 
+        // PPC_post_printer reads this before writing it (see is_record_form)
+        insn->mnemonic[0] = '\0';
         if (cs_disasm_iter(handle, &cursor, &remaining, &address, insn)) {
+            insn->detail->ppc.update_cr0 = is_record_form(rd_be32(insn->bytes));
             out.push_back(insn);
             insn = cs_malloc(handle);
             continue;
