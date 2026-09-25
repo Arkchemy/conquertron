@@ -65,10 +65,8 @@ std::string ps1(int i) {
 // keeps using PpcContext's original, dedicated `cr0_lt`/`cr0_gt`/
 // `cr0_eq` fields (untouched, zero risk to every already-proven cr0
 // codegen path); CR1-CR7 map directly into the newer `cr_lt`/`cr_gt`/
-// `cr_eq` arrays (see PpcContext's own comment for why). Returns an
-// empty string for an untracked bit (any real CR*UN/"summary overflow"
-// bit -- never set by this runtime, same real, narrow, pre-existing gap
-// CR0's own SO bit already has).
+// `cr_eq` arrays (see PpcContext's own comment for why). Bit 3 of every
+// field (SO/FU, Capstone's CR*UN) maps into `cr_so`, CR0 included.
 std::string cr_bit_expr(unsigned int r) {
     if (r == PPC_REG_CR0LT) return "ctx->cr0_lt";
     if (r == PPC_REG_CR0GT) return "ctx->cr0_gt";
@@ -76,6 +74,8 @@ std::string cr_bit_expr(unsigned int r) {
     if (r >= PPC_REG_CR1LT && r <= PPC_REG_CR7LT) return "ctx->cr_lt[" + std::to_string(r - PPC_REG_CR0LT) + "]";
     if (r >= PPC_REG_CR1GT && r <= PPC_REG_CR7GT) return "ctx->cr_gt[" + std::to_string(r - PPC_REG_CR0GT) + "]";
     if (r >= PPC_REG_CR1EQ && r <= PPC_REG_CR7EQ) return "ctx->cr_eq[" + std::to_string(r - PPC_REG_CR0EQ) + "]";
+    // Bit 3 of every field, CR0 included -- SO/FU, see PpcContext::cr_so.
+    if (r >= PPC_REG_CR0UN && r <= PPC_REG_CR7UN) return "ctx->cr_so[" + std::to_string(r - PPC_REG_CR0UN) + "]";
     return "";
 }
 
@@ -249,6 +249,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_BLE:
             case PPC_INS_BGT:
             case PPC_INS_BGE:
+            case PPC_INS_BSO:
+            case PPC_INS_BNS:
+            case PPC_INS_BUN:
+            case PPC_INS_BNU:
             case PPC_INS_BDNZ:
             case PPC_INS_BDZ:
                 is_branch = true;
@@ -1129,7 +1133,11 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_BLT:
             case PPC_INS_BLE:
             case PPC_INS_BGT:
-            case PPC_INS_BGE: {
+            case PPC_INS_BGE:
+            case PPC_INS_BSO:
+            case PPC_INS_BNS:
+            case PPC_INS_BUN:
+            case PPC_INS_BNU: {
                 // Real code can explicitly name a non-default CR field,
                 // e.g. `bne cr1, target` -- confirmed against the actual
                 // game binary, inside real GHS varargs-handling prologues
@@ -1151,6 +1159,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 std::string lt = cr_field == 0 ? "ctx->cr0_lt" : ("ctx->cr_lt[" + std::to_string(cr_field) + "]");
                 std::string gt = cr_field == 0 ? "ctx->cr0_gt" : ("ctx->cr_gt[" + std::to_string(cr_field) + "]");
                 std::string eq = cr_field == 0 ? "ctx->cr0_eq" : ("ctx->cr_eq[" + std::to_string(cr_field) + "]");
+                std::string so = "ctx->cr_so[" + std::to_string(cr_field) + "]";
                 std::string cond;
                 switch (insn.id) {
                     case PPC_INS_BEQ: cond = eq; break;
@@ -1167,6 +1176,10 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     case PPC_INS_BLE: cond = "!" + gt; break;
                     case PPC_INS_BGT: cond = gt; break;
                     case PPC_INS_BGE: cond = "!" + lt; break;
+                    // bso/bns after an integer compare, bun/bnu after fcmpu:
+                    // the same bit 3, under two names.
+                    case PPC_INS_BSO: case PPC_INS_BUN: cond = so; break;
+                    case PPC_INS_BNS: case PPC_INS_BNU: cond = "!" + so; break;
                     default: break;
                 }
                 emit_conditional_branch(out, cond, target, img, func, insn, addr_to_name, unhandled);
@@ -1206,7 +1219,11 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_BLTLR:
             case PPC_INS_BLELR:
             case PPC_INS_BGTLR:
-            case PPC_INS_BGELR: {
+            case PPC_INS_BGELR:
+            case PPC_INS_BSOLR:
+            case PPC_INS_BNSLR:
+            case PPC_INS_BUNLR:
+            case PPC_INS_BNULR: {
                 // Conditional early return -- the blr-flavored counterpart
                 // to the beq/bne/... conditional branches above, common
                 // for "if (some guard fails) return;" prologues. Real,
@@ -1221,6 +1238,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 std::string lt = cr_field == 0 ? "ctx->cr0_lt" : ("ctx->cr_lt[" + std::to_string(cr_field) + "]");
                 std::string gt = cr_field == 0 ? "ctx->cr0_gt" : ("ctx->cr_gt[" + std::to_string(cr_field) + "]");
                 std::string eq = cr_field == 0 ? "ctx->cr0_eq" : ("ctx->cr_eq[" + std::to_string(cr_field) + "]");
+                std::string so = "ctx->cr_so[" + std::to_string(cr_field) + "]";
                 std::string cond;
                 switch (insn.id) {
                     case PPC_INS_BEQLR: cond = eq; break;
@@ -1237,6 +1255,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                     case PPC_INS_BLELR: cond = "!" + gt; break;
                     case PPC_INS_BGTLR: cond = gt; break;
                     case PPC_INS_BGELR: cond = "!" + lt; break;
+                    case PPC_INS_BSOLR: case PPC_INS_BUNLR: cond = so; break;
+                    case PPC_INS_BNSLR: case PPC_INS_BNULR: cond = "!" + so; break;
                     default: break;
                 }
                 out << "  if (" << cond << ") return;\n";
@@ -1268,11 +1288,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 break;
             }
             case PPC_INS_CRCLR: {
-                // Clears a single CR bit. Real LT/GT/EQ bits across all
-                // real CR0-CR7 fields are tracked (see cr_bit_expr's own
-                // comment); any other real bit (every real CR*UN/"summary
-                // overflow" bit, never set by this runtime at all) is
-                // silently a no-op.
+                // Clears a single CR bit -- any of the 32, see
+                // cr_bit_expr.
                 //
                 // Real bug fixed here originally: this used to read
                 // operands[0].crx.reg, assuming capstone reports crclr's
@@ -1322,7 +1339,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 std::string src_gt = src_field == 0 ? "ctx->cr0_gt" : ("ctx->cr_gt[" + std::to_string(src_field) + "]");
                 std::string src_eq = src_field == 0 ? "ctx->cr0_eq" : ("ctx->cr_eq[" + std::to_string(src_field) + "]");
                 out << "  " << dst_lt << " = " << src_lt << "; " << dst_gt << " = " << src_gt << "; "
-                    << dst_eq << " = " << src_eq << ";\n";
+                    << dst_eq << " = " << src_eq << "; ctx->cr_so[" << dst_field << "] = ctx->cr_so[" << src_field
+                    << "];\n";
                 break;
             }
             case PPC_INS_NOP: {
@@ -1673,7 +1691,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int rB = reg_idx(ppc.operands[2].reg);
                 out << "  { int __sc_ok = ppc_stwcx(ctx, " << base_expr(rA) << " + " << reg(rB) << ", "
                     << reg(rS) << ");\n";
-                out << "    ctx->cr0_lt = 0; ctx->cr0_gt = 0; ctx->cr0_eq = (uint8_t)__sc_ok; }\n";
+                out << "    ctx->cr0_lt = 0; ctx->cr0_gt = 0; ctx->cr0_eq = (uint8_t)__sc_ok; ctx->cr_so[0] = 0; }\n";
                 break;
             }
             case PPC_INS_SLW: {
@@ -2300,25 +2318,19 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
             case PPC_INS_ARKCHEMY_PS_CMPO0:
             case PPC_INS_ARKCHEMY_PS_CMPU1:
             case PPC_INS_ARKCHEMY_PS_CMPO1: {
-                // Only crfD==0 (CR0) is tracked -- matching fcmpu/cmpw's
-                // existing CR0-only convention (see ppc_runtime.h). ps0 is
-                // compared for cmp*0, ps1 for cmp*1; "ordered" (NaN-aware)
-                // vs "unordered" variants aren't distinguished, same known
-                // gap ppc_fcmpu's comment already documents.
+                // ps0 is compared for cmp*0, ps1 for cmp*1, into any CR
+                // field, with FU set for a NaN -- exactly fcmpu's CR result;
+                // ordered and unordered differ only in the exception flags,
+                // which are not modelled. Fields other than CR0 used to be
+                // a silent no-op (2026-09-24).
                 uint32_t crfD = (uint32_t)ppc.operands[0].imm;
-                if (crfD != 0) {
-                    out << "  /* ps_cmp targeting a CR field other than CR0 -- not tracked, no-op */\n";
-                    break;
-                }
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fB = freg_idx(ppc.operands[2].reg);
                 bool lane1 = insn.id == PPC_INS_ARKCHEMY_PS_CMPU1 || insn.id == PPC_INS_ARKCHEMY_PS_CMPO1;
-                if (lane1) {
-                    out << "  ctx->cr0_lt = " << ps1(fA) << " < " << ps1(fB) << "; ctx->cr0_gt = " << ps1(fA)
-                        << " > " << ps1(fB) << "; ctx->cr0_eq = " << ps1(fA) << " == " << ps1(fB) << ";\n";
-                } else {
-                    out << "  ppc_fcmpu(ctx, " << freg(fA) << ", " << freg(fB) << ");\n";
-                }
+                std::string a = lane1 ? "(double)" + ps1(fA) : freg(fA);
+                std::string b = lane1 ? "(double)" + ps1(fB) : freg(fB);
+                if (crfD == 0) out << "  ppc_fcmpu(ctx, " << a << ", " << b << ");\n";
+                else out << "  ppc_fcmpu_cr(ctx, " << crfD << ", " << a << ", " << b << ");\n";
                 break;
             }
             case PPC_INS_ARKCHEMY_PSQ_L:

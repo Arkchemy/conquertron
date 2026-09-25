@@ -123,30 +123,21 @@ def g_cmp(rng):
     return ["%s %d, %d, %d" % (op, crf(rng), r(rng), imm)]
 
 
-# The recompiler models LT, GT and EQ in each CR field but not SO (summary
-# overflow): nothing it supports can set XER[SO], so in real code SO is
-# always 0 (see CRCLR's comment in codegen.cpp). The fuzzer tests that model,
-# so it never puts a 1 into an SO bit: CR inputs are masked, mtcrf sources
-# are masked, and CR-logical ops never target bit 3 of a field.
-SO_MASK = 0xEEEEEEEE
-
-
+# Bit 3 of each CR field (SO after an integer compare, FU after fcmpu) is
+# modelled since 2026-09-24 and compared like the others. The one thing
+# that is not modelled is XER[SO] itself, which nothing the recompiler
+# supports can set -- so no generator here produces an overflow-enabled
+# ("o") instruction, and integer compares always copy a 0 into SO.
 def g_cr(rng):
     k = rng.random()
     if k < 0.3:
         return ["mcrf %d, %d" % (crf(rng), crf(rng))]
     if k < 0.6:
-        rs, rt = r(rng), r(rng)
-        return ["lis %d, 0xeeee" % rt, "ori %d, %d, 0xeeee" % (rt, rt),
-                "and %d, %d, %d" % (rt, rs, rt), "mtcrf %d, %d" % (rng.randrange(256), rt)]
+        return ["mtcrf %d, %d" % (rng.randrange(256), r(rng))]
     if k < 0.8:
-        rt, rm = r(rng), r(rng)
-        while rm == rt:
-            rm = r(rng)
-        return ["mfcr %d" % rt, "lis %d, 0xeeee" % rm, "ori %d, %d, 0xeeee" % (rm, rm),
-                "and %d, %d, %d" % (rt, rt, rm)]
+        return ["mfcr %d" % r(rng)]
     op = rng.choice(["cror", "crset", "crclr", "crmove"])
-    b = lambda: rng.choice([x for x in range(32) if x % 4 != 3])
+    b = lambda: rng.randrange(32)
     if op == "cror":
         return ["cror %d, %d, %d" % (b(), b(), b())]
     if op == "crmove":
@@ -208,7 +199,8 @@ def g_fp2(rng):
 
 
 def g_fcmp(rng):
-    return ["fcmpu %d, %d, %d" % (crf(rng), f(rng), f(rng))]
+    op = rng.choice(["fcmpu", "fcmpo"])
+    return ["%s %d, %d, %d" % (op, crf(rng), f(rng), f(rng))]
 
 
 def g_fctiwz(rng):
@@ -246,7 +238,7 @@ def g_branch(rng):
     # A forward conditional branch over one or two instructions, on any CR
     # field. The branch and its label stay in one group, so shrinking keeps
     # or drops them together.
-    cond = rng.choice(["blt", "bgt", "beq", "bne", "bge", "ble"])
+    cond = rng.choice(["blt", "bgt", "beq", "bne", "bge", "ble", "bso", "bns", "bun", "bnu"])
     lab = label()
     inner = []
     for _ in range(rng.randrange(1, 3)):
@@ -277,11 +269,48 @@ def g_memu(rng):
     return ["addi 12, 3, %d" % start, "%s %d, %d(12)" % (op, rt, disp), "subf %d, 3, 12" % rd]
 
 
+def g_memux(rng):
+    # Indexed update forms (lwzux, stbux, ...): EA = r12 + rB, then r12 = EA.
+    width = rng.choice([1, 2, 4])
+    op = rng.choice({1: ["lbzux", "stbux"], 2: ["lhzux", "lhaux", "sthux"], 4: ["lwzux", "stwux"]}[width])
+    start = SCRATCH + rng.randrange(0, 32 // width) * width
+    step = rng.randrange(0, 32 // width) * width
+    rt, ri, rd = r(rng), r(rng), r(rng)
+    while ri == rt:
+        ri = r(rng)
+    return ["addi 12, 3, %d" % start, "li %d, %d" % (ri, step), "%s %d, 12, %d" % (op, rt, ri),
+            "subf %d, 3, 12" % rd]
+
+
+def g_multiple(rng):
+    # lmw/stmw on r20..r31. The frame zeroes r14..r31 on entry and restores
+    # them on exit, so their contents are deterministic on both sides; they
+    # are observed through memory. A copy of a compared register is moved
+    # in first so the transfer carries data that differs between inputs.
+    first = rng.randrange(20, 32)
+    n = 32 - first
+    off = SCRATCH + rng.randrange(0, (64 - 4 * n) // 4 + 1) * 4
+    lines = ["mr %d, %d" % (rng.randrange(first, 32), r(rng))]
+    lines.append(("lmw %d, %d(3)" if rng.random() < 0.5 else "stmw %d, %d(3)") % (first, off))
+    if lines[-1].startswith("lmw"):
+        lines.append("mr %d, %d" % (r(rng), rng.randrange(first, 32)))
+    return lines
+
+
+def g_spr(rng):
+    # CTR and LR moves. LR is restored before the group ends: the frame
+    # returns with blr, and under qemu that really jumps to LR.
+    if rng.random() < 0.5:
+        return ["mtctr %d" % r(rng), "mfctr %d" % r(rng)]
+    rs, rt = r(rng), r(rng)
+    return ["mflr 14", "mtlr %d" % rs, "mflr %d" % rt, "mtlr 14"]
+
+
 GENERATORS = [
     (g_arith3, 12), (g_arith2, 5), (g_imm, 6), (g_logimm, 4), (g_rot, 6),
     (g_srawi, 2), (g_div, 2), (g_cmp, 4), (g_cr, 3), (g_mem, 4), (g_memx, 2),
     (g_fp3, 4), (g_fp4, 3), (g_fp2, 2), (g_fcmp, 2), (g_fctiwz, 1), (g_fmem, 2),
-    (g_branch, 4), (g_loop, 2), (g_memu, 2),
+    (g_branch, 4), (g_loop, 2), (g_memu, 2), (g_memux, 2), (g_multiple, 1), (g_spr, 1),
 ]
 _WEIGHTED = [g for g, w in GENERATORS for _ in range(w)]
 
@@ -293,13 +322,17 @@ def gen_body(rng, length):
     return body   # list of groups; a group is kept or dropped as a unit
 
 
-PROLOGUE = (["lwz %d, %d(3)" % (g, 4 * i) for i, g in enumerate(GPR)] +
+# The frame saves r14..r31 (lmw/stmw need them), zeroes them so both sides
+# start identical, and restores them before returning.
+FRAME_IN = ["stwu 1, -96(1)", "stmw 14, 8(1)"] + ["li %d, 0" % x for x in range(14, 32)]
+FRAME_OUT = ["lmw 14, 8(1)", "addi 1, 1, 96"]
+PROLOGUE = FRAME_IN + (["lwz %d, %d(3)" % (g, 4 * i) for i, g in enumerate(GPR)] +
             ["lwz 0, 32(3)", "mtcrf 255, 0", "lwz 0, 36(3)", "addic 0, 0, -1"] +
             ["lfd %d, %d(3)" % (fr, 40 + 8 * i) for i, fr in enumerate(FPR)])
 EPILOGUE = (["stw %d, %d(3)" % (g, 88 + 4 * i) for i, g in enumerate(GPR)] +
             ["mfcr 0", "stw 0, 120(3)", "li 0, 0", "addze 0, 0", "stw 0, 124(3)"] +
             ["stfd %d, %d(3)" % (fr, 128 + 8 * i) for i, fr in enumerate(FPR)] +
-            ["blr"])
+            FRAME_OUT + ["blr"])
 
 
 def asm_for(programs):
@@ -328,7 +361,7 @@ INTERESTING_D = [0.0, -0.0, 1.0, -1.0, 0.5, 3.0, 1e300, -1e300, 1e-310, 21474836
 
 def gen_input(rng):
     words = [rng.choice(INTERESTING_W) if rng.random() < 0.35 else rng.getrandbits(32) for _ in GPR]
-    cr = rng.getrandbits(32) & SO_MASK
+    cr = rng.getrandbits(32)
     ca = rng.randrange(2)
     dbl = [rng.choice(INTERESTING_D) if rng.random() < 0.5 else rng.uniform(-1e6, 1e6) for _ in FPR]
     scratch = bytes(rng.getrandbits(8) for _ in range(64))
@@ -436,12 +469,7 @@ def fields(hexstate):
     out = {}
     for i, g in enumerate(GPR):
         out["r%d" % g] = struct.unpack_from(">I", b, 4 * i)[0]
-    # Bit 3 of each CR field is SO for integer compares and FU (unordered)
-    # for fcmpu. The recompiler models neither: SO can never be set by
-    # anything it supports, and bun/bnu -- the only branches that read FU --
-    # are not in its instruction set, so no game code it can run observes
-    # it. LT, GT and EQ are compared exactly.
-    out["cr"] = struct.unpack_from(">I", b, 32)[0] & SO_MASK
+    out["cr"] = struct.unpack_from(">I", b, 32)[0]
     out["ca"] = struct.unpack_from(">I", b, 36)[0]
     for i, fr in enumerate(FPR):
         bits = struct.unpack_from(">Q", b, 40 + 8 * i)[0]

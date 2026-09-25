@@ -2030,8 +2030,8 @@ typedef struct PpcContext {
     uint8_t cr0_lt;
     uint8_t cr0_gt;
     uint8_t cr0_eq;
-    /* Real CR1-CR7 field bits (LT/GT/EQ; SO is never tracked, same real
-     * gap CR0's own SO already has). Added additively, alongside the
+    /* Real CR1-CR7 field bits (LT/GT/EQ; bit 3 of every field is in
+     * cr_so below). Added additively, alongside the
      * existing `cr0_lt`/`cr0_gt`/`cr0_eq` fields above (left completely
      * untouched -- every already-proven cr0-only codegen path keeps
      * using them exactly as before), rather than folding cr0 into this
@@ -2050,6 +2050,14 @@ typedef struct PpcContext {
     uint8_t cr_lt[8];
     uint8_t cr_gt[8];
     uint8_t cr_eq[8];
+    /* Bit 3 of each CR field: SO after an integer compare (a copy of
+     * XER[SO]), FU -- unordered -- after fcmpu. Indexed 0-7 for all eight
+     * fields, CR0 included, unlike the three arrays above. Modelled since
+     * 2026-09-24; before that it read as 0 everywhere, so fcmpu against a
+     * NaN left no trace, bun/bnu/bso/bns could not be recompiled at all,
+     * and mfcr lost the bit. XER[SO] itself is still not modelled: nothing
+     * the recompiler supports sets it, so integer compares clear SO. */
+    uint8_t cr_so[8];
     /* Real GQR0-GQR7 (Graphics Quantization Registers), SPRs 912-919 --
      * real hardware state controlling psq_l/psq_lu/psq_st/psq_stu's
      * real quantized (non-float) paired-single formats (see
@@ -3355,12 +3363,14 @@ static inline void ppc_cmpw(PpcContext *ctx, int32_t a, int32_t b) {
     ctx->cr0_lt = a < b;
     ctx->cr0_gt = a > b;
     ctx->cr0_eq = a == b;
+    ctx->cr_so[0] = 0;          /* XER[SO], never set -- see cr_so */
 }
 
 static inline void ppc_cmplw(PpcContext *ctx, uint32_t a, uint32_t b) {
     ctx->cr0_lt = a < b;
     ctx->cr0_gt = a > b;
     ctx->cr0_eq = a == b;
+    ctx->cr_so[0] = 0;
 }
 
 /* Real cmpw/cmplw variants targeting an explicit non-cr0 field
@@ -3371,26 +3381,29 @@ static inline void ppc_cmpw_cr(PpcContext *ctx, int cr, int32_t a, int32_t b) {
     ctx->cr_lt[cr] = a < b;
     ctx->cr_gt[cr] = a > b;
     ctx->cr_eq[cr] = a == b;
+    ctx->cr_so[cr] = 0;
 }
 
 static inline void ppc_cmplw_cr(PpcContext *ctx, int cr, uint32_t a, uint32_t b) {
     ctx->cr_lt[cr] = a < b;
     ctx->cr_gt[cr] = a > b;
     ctx->cr_eq[cr] = a == b;
+    ctx->cr_so[cr] = 0;
 }
 
 /* mfcr: packs all 8 real CR fields into a real 32-bit CR value, matching
  * real hardware's layout (CR0 is the top 4 bits: LT,GT,EQ,SO; CR1 the
- * next 4; ...; CR7 the bottom 4). SO is never tracked/set for any real
- * field (a real, narrow, pre-existing gap), so those bits are always 0.
+ * next 4; ...; CR7 the bottom 4). Bit 3 of each field comes from cr_so.
  * CR1-CR7 now come from the real, tracked `cr_lt`/`cr_gt`/`cr_eq` arrays
  * (see PpcContext's own comment) -- previously always 0 here
  * regardless, correct only when nothing recompiled read them. */
 static inline uint32_t ppc_mfcr(const PpcContext *ctx) {
-    uint32_t cr = ((ctx->cr0_lt ? 8u : 0u) | (ctx->cr0_gt ? 4u : 0u) | (ctx->cr0_eq ? 2u : 0u)) << 28;
+    uint32_t cr = ((ctx->cr0_lt ? 8u : 0u) | (ctx->cr0_gt ? 4u : 0u) | (ctx->cr0_eq ? 2u : 0u) |
+                   (ctx->cr_so[0] ? 1u : 0u)) << 28;
     int i;
     for (i = 1; i < 8; i++) {
-        uint32_t field = (ctx->cr_lt[i] ? 8u : 0u) | (ctx->cr_gt[i] ? 4u : 0u) | (ctx->cr_eq[i] ? 2u : 0u);
+        uint32_t field = (ctx->cr_lt[i] ? 8u : 0u) | (ctx->cr_gt[i] ? 4u : 0u) | (ctx->cr_eq[i] ? 2u : 0u) |
+                         (ctx->cr_so[i] ? 1u : 0u);
         cr |= field << (28 - i * 4);
     }
     return cr;
@@ -3403,6 +3416,7 @@ static inline void ppc_mtcrf_cr0(PpcContext *ctx, uint32_t val) {
     ctx->cr0_lt = (cr0 & 8u) != 0;
     ctx->cr0_gt = (cr0 & 4u) != 0;
     ctx->cr0_eq = (cr0 & 2u) != 0;
+    ctx->cr_so[0] = (cr0 & 1u) != 0;
 }
 
 /* mtcrf targeting an explicit non-cr0 field (1-7) -- extracts that
@@ -3414,6 +3428,7 @@ static inline void ppc_mtcrf_field(PpcContext *ctx, int field, uint32_t val) {
     ctx->cr_lt[field] = (bits & 8u) != 0;
     ctx->cr_gt[field] = (bits & 4u) != 0;
     ctx->cr_eq[field] = (bits & 2u) != 0;
+    ctx->cr_so[field] = (bits & 1u) != 0;
 }
 
 /* addc/adde: used together to add 64-bit (or wider) values held across
@@ -3631,15 +3646,14 @@ static inline void ppc_store_f64_low32(PpcContext *ctx, uint32_t addr, double va
     ppc_store_u32(ctx, addr, (uint32_t)bits);
 }
 
-/* fcmpu: like ppc_cmpw but for floats. Real PPC also has an "unordered"
- * (NaN) case reported via a 4th CR bit this model doesn't track (see the
- * struct-level fidelity note above) -- comparisons involving NaN will
- * silently fall through as if not-less/not-greater/not-equal here rather
- * than setting an unordered flag. */
+/* fcmpu: like ppc_cmpw but for floats. A NaN on either side is
+ * "unordered": LT, GT and EQ all clear and bit 3 of the field (FU) set --
+ * which bun/bnu branch on, and which bge/ble treat as "not LT"/"not GT". */
 static inline void ppc_fcmpu(PpcContext *ctx, double a, double b) {
     ctx->cr0_lt = a < b;
     ctx->cr0_gt = a > b;
     ctx->cr0_eq = a == b;
+    ctx->cr_so[0] = (a != a) || (b != b);   /* FU: unordered */
 }
 
 /* Real fcmpu variant targeting an explicit non-cr0 field, same real
@@ -3648,6 +3662,7 @@ static inline void ppc_fcmpu_cr(PpcContext *ctx, int cr, double a, double b) {
     ctx->cr_lt[cr] = a < b;
     ctx->cr_gt[cr] = a > b;
     ctx->cr_eq[cr] = a == b;
+    ctx->cr_so[cr] = (a != a) || (b != b);  /* FU: unordered */
 }
 
 /* fabs fD, fB: absolute value, done branchlessly here to avoid pulling in

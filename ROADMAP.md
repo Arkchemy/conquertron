@@ -25,6 +25,12 @@ testing and careful reading can.
       fctiwz out of range, and stfs rounding where it should truncate. CI
       runs three fixed seeds. See hosttest/difftest/README.md for what is
       deliberately not compared and what is not covered yet.
+- [x] **CR bit 3 (SO/FU) modelled** (2026-09-25). fcmpu against a NaN now
+      sets FU; mfcr/mtcrf/mcrf/stwcx./CR logic carry the bit; bso/bns/bun/bnu
+      (and lr forms) recompile. fcmpo, which Capstone cannot decode and which
+      used to end disassembly of any function containing it, is decoded by
+      conquertron itself. ps_cmp* into fields other than CR0 no longer
+      no-ops. XER[SO] and the "o" instruction forms remain unmodelled.
 - [ ] **Differential execution, whole functions.** Run a recompiled unit on
       the host and compare against the same code under an emulator, on the
       same inputs -- the instruction-level fuzzer does not reach calls,

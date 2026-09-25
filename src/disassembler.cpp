@@ -58,6 +58,27 @@ bool try_decode_paired_single(uint32_t word, uint64_t addr, cs_insn *insn) {
     const char *mnemonic = nullptr;
     unsigned int id = 0;
 
+    // fcmpo -- primary 63, XO 32. An ordinary 750 FPU instruction, but
+    // Capstone 5.0.3 has no id for it and fails to decode the word at all,
+    // which ends disassembly of the whole function right there (see the
+    // loop in disassemble_range). Decoded as fcmpu, keeping its own
+    // mnemonic: the CR result is the same, and the two differ only in the
+    // FPSCR exception bits, which are not modelled. Found 2026-09-24.
+    if (primary == 63 && ((word >> 1) & 0x3FF) == 32 && (word & 1) == 0 && ((word >> 21) & 3) == 0) {
+        uint32_t crfD = (word >> 23) & 0x7;
+        insn->id = PPC_INS_FCMPU;
+        strncpy(insn->mnemonic, "fcmpo", sizeof(insn->mnemonic) - 1);
+        insn->mnemonic[sizeof(insn->mnemonic) - 1] = '\0';
+        snprintf(insn->op_str, sizeof(insn->op_str), "cr%u, f%u, f%u", crfD, a_field, b_field);
+        cs_ppc &ppc = insn->detail->ppc;
+        memset(&ppc, 0, sizeof ppc);
+        ppc.op_count = 3;
+        set_reg_op(ppc.operands[0], PPC_REG_CR0 + crfD);
+        set_reg_op(ppc.operands[1], PPC_REG_F0 + a_field);
+        set_reg_op(ppc.operands[2], PPC_REG_F0 + b_field);
+        return true;
+    }
+
     if (primary == 56 || primary == 57 || primary == 60 || primary == 61) {
         // psq_l / psq_lu / psq_st / psq_stu -- D-form (immediate
         // displacement), fields per the Gekko manual's PSQA/PSQS layout.
