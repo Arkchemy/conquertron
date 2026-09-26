@@ -1594,8 +1594,9 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 // Fused: one rounding, as the hardware does. a*c+b in C
                 // rounds twice (and whether the compiler contracts it
                 // into an FMA anyway depends on the host and the flags).
-                std::string b = insn.id == PPC_INS_FMADD ? freg(fB) : ("-" + freg(fB));
-                out << "  " << freg(fD) << " = fma(" << freg(fA) << ", " << freg(fC) << ", " << b << ");\n";
+                // ppc_fmadd/ppc_fmsub also apply PowerPC's NaN rule.
+                out << "  " << freg(fD) << " = " << (insn.id == PPC_INS_FMADD ? "ppc_fmadd(" : "ppc_fmsub(")
+                    << freg(fA) << ", " << freg(fC) << ", " << freg(fB) << ");\n";
                 break;
             }
             case PPC_INS_STFS: {
@@ -1677,7 +1678,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                out << "  " << freg(fD) << " = ppc_fmadds(" << freg(fA) << ", " << freg(fC) << ", -" << freg(fB)
+                out << "  " << freg(fD) << " = ppc_fmsubs(" << freg(fA) << ", " << freg(fC) << ", " << freg(fB)
                     << ");\n";
                 break;
             }
@@ -1963,8 +1964,8 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                out << "  " << freg(fD) << " = ppc_fneg_result(ppc_fmadds(" << freg(fA) << ", " << freg(fC)
-                    << ", -" << freg(fB) << "));\n";
+                out << "  " << freg(fD) << " = ppc_fneg_result(ppc_fmsubs(" << freg(fA) << ", " << freg(fC)
+                    << ", " << freg(fB) << "));\n";
                 break;
             }
             case PPC_INS_FNMADDS: {
@@ -2210,7 +2211,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fB = freg_idx(ppc.operands[3].reg);
                 // -(a*c - b), fused, negated last: b - a*c differs in the
                 // sign of an exact-zero result. A NaN result keeps its sign.
-                out << "  " << freg(fD) << " = ppc_fneg_result(fma(" << freg(fA) << ", " << freg(fC) << ", -"
+                out << "  " << freg(fD) << " = ppc_fneg_result(ppc_fmsub(" << freg(fA) << ", " << freg(fC) << ", "
                     << freg(fB) << "));\n";
                 break;
             }
@@ -2222,7 +2223,7 @@ std::vector<std::string> generate_function_c(const ElfImage &img, const ElfFunct
                 int fA = freg_idx(ppc.operands[1].reg);
                 int fC = freg_idx(ppc.operands[2].reg);
                 int fB = freg_idx(ppc.operands[3].reg);
-                out << "  " << freg(fD) << " = ppc_fneg_result(fma(" << freg(fA) << ", " << freg(fC) << ", "
+                out << "  " << freg(fD) << " = ppc_fneg_result(ppc_fmadd(" << freg(fA) << ", " << freg(fC) << ", "
                     << freg(fB) << "));\n";
                 break;
             }

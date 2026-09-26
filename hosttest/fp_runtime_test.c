@@ -113,6 +113,24 @@ int main(void)
         check_bits("fnm* leaves a NaN's sign", ppc_fneg_result(pnan), pn);
         check_bits("fnm* negates 2.0", ppc_fneg_result(2.0), dbits(-2.0));
         check_bits("fnm* negates +0.0", ppc_fneg_result(0.0), dbits(-0.0));
+        /* -(-663088.4 * 0 + 0): the sum is +0, so the result is -0. An
+         * ARM64 fnmadd, -(a*c) - b, would give +0. */
+        volatile double m = -663088.4, z = 0.0;
+        check_bits("fnmadd of an exact zero is -0", ppc_fneg_result(ppc_fmadd(m, z, z)), dbits(-0.0));
+    }
+
+    /* the fused family's NaN rule: first NaN of frA, frB, frC, quieted,
+     * sign and payload kept -- checked against qemu-ppc */
+    {
+        double qa, sb;
+        uint64_t qa_bits = 0x7ff8000000000123ull, sb_bits = 0xfff4000000000456ull;
+        memcpy(&qa, &qa_bits, 8);
+        memcpy(&sb, &sb_bits, 8);
+        check_bits("fmsub keeps b's NaN sign", ppc_fmsub(1.0, 2.0, sb), 0xfffc000000000456ull);
+        check_bits("fmadd prefers frA over frB", ppc_fmadd(sb, 2.0, qa), 0xfffc000000000456ull);
+        check_bits("fmadd prefers frB over frC", ppc_fmadd(1.0, qa, sb), 0xfffc000000000456ull);
+        check_bits("fmsubs: single payload, b's sign", ppc_fmsubs(2.0, 1.0, qa), 0x7ff8000000000000ull);
+        check_bits("fnmsubs leaves the NaN alone", ppc_fneg_result(ppc_fmsubs(1.0, 2.0, sb)), 0xfffc000000000000ull);
     }
 
     if (failures) { printf("%d failure(s)\n", failures); return 1; }

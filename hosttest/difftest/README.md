@@ -152,7 +152,15 @@ Found while adding a compiled-C test of the jump table to blaster:
 `DIFFTEST_TARGET=arm64` runs the recompiled side on ARM64 under
 qemu-aarch64 instead of natively on x86. ARM64 is what the Switch runs, and
 its default NaN is PowerPC's, so in that mode NaNs are compared exactly,
-sign and payload included, and nothing is masked.
+sign and payload included, and nothing is masked. CI runs one seed that way.
+
+Its first run found 16 mismatches across three seeds, all in the fused
+multiply-add family:
+
+| What | What was wrong |
+| --- | --- |
+| Which NaN comes out | PowerPC returns the first NaN of frA, frB, frC, quieted, with its sign and payload kept; single forms keep only a single's payload. `fma()` makes its own choice, and `fmsub`'s `fma(a, c, -b)` had already flipped a NaN b's sign. Now `ppc_fmadd`/`ppc_fmsub`/`ppc_fmsubs` apply the rule first. All 40 cases of a probe covering the eight ops and every operand position match qemu bit for bit. |
+| `fnmadd` of an exact zero | clang compiles `-fma(a, c, b)` to ARM64's `fnmadd`, which is `-(a*c) - b`. That agrees with `-(a*c + b)` except in the sign of an exact zero: `-(-663088.4 * 0 + 0)` is `-0` on PowerPC, and the fused form gave `+0`. The negation is now done on the sign bit behind an empty `asm`, so it cannot be folded in. x86 did not show this, because its compiler does not make the same fold. |
 
 ## Deliberately not compared
 

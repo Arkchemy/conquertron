@@ -168,6 +168,64 @@ jobs:
             python3 hosttest/difftest/difftest.py --seed "$seed" --programs 60 --inputs 8
           done
 
+  difftest-arm64:
+    # The same fuzzer with the recompiled side built for ARM64 and run under
+    # qemu-aarch64: the Switch's architecture, whose default NaN matches
+    # PowerPC's, so NaN sign and payload are compared exactly. It found the
+    # fused multiply-add family's NaN rule and a signed-zero difference that
+    # the x86 run cannot see. Slower (emulated), so one smaller batch.
+    runs-on: ubuntu-24.04
+    needs: recompiler
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-user-static
+          mkdir -p "$HOME/devtools"
+          curl -sSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" | tar -xJ -C "$HOME/devtools"
+          mv "$HOME/devtools/zig-linux-x86_64-${ZIG_VERSION}" "$HOME/devtools/zig"
+
+      - name: Cache Capstone
+        id: capstone
+        uses: actions/cache@v4
+        with:
+          path: ~/devtools/capstone-install
+          key: capstone-${{ env.CAPSTONE_VERSION }}-ppc-${{ runner.os }}
+
+      - name: Build Capstone ${{ env.CAPSTONE_VERSION }} (PowerPC only)
+        if: steps.capstone.outputs.cache-hit != 'true'
+        run: |
+          git clone -q --depth 1 --branch "$CAPSTONE_VERSION" https://github.com/capstone-engine/capstone.git /tmp/capstone
+          cmake -S /tmp/capstone -B /tmp/capstone/build -DCMAKE_BUILD_TYPE=Release \
+            -DCAPSTONE_ARCHITECTURE_DEFAULT=OFF -DCAPSTONE_PPC_SUPPORT=ON \
+            -DCAPSTONE_BUILD_TESTS=OFF -DCAPSTONE_BUILD_CSTOOL=OFF \
+            -DCMAKE_INSTALL_PREFIX="$HOME/devtools/capstone-install"
+          cmake --build /tmp/capstone/build -j"$(nproc)"
+          cmake --install /tmp/capstone/build
+
+      - name: Build recomp
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCAPSTONE_PREFIX="$HOME/devtools/capstone-install"
+          cmake --build build -j"$(nproc)"
+
+      - name: difftest on ARM64, NaNs exact
+        env:
+          ZIG: /home/runner/devtools/zig/zig
+          QEMU_PPC: /usr/bin/qemu-ppc-static
+          QEMU_AARCH64: /usr/bin/qemu-aarch64-static
+          RECOMP: build/recomp
+          DIFFTEST_TARGET: arm64
+          DIFFTEST_UBSAN: "1"
+        run: python3 hosttest/difftest/difftest.py --seed 1 --programs 30 --inputs 8
+
+      - name: Floating-point runtime helpers on ARM64
+        run: |
+          "$HOME/devtools/zig/zig" cc -target aarch64-linux-musl -static -O2 -w -I include \
+            hosttest/fp_runtime_test.c -o /tmp/fp_runtime_test_arm64 -lm
+          qemu-aarch64-static /tmp/fp_runtime_test_arm64
+
   verify:
     runs-on: ubuntu-24.04
     needs: recompiler

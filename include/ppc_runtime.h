@@ -3969,7 +3969,19 @@ static inline double ppc_frsp(double val) { return (double)(float)val; }
  *
  * Operands that are not single-precision values fall back to fma(), which
  * is right except on that rare tie. */
+static inline double ppc_fma_nan(double a, double b, double c);
+
 static inline double ppc_fmadds(double a, double c, double b) {
+    if (a != a || b != b || c != c) {
+        /* PowerPC's NaN rule (see ppc_fma_nan), then single precision:
+         * the payload keeps only what a single can hold */
+        double n = ppc_fma_nan(a, b, c);
+        uint64_t bits;
+        memcpy(&bits, &n, sizeof bits);
+        bits &= ~0x1fffffffull;
+        memcpy(&n, &bits, sizeof n);
+        return n;
+    }
     if (a == (double)(float)a && c == (double)(float)c && b == (double)(float)b) {
         double p = a * c;                      /* exact */
         double s = p + b;
@@ -3991,7 +4003,50 @@ static inline double ppc_fmadds(double a, double c, double b) {
  * and the difference reached a register through a halfword load of the
  * stored double. */
 static inline double ppc_fneg_result(double x) {
-    return x != x ? x : -x;
+    if (x != x) return x;
+    /* On the sign bit, behind an empty asm: given `-fma(a, c, b)`, clang
+     * emits ARM64's fnmadd, which is -(a*c) - b -- equal to -(a*c + b)
+     * except for the sign of an exact zero. -663088.4 * 0 + 0 is +0, and
+     * PowerPC's fnmadd gives -0; the fused form gave +0. Found 2026-09-26
+     * by difftest's ARM64 mode. */
+    uint64_t b;
+    memcpy(&b, &x, sizeof b);
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__("" : "+r"(b));
+#endif
+    b ^= 0x8000000000000000ull;
+    memcpy(&x, &b, sizeof x);
+    return x;
+}
+
+/* The fused multiply-add family's NaN rule. When an operand is a NaN,
+ * PowerPC returns the first NaN of frA, frB, frC -- in that order, whatever
+ * the operation -- quieted, with its sign and payload as they were. A host
+ * fma() makes its own choice, and fmsub's fma(a, c, -b) has already flipped
+ * b's sign by then. */
+static inline double ppc_fma_nan(double a, double b, double c) {
+    double n = a != a ? a : b != b ? b : c;
+    uint64_t bits;
+    memcpy(&bits, &n, sizeof bits);
+    bits |= 0x0008000000000000ull;
+    memcpy(&n, &bits, sizeof n);
+    return n;
+}
+
+static inline double ppc_fmadd(double a, double c, double b) {
+    if (a != a || b != b || c != c) return ppc_fma_nan(a, b, c);
+    return fma(a, c, b);
+}
+
+static inline double ppc_fmsub(double a, double c, double b) {
+    if (a != a || b != b || c != c) return ppc_fma_nan(a, b, c);
+    return fma(a, c, -b);
+}
+
+/* fmsubs: negating b before ppc_fmadds sees it would flip a NaN b's sign */
+static inline double ppc_fmsubs(double a, double c, double b) {
+    if (a != a || b != b || c != c) return ppc_fmadds(a, c, b);
+    return ppc_fmadds(a, c, -b);
 }
 
 /*
