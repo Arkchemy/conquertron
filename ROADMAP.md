@@ -150,10 +150,17 @@ nobody chose, and that is a conquertron-level fact rather than a jouster one.
 
 ## The memory model
 
-- [ ] `PPC_MEM_SIZE` is a flat power-of-two array with every access masked. It
-      works, but it cannot detect an out-of-bounds guest access — the very class
-      of bug that stalled boot. A guard-page or range-check mode, even a slow
-      one, would have caught that in minutes.
+- [x] **A range-check mode** (2026-09-26). `PPC_MEM_CHECK=1` checks every
+      guest access made through the runtime -- loads and stores of every
+      width, lwarx/stwcx., bulk reads, memcpy/memset -- and records those
+      that run past the end of the arena or touch the NULL page, by
+      (function, lr), in `g_ppc_memchk_*`; `PPC_MEM_CHECK_ABORT=1` stops at
+      the first. Free when off. difftest runs with it on. The same work found
+      that an access in the arena's last bytes wrote past the end of the host
+      array (only the start address is masked); `mem[]` is now padded, and
+      `hosttest/mem_check_test.c` proves both under AddressSanitizer.
+- [ ] Turn it on in a hardware diagnostic build and read `g_ppc_memchk_site`
+      after the loading stall: a NULL read or a wrap there is a lead.
 - [ ] the address-space split is documented in `docs/address-space-split.md`;
       globals are relocated to synthetic addresses while `.text` addresses stay
       real. That asymmetry has caused repeated confusion and deserves a helper

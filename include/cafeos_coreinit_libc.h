@@ -32,6 +32,9 @@ static inline void ppc_import_coreinit_memcpy(PpcContext *ctx) {
     uint32_t dst = ctx->r[3] & (uint32_t)(PPC_MEM_SIZE - 1);
     uint32_t src = ctx->r[4] & (uint32_t)(PPC_MEM_SIZE - 1);
     uint32_t n = ctx->r[5];
+    /* A copy that would run past the end is dropped whole, silently;
+     * PPC_MEM_CHECK at least says so. Zero bytes from NULL is legal. */
+    if (n) { ppc_mem_check(ctx, ctx->r[4], n, PPC_MEMCHK_LOAD); ppc_mem_check(ctx, ctx->r[3], n, PPC_MEMCHK_STORE); }
     if ((uint64_t)dst + n <= PPC_MEM_SIZE && (uint64_t)src + n <= PPC_MEM_SIZE) {
         ark_note_bulk(ctx->lr, dst, n, src, 2u);
         memmove(&ctx->shared->mem[dst], &ctx->shared->mem[src], n);
@@ -42,6 +45,7 @@ static inline void ppc_import_coreinit_memset(PpcContext *ctx) {
     uint32_t dst = ctx->r[3] & (uint32_t)(PPC_MEM_SIZE - 1);
     int c = (int)ctx->r[4];
     uint32_t n = ctx->r[5];
+    if (n) ppc_mem_check(ctx, ctx->r[3], n, PPC_MEMCHK_STORE);
     if ((uint64_t)dst + n <= PPC_MEM_SIZE) {
         ark_note_bulk(ctx->lr, dst, n, (uint32_t)c, 1u);
         memset(&ctx->shared->mem[dst], c, n);

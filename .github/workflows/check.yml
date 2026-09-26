@@ -103,6 +103,12 @@ jobs:
             exit 1
           fi
 
+      - name: Guest memory bounds (PPC_MEM_CHECK, and the arena's end under ASan)
+        run: |
+          gcc -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -I include \
+              hosttest/mem_check_test.c -o /tmp/mem_check_test -lm
+          /tmp/mem_check_test
+
       - name: Floating-point runtime helpers
         run: |
           for opt in -O0 -O2; do
@@ -219,6 +225,12 @@ jobs:
           DIFFTEST_TARGET: arm64
           DIFFTEST_UBSAN: "1"
         run: python3 hosttest/difftest/difftest.py --seed 1 --programs 30 --inputs 8
+
+      - name: Guest memory bounds on ARM64
+        run: |
+          "$HOME/devtools/zig/zig" cc -target aarch64-linux-musl -static -O2 -w -I include \
+            hosttest/mem_check_test.c -o /tmp/mem_check_test_arm64 -lm
+          qemu-aarch64-static /tmp/mem_check_test_arm64
 
       - name: Floating-point runtime helpers on ARM64
         run: |

@@ -540,16 +540,20 @@ int main(void) {
     # produce the right value by luck and the wrong one after the next
     # compiler upgrade; `neg.` of INT_MIN was exactly that.
     ubsan = ["-fsanitize=undefined", "-fno-sanitize-recover=undefined"] if os.environ.get("DIFFTEST_UBSAN") else []
+    # Every guest access checked against the arena's end, aborting on the
+    # first that runs past it (see PPC_MEM_CHECK in ppc_runtime.h). The NULL
+    # page check is off: an object file keeps .text at address 0.
+    memchk = ["-DPPC_MEM_CHECK=1", "-DPPC_MEM_CHECK_ABORT=1", "-DPPC_MEM_CHECK_NULL_LIMIT=0"]
     if ARM64:
         # The Switch's own architecture, under qemu-aarch64. UBSan in trap
         # mode: no runtime library to find for a cross target, and a trap
         # still fails the run.
         ub = ["-fsanitize=undefined", "-fsanitize-trap=undefined"] if ubsan else []
         cc = subprocess.run([tools["zig"], "cc", "-target", "aarch64-linux-musl", "-static", "-O1", "-w"] + ub +
-                            ["-I", INCLUDE, gen, h_c, "-o", h_bin, "-lm"], capture_output=True, text=True)
+                            memchk + ["-I", INCLUDE, gen, h_c, "-o", h_bin, "-lm"], capture_output=True, text=True)
         run = [tools["qemu_arm64"], h_bin]
     else:
-        cc = subprocess.run(["gcc", "-O1", "-w"] + ubsan + ["-I", INCLUDE, gen, h_c, "-o", h_bin, "-lm"],
+        cc = subprocess.run(["gcc", "-O1", "-w"] + ubsan + memchk + ["-I", INCLUDE, gen, h_c, "-o", h_bin, "-lm"],
                             capture_output=True, text=True)
         run = [h_bin]
     if cc.returncode != 0:

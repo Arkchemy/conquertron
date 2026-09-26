@@ -2324,6 +2324,35 @@ static inline void ppc_host_longjmp(PpcContext *ctx) {
 #ifndef PPC_MEM_SIZE
 #define PPC_MEM_SIZE (1024u * 1024u * 1024u)
 #endif
+#define PPC_MEM_PAD 16u
+
+/* PPC_MEM_CHECK=1: check every guest access made through the runtime's
+ * accessors, and record the ones that
+ *   - run past the end of the arena (they would wrap, or alias whatever the
+ *     mask lands on -- ROADMAP's "the very class of bug that stalled boot"),
+ *   - touch the NULL page, below PPC_MEM_CHECK_NULL_LIMIT (a read there
+ *     quietly returns zero; a write quietly lands).
+ * Off by default, and free when off: the check compiles to nothing.
+ * ARKCHEMY_TRAP_NULL_WRITES (below) predates this and covers only stores;
+ * this covers loads, every width, and the arena's far end too.
+ *
+ * Object-file test programs keep .text at address 0, and ppc_init_globals
+ * copies it there, so they set PPC_MEM_CHECK_NULL_LIMIT to 0. A retail RPX
+ * has nothing mapped below 0x2000. */
+#ifndef PPC_MEM_CHECK
+#define PPC_MEM_CHECK 0
+#endif
+#ifndef PPC_MEM_CHECK_NULL_LIMIT
+#define PPC_MEM_CHECK_NULL_LIMIT 0x1000u
+#endif
+#ifndef PPC_MEM_CHECK_SITES
+#define PPC_MEM_CHECK_SITES 16
+#endif
+/* PPC_MEM_CHECK_ABORT=1: print the first bad access and abort(), for
+ * hosttest runs where a core dump beats a counter. */
+#ifndef PPC_MEM_CHECK_ABORT
+#define PPC_MEM_CHECK_ABORT 0
+#endif
 
 typedef struct PpcSharedMemory {
     /* Aligned so that a 4-byte-aligned guest address maps to a 4-byte-
@@ -2331,7 +2360,14 @@ typedef struct PpcSharedMemory {
      * do a real atomic compare-exchange on the word. PowerPC already
      * requires lwarx/stwcx. operands to be word-aligned, so this is the
      * only alignment guarantee needed. */
-    __attribute__((aligned(16))) uint8_t mem[PPC_MEM_SIZE];
+    /* + PPC_MEM_PAD: every accessor masks only the START address, then
+     * touches up to 4 bytes (8 for a paired-single pair) from there, so an
+     * access in the last few bytes ran off the end of this array into
+     * whatever the host placed next -- a silent host-memory write, shown
+     * under AddressSanitizer on 2026-09-26 (hosttest/mem_check_test.c).
+     * The pad absorbs it. Such an access is outside the model either way;
+     * PPC_MEM_CHECK reports it. */
+    __attribute__((aligned(16))) uint8_t mem[PPC_MEM_SIZE + PPC_MEM_PAD];
 } PpcSharedMemory;
 
 /* Load-side watches, added 2026-08-28 -- the mirror of
@@ -2423,10 +2459,56 @@ static inline void ppc_mem_fence_acq(void) {      /* isync  -- acquire only */
     __atomic_thread_fence(__ATOMIC_ACQUIRE);
 }
 
+/* --- PPC_MEM_CHECK: see its definition above --------------------------- */
+#define PPC_MEMCHK_LOAD  0u
+#define PPC_MEMCHK_STORE 1u
+#define PPC_MEMCHK_PAST_END 1u
+#define PPC_MEMCHK_NULL     2u
+/* Totals by reason, and the distinct sites: {pc, lr, first addr,
+ * (reason << 8) | (store << 4) | size, hits}. pc is the function entered
+ * (g_ppc_current_pc), lr the return address -- together they name the code. */
+__attribute__((weak)) volatile uint32_t g_ppc_memchk_past_end = 0;
+__attribute__((weak)) volatile uint32_t g_ppc_memchk_null = 0;
+__attribute__((weak)) uint32_t g_ppc_memchk_site[PPC_MEM_CHECK_SITES][5];
+__attribute__((weak)) volatile uint32_t g_ppc_memchk_site_n = 0;
+
+#if PPC_MEM_CHECK
+__attribute__((noinline, cold)) static void ppc_mem_check_hit(const PpcContext *ctx, uint32_t addr,
+                                                              uint32_t size, uint32_t store, uint32_t why) {
+    uint32_t pc = g_ppc_current_pc, lr = ctx ? ctx->lr : 0u, i;
+    if (why == PPC_MEMCHK_PAST_END) g_ppc_memchk_past_end++; else g_ppc_memchk_null++;
+    for (i = 0; i < g_ppc_memchk_site_n; i++)
+        if (g_ppc_memchk_site[i][0] == pc && g_ppc_memchk_site[i][1] == lr) { g_ppc_memchk_site[i][4]++; break; }
+    if (i == g_ppc_memchk_site_n && i < (uint32_t)PPC_MEM_CHECK_SITES) {
+        g_ppc_memchk_site[i][0] = pc; g_ppc_memchk_site[i][1] = lr; g_ppc_memchk_site[i][2] = addr;
+        g_ppc_memchk_site[i][3] = (why << 8) | (store << 4) | size; g_ppc_memchk_site[i][4] = 1u;
+        g_ppc_memchk_site_n++;
+    }
+#if PPC_MEM_CHECK_ABORT
+    fprintf(stderr, "PPC_MEM_CHECK: %s of %u byte(s) at 0x%08x %s (in function at 0x%08x, lr 0x%08x)\n",
+            store ? "store" : "load", size, addr,
+            why == PPC_MEMCHK_PAST_END ? "runs past the end of guest memory" : "is in the NULL page", pc, lr);
+    abort();
+#endif
+}
+#endif
+
+static inline void ppc_mem_check(const PpcContext *ctx, uint32_t addr, uint32_t size, uint32_t store) {
+#if PPC_MEM_CHECK
+    if ((uint64_t)addr + size > (uint64_t)PPC_MEM_SIZE)
+        ppc_mem_check_hit(ctx, addr, size, store, PPC_MEMCHK_PAST_END);
+    else if (addr < (uint32_t)PPC_MEM_CHECK_NULL_LIMIT)
+        ppc_mem_check_hit(ctx, addr, size, store, PPC_MEMCHK_NULL);
+#else
+    (void)ctx; (void)addr; (void)size; (void)store;
+#endif
+}
+
 /* lwarx: load word and reserve. Takes the reservation on this context (one
  * per guest thread, as on real hardware) and remembers the raw word seen, so
  * the paired stwcx. can compare-exchange against exactly that value. */
 static inline uint32_t ppc_lwarx(PpcContext *ctx, uint32_t addr) {
+    ppc_mem_check(ctx, addr, 4u, PPC_MEMCHK_LOAD);
     addr &= (PPC_MEM_SIZE - 1u);
     addr &= ~3u;   /* lwarx operands are architecturally word-aligned */
     uint32_t raw;
@@ -2442,6 +2524,7 @@ static inline uint32_t ppc_lwarx(PpcContext *ctx, uint32_t addr) {
  * this was hardcoded to 1, making every "someone else won the race, retry"
  * branch in every guest atomic loop unreachable. */
 static inline int ppc_stwcx(PpcContext *ctx, uint32_t addr, uint32_t val) {
+    ppc_mem_check(ctx, addr, 4u, PPC_MEMCHK_STORE);
     addr &= (PPC_MEM_SIZE - 1u);
     addr &= ~3u;
     if (!ctx->reserve_valid || ctx->reserve_addr != addr) {
@@ -2487,6 +2570,7 @@ static inline int ppc_stwcx(PpcContext *ctx, uint32_t addr, uint32_t val) {
 }
 
 static inline uint32_t ppc_load_u32(const PpcContext *ctx, uint32_t addr) {
+    ppc_mem_check(ctx, addr, 4u, PPC_MEMCHK_LOAD);
     const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     uint32_t val = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
     /* Two compares on the hottest path in the whole runtime. Measurable
@@ -3157,6 +3241,7 @@ static inline void ppc_sample_pc(const PpcContext *ctx) {
 }
 
 static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
+    ppc_mem_check(ctx, addr, 4u, PPC_MEMCHK_STORE);
     if (addr == g_ppc_watch_store_addr) {
         ark_writelog(val, g_ppc_current_pc, ctx->lr, g_ppc_fn_call_count,
                      (uint32_t)(uintptr_t)ctx);
@@ -3223,6 +3308,7 @@ static inline void ppc_store_u32(PpcContext *ctx, uint32_t addr, uint32_t val) {
 }
 
 static inline uint8_t ppc_load_u8(const PpcContext *ctx, uint32_t addr) {
+    ppc_mem_check(ctx, addr, 1u, PPC_MEMCHK_LOAD);
     return ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
 }
 
@@ -3276,6 +3362,7 @@ static inline void ark_aw_note(const PpcContext *ctx, uint32_t fwi) {
  * from the loop it replaces, byte for byte. */
 static inline void ppc_read_block(const PpcContext *ctx, void *dst,
                                   uint32_t addr, uint32_t len) {
+    ppc_mem_check(ctx, addr, len, PPC_MEMCHK_LOAD);
     uint32_t off = addr & (PPC_MEM_SIZE - 1);
     uint32_t first = PPC_MEM_SIZE - off;
     if (len <= first) {
@@ -3289,6 +3376,7 @@ static inline void ppc_read_block(const PpcContext *ctx, void *dst,
 }
 
 static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
+    ppc_mem_check(ctx, addr, 1u, PPC_MEMCHK_STORE);
     // Real gap found and fixed 2026-08-20: g_ppc_watch_store_addr's check
     // only lived in ppc_store_u32, so it silently missed real writes made
     // one byte at a time -- confirmed real, not hypothetical:
@@ -3311,11 +3399,13 @@ static inline void ppc_store_u8(PpcContext *ctx, uint32_t addr, uint8_t val) {
 }
 
 static inline uint16_t ppc_load_u16(const PpcContext *ctx, uint32_t addr) {
+    ppc_mem_check(ctx, addr, 2u, PPC_MEMCHK_LOAD);
     const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return (uint16_t)(((uint32_t)p[0] << 8) | (uint32_t)p[1]);
 }
 
 static inline void ppc_store_u16(PpcContext *ctx, uint32_t addr, uint16_t val) {
+    ppc_mem_check(ctx, addr, 2u, PPC_MEMCHK_STORE);
     uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     p[0] = (uint8_t)(val >> 8);
     p[1] = (uint8_t)val;
@@ -3325,11 +3415,13 @@ static inline void ppc_store_u16(PpcContext *ctx, uint32_t addr, uint16_t val) {
  * big-endian bytes as ppc_load_u32/u16, then swaps them) -- code that
  * needs little-endian data from a big-endian machine, or vice versa. */
 static inline uint32_t ppc_load_u32_brx(const PpcContext *ctx, uint32_t addr) {
+    ppc_mem_check(ctx, addr, 4u, PPC_MEMCHK_LOAD);
     const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) | ((uint32_t)p[1] << 8) | (uint32_t)p[0];
 }
 
 static inline uint16_t ppc_load_u16_brx(const PpcContext *ctx, uint32_t addr) {
+    ppc_mem_check(ctx, addr, 2u, PPC_MEMCHK_LOAD);
     const uint8_t *p = &ctx->shared->mem[addr & (PPC_MEM_SIZE - 1)];
     return (uint16_t)(((uint32_t)p[1] << 8) | (uint32_t)p[0]);
 }
