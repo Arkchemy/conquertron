@@ -1194,7 +1194,7 @@ static inline void ark_rsret(uint32_t ret)
     if (i < 4u || ret == 0u) g_ark_rs_n = i + 1u;
 }
 
-static const char *ark_rs_src_name(uint32_t s)
+static inline const char *ark_rs_src_name(uint32_t s)
 {
     static const char *const n[4] = {
         "byName", "byIndex-1", "_loadingPool", "igGetMemoryPool-default"
@@ -1258,7 +1258,7 @@ static inline void ark_igzr30(uint32_t site, uint32_t val)
     g_ark_r30_val[i] = val;
 }
 
-static const char *ark_igz_site_name(uint32_t s)
+static inline const char *ark_igz_site_name(uint32_t s)
 {
     static const char *const n[9] = {
         "isFileWorkFinished", "default-arm(1,3)", "default-arm(5,8,9)",
@@ -1498,7 +1498,7 @@ static inline void ark_igzstate(uint32_t state, uint32_t ret, uint32_t iters)
     g_ark_igs_iters[i] = iters;
 }
 
-static const char *ark_igz_state_name(uint32_t s)
+static inline const char *ark_igz_state_name(uint32_t s)
 {
     static const char *const n[10] = {
         "kStateIdle", "kStateOpening", "kStateOpened", "kStateReadingHeader",

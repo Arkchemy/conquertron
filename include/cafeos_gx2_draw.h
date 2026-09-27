@@ -286,7 +286,7 @@ static inline bool ark_draw_format(uint32_t fmt, DkVtxAttribSize *size,
  * 0xDEADBEEF) but that the compiler cannot fold away, so the bytes are linked
  * and never executed -- exactly the position dkCmdBufDraw was in. */
 #ifdef __GNUC__
-__attribute__((noinline))
+__attribute__((noinline, unused))
 #endif
 static void ark_pad_fn(void)
 {
